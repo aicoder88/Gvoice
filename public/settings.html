@@ -313,6 +313,7 @@
         setStatus("Saving…", false);
         try {
           const view = await window.settingsBridge.save(collect());
+          if (view && view.error) { setStatus(view.error, false); return; }
           fill(view);
           setStatus("Saved. Applies to your next dictation.", true);
         } catch {

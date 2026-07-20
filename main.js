@@ -1299,7 +1299,9 @@ function setupIpc() {
     try {
       writeEnvFile(envPath, patch);
     } catch (err) {
+      const error = "Couldn't save your settings. Check that GVoice can write to its settings folder, then try again.";
       console.error("[main] settings write failed:", err && err.message);
+      return { error };
     }
     await applyEnvPatchLive(patch, "settings-save");
     return settingsView(process.env);
@@ -1398,7 +1400,9 @@ function setupIpc() {
     try {
       writeEnvFile(envPath, patch);
     } catch (err) {
+      const error = "Couldn't save your speech-engine choice. Check that GVoice can write to its settings folder, then try again.";
       console.error("[main] engine apply write failed:", err && err.message);
+      return { error };
     }
     await applyEnvPatchLive(patch, "engine-apply");
     return settingsView(process.env);
