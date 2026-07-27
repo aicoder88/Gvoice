@@ -150,6 +150,18 @@ export function settingsView(env = {}) {
   };
 }
 
+/**
+ * Should the mic stay open between presses? On by default (instant first word,
+ * pre-roll captures speech that starts before the key registers). Off saves the
+ * idle CPU of a permanently running audio worklet — the trade is no pre-roll,
+ * so the user must hold the key a beat before speaking.
+ *
+ * @param {Record<string, string | undefined>} env
+ */
+export function micAlwaysOn(env = {}) {
+  return asBool(env.MIC_ALWAYS_ON, true);
+}
+
 function clampDays(value, fallback) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 0) return fallback;

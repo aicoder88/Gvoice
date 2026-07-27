@@ -4,6 +4,14 @@ const targetSampleRate = 24000;
 const statusEl = document.getElementById("status");
 const logEl = document.getElementById("log");
 
+// Hot mic (default) keeps the capture graph live between presses so the first
+// word of a press is never lost and the pipeline is always warm — at the cost of
+// a permanently running audio worklet (~10-15% CPU idle on a laptop). With
+// MIC_ALWAYS_ON=false (passed through as ?hotmic=0) the mic is opened on press
+// and released after each hold: no pre-roll, so the user holds the key a beat
+// before speaking, but the machine is idle between dictations.
+const HOT_MIC = new URLSearchParams(window.location.search).get("hotmic") !== "0";
+
 let socket = null;
 let audioContext = null;
 let mediaStream = null;
@@ -687,6 +695,14 @@ async function ensureLiveCapture() {
 // time) and deferred while a hold is in progress so it can't abandon live audio.
 // Also serves the system-wake path (main sends "resume"/"unlock-screen").
 async function recoverMic(reason) {
+  // Cold-mic mode has nothing to keep alive between presses: every press builds
+  // a fresh graph, which IS the recovery. Guarding here (rather than at each of
+  // the four call sites — startup, wake, mic-lost, devicechange) means no path
+  // can quietly leave a hot graph running.
+  if (!HOT_MIC) {
+    log("Recovery skipped — mic opens on press (" + (reason || "") + ")");
+    return;
+  }
   if (isRecording || startInFlight) {
     captureStale = true;
     log("Recovery deferred — a hold is in progress (" + (reason || "") + ")");
@@ -830,6 +846,11 @@ async function startRecording(profile) {
   }
 
   utterancePeak = 0;
+  // Cold mic: the hold clock restarts once the device is actually open. Opening
+  // it can eat a few hundred ms, and the dead-mic check reads "held ≥1s but
+  // almost no audio" as a wedged pipeline — timing from the key press would let
+  // a short hold on a slow-to-open mic fake that verdict.
+  if (!HOT_MIC) holdStartedAt = Date.now();
 
   transcriptParts = [];
   alreadyFinalized = false;
@@ -935,7 +956,16 @@ function finishUtterance() {
   // remember it as the one to re-pin first if the mic ever needs recovery.
   if (currentDeviceId) lastGoodDeviceId = currentDeviceId;
 
-  // Leave the capture pipeline warm for the next press — only stop streaming.
+  // Hot mic: leave the capture pipeline warm for the next press — only stop
+  // streaming. Cold mic: drop the device stream so the mic indicator goes out
+  // and the worklet stops burning CPU until the next press. Partial teardown
+  // (keeps the AudioContext + loaded worklet module) plus a suspend, so the
+  // rebuild on the next press is as cheap as possible.
+  if (!HOT_MIC) {
+    teardownCapture();
+    try { audioContext && audioContext.suspend(); } catch {}
+    log("Mic released (cold-mic mode)");
+  }
 
   if (socket && socket.readyState === WebSocket.OPEN) {
     log("Sending commit (socket readyState=" + socket.readyState + ")");

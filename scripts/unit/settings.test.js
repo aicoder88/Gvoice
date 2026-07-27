@@ -11,7 +11,8 @@ import {
   readEnvFile,
   writeEnvFile,
   settingsView,
-  patchFromView
+  patchFromView,
+  micAlwaysOn
 } from "../../src/settings.js";
 
 function tmpEnv(contents) {
@@ -109,6 +110,17 @@ test("settingsView: defaults when env is empty", () => {
   assert.equal(v.cleanupEnabled, true);
   assert.equal(v.recordingsEnabled, true);
   assert.equal(v.retentionDays, 7);
+});
+
+test("micAlwaysOn: on unless explicitly switched off", () => {
+  // Unset must stay ON — the pre-roll (and the "first word never lost" behavior
+  // every existing install has) can only go away when the user asks for it.
+  assert.equal(micAlwaysOn({}), true);
+  assert.equal(micAlwaysOn({ MIC_ALWAYS_ON: "" }), true);
+  assert.equal(micAlwaysOn({ MIC_ALWAYS_ON: "true" }), true);
+  assert.equal(micAlwaysOn({ MIC_ALWAYS_ON: "false" }), false);
+  assert.equal(micAlwaysOn({ MIC_ALWAYS_ON: " OFF " }), false);
+  assert.equal(micAlwaysOn({ MIC_ALWAYS_ON: "0" }), false);
 });
 
 test("settingsView: reads + coerces values, falls back on invalid enums", () => {

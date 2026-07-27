@@ -50,7 +50,7 @@ import { initHistory, getHistory, getHistoryPath, recordTranscript } from "./src
 import { computeStats } from "./src/stats.js";
 import { ensureWhisperServer, stopWhisperServer } from "./src/providers/whisper-local.js";
 import { ENV_FILE, MODELS_DIR, BIN_DIR } from "./src/bootstrap-env.js";
-import { writeEnvFile, settingsView, patchFromView, VALID_PROVIDERS } from "./src/settings.js";
+import { writeEnvFile, settingsView, patchFromView, micAlwaysOn, VALID_PROVIDERS } from "./src/settings.js";
 import { probeCapability, recommendedAssets } from "./src/hardware.js";
 import { suggestBeforeBenchmark } from "./src/benchmark.js";
 import { runLocalBenchmark } from "./src/benchmark-run.js";
@@ -823,8 +823,17 @@ function createDictationWindow() {
     console.error("[dictation/renderer] unresponsive");
     dlog("renderer-unresponsive", {});
   });
+  dictationWindow.loadURL(dictationUrl());
+}
+
+// The renderer reads both of these once at load, so a Settings change to either
+// takes effect via reloadDictationWindow(). hotmic=0 (MIC_ALWAYS_ON=false) makes
+// the renderer open the mic on press and release it after each hold instead of
+// keeping the audio worklet running all day.
+function dictationUrl() {
   const provider = encodeURIComponent((process.env.STT_PROVIDER || "openai").toLowerCase());
-  dictationWindow.loadURL(`http://127.0.0.1:${serverPort}/dictation.html?provider=${provider}`);
+  const hotmic = micAlwaysOn(process.env) ? "1" : "0";
+  return `http://127.0.0.1:${serverPort}/dictation.html?provider=${provider}&hotmic=${hotmic}`;
 }
 
 // Dictation is English-only: the bundled local model is ggml-small.en (English),
@@ -1807,8 +1816,7 @@ async function bringUpDictation(onReady) {
 // the window isn't up yet.
 function reloadDictationWindow() {
   if (!serverPort || !dictationWindow || dictationWindow.isDestroyed()) return;
-  const provider = encodeURIComponent((process.env.STT_PROVIDER || "openai").toLowerCase());
-  dictationWindow.loadURL(`http://127.0.0.1:${serverPort}/dictation.html?provider=${provider}`);
+  dictationWindow.loadURL(dictationUrl());
 }
 
 // Apply an already-written .env patch to the LIVE app without a restart: mirror
