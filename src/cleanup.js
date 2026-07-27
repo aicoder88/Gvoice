@@ -187,6 +187,13 @@ export function looksLikeRetraction(text) {
 // menu-bar app. Record the failure here so the caller can say so out loud once.
 let lastCleanupError = null;
 
+// Consecutive reach-the-engine failures (timeouts, DNS blips, dropped sockets).
+// One of those is not an outage, and reporting it would spend main.js's
+// once-per-run warning on a false alarm — leaving the app silent weeks later
+// when the engine is genuinely down. Only a streak counts. Cleared on success.
+let transientFailures = 0;
+const TRANSIENT_FAILURES_BEFORE_WARNING = 3;
+
 /**
  * Most recent cleanup failure, consumed (cleared) by the caller so one outage
  * is announced once rather than on every utterance.
@@ -196,6 +203,15 @@ export function takeCleanupError() {
   const error = lastCleanupError;
   lastCleanupError = null;
   return error;
+}
+
+/**
+ * Test-only: clear the consecutive-failure streak. Not part of the runtime flow
+ * — takeCleanupError() must NOT reset it, or main.js draining after every
+ * utterance would keep the streak at zero and the warning would never fire.
+ */
+export function resetCleanupFailureStreak() {
+  transientFailures = 0;
 }
 
 /**
@@ -278,20 +294,27 @@ export async function polishTranscript(rawText) {
       }
     );
     const cleaned = parseResponse(provider, data);
+    transientFailures = 0;
     return (cleaned && cleaned.trim()) || rawText;
   } catch (error) {
     if (error instanceof RetryableHttpError || error instanceof HttpError) {
       console.error(`Cleanup HTTP ${error.status} (${providerName}/${model}): ${error.body}`);
-      // 429 is the shared free key's per-minute limit — it clears on its own and
-      // isn't worth interrupting anyone over. A 404/401 is the engine being
-      // actually broken (model retired, key revoked) and stays broken.
-      lastCleanupError =
-        error.status === 429
-          ? null
-          : `The ${providerName} cleanup engine returned ${error.status} for ${model}. Text is being typed unformatted.`;
+      // A 404/401 is the engine actually broken (model retired, key revoked) and
+      // stays broken — report it on the first hit. A 429 is the shared free key's
+      // per-minute limit, which clears on its own; one is noise. But this model's
+      // free tier is only 12k TPM, so a streak of them means a whole session of
+      // silently unformatted text — worth saying once.
+      if (error.status !== 429) {
+        lastCleanupError = `The ${providerName} cleanup engine returned ${error.status} for ${model}. Text is being typed unformatted.`;
+      } else if (++transientFailures >= TRANSIENT_FAILURES_BEFORE_WARNING) {
+        lastCleanupError = `${providerName} is rate-limiting cleanup. Text is being typed unformatted.`;
+      }
     } else {
       console.error("Cleanup error:", error && error.message);
-      lastCleanupError = `Cleanup couldn't reach ${providerName}. Text is being typed unformatted.`;
+      transientFailures += 1;
+      if (transientFailures >= TRANSIENT_FAILURES_BEFORE_WARNING) {
+        lastCleanupError = `Cleanup couldn't reach ${providerName}. Text is being typed unformatted.`;
+      }
     }
     return rawText;
   }

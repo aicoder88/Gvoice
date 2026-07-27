@@ -153,7 +153,14 @@ export function attach(clientSocket, { apiKey, model, language }) {
         if (finalizeSent && legs.every((l) => l.flushed)) emitCompleted("leg_error");
         return;
       }
-      sendToClient(clientSocket, { type: "local.error", message: "Deepgram: " + error.message });
+      // A 401 means the key was rejected — almost always the shipped fallback
+      // key having been revoked (realtime-relay.js DEEPGRAM_FALLBACK_KEY). The
+      // raw socket text ("Unexpected server response: 401") tells the user
+      // nothing they can act on, so say what to do instead.
+      const message = error.message.includes("401")
+        ? "Deepgram rejected the key. Add your own DEEPGRAM_API_KEY in Settings."
+        : "Deepgram: " + error.message;
+      sendToClient(clientSocket, { type: "local.error", message });
     });
 
     dgSocket.on("close", (code, reason) => {

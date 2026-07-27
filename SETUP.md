@@ -40,12 +40,16 @@ Runs the whole pipeline on your PC: a small Whisper model transcribes the clip, 
 
 Fast cloud streaming transcription. Good language coverage and very low latency.
 
-1. Get an API key at [console.deepgram.com](https://console.deepgram.com) (free credit on signup, no card needed).
-2. In `.env`:
+1. In `.env`:
    ```
    STT_PROVIDER=deepgram
-   DEEPGRAM_API_KEY=your-key-here
    ```
+   That's it — GVoice ships a shared Deepgram key, so dictation works with no
+   signup. Leave `DEEPGRAM_API_KEY` blank unless you want your own.
+2. (Optional) Your own key: get one at
+   [console.deepgram.com](https://console.deepgram.com) (free credit on signup,
+   no card needed) and set `DEEPGRAM_API_KEY=your-key-here`. Yours always wins
+   over the shipped one, and it's the fix if the shared key ever stops working.
 3. (Optional) `DEEPGRAM_MODEL` picks the model — default `nova-3`.
 
 ## Run
@@ -71,15 +75,15 @@ An Electron window opens with status info. A tray icon shows up in the system tr
 | `STT_PROVIDER` | `openai` | `openai`, `whisper-local`, or `deepgram`. Picks which speech-to-text backend the dictation window opens. |
 | `OPENAI_API_KEY` | *(empty)* | Required for `openai` provider and (by default if no Groq key) for cleanup. |
 | `OPENAI_REALTIME_MODEL` | `gpt-realtime-2` | Realtime session model when `STT_PROVIDER=openai`. |
-| `DEEPGRAM_API_KEY` | *(empty)* | Required for the `deepgram` provider. Get one at console.deepgram.com. |
+| `DEEPGRAM_API_KEY` | *(empty — a shared key ships with the app)* | Optional for the `deepgram` provider. Set your own from console.deepgram.com to stop sharing, or if the shipped key stops working. |
 | `DEEPGRAM_MODEL` | `nova-3` | Deepgram model. |
 | `WHISPER_BIN` | `whisper-cli` | Full path to whisper.cpp's `whisper-cli.exe`. Set by the Windows setup script. (`WHISPER_CLI` is accepted as a legacy alias.) |
 | `WHISPER_MODEL` | `./models/ggml-small.en-q5_1.bin` | Full path to a GGML model file. Set by the Windows setup script. |
 | `WHISPER_PORT` | *(free port each launch)* | Port the whisper-server child process listens on. Picked automatically; set this only to pin a fixed port. |
-| `WHISPER_LANGUAGE` | `auto` | Dictation language for the local Whisper and Deepgram engines (the OpenAI engine ignores it). The right-Ctrl tap and the Settings dropdown write it, cycling `auto` → `hr` (Croatian) → `en` (English). Auto-detect is shaky on short clips, so forcing `hr` or `en` makes a language stick. For local Whisper you can also set any other Whisper language code (e.g. `fr`, `de`, `es`). |
+| `WHISPER_LANGUAGE` | `en` | Dictation language for the local Whisper and Deepgram engines (the OpenAI engine ignores it). **The app overrides this to `en` at startup** — the bundled local model is `ggml-small.en` (English-only), so there is no language to choose. The setting still applies to the bare relay (`pnpm dev`), which runs without `main.js`. |
 | `CLEANUP_ENABLED` | `true` | LLM polish (punctuation, remove "um"/"uh"). |
 | `CLEANUP_PROVIDER` | `groq` (ships a free-tier key, so cleanup works with no setup) | Which API runs the cleanup pass: `groq`, `openai`, `anthropic`, or `google`. |
-| `CLEANUP_MODEL` | *(per provider)* | Cleanup model. Defaults: `meta-llama/llama-4-scout-17b-16e-instruct` (groq), `gpt-4.1-mini` (openai), `claude-haiku-4-5` (anthropic), `gemini-2.5-flash-lite` (google). The Groq default is fast, formats spoken lists into proper bullet/numbered lists, and has the highest free-tier token limit of Groq's models. |
+| `CLEANUP_MODEL` | *(per provider)* | Cleanup model. Defaults: `llama-3.3-70b-versatile` (groq), `gpt-4.1-mini` (openai), `claude-haiku-4-5` (anthropic), `gemini-2.5-flash-lite` (google). The Groq default is fast and formats spoken lists into proper bullet/numbered lists. Its free tier is 12k tokens/minute, so heavy back-to-back dictation can hit a rate limit and fall back to raw text. |
 | `CLEANUP_TIMEOUT_MS` | `2500` | Max wait for the cleanup pass before falling back to the raw transcript. A 429 rate-limit is not retried (its limit resets per minute, so an immediate retry just fails again); 5xx/network errors still get one retry. |
 | `TYPE_VIA_CLIPBOARD` | `true` | Paste vs simulated keystrokes. Paste is faster and more reliable. |
 | `PORT` | *(free port each launch)* | Local relay port. Auto-picked so it never collides with a dev server on 3000; set it only to pin one, and even a pinned-but-busy port falls back to a free one. |
@@ -106,9 +110,14 @@ A hand-curated starter list lives in `models/vocab.txt` — this *is* still fed 
 
 ## Languages
 
-Whisper handles 50+ languages — English, French, Croatian, Bosnian, Serbian, Spanish, Italian, German, and more. Dictate any one of them on the default on-device engine by setting `WHISPER_LANGUAGE` to its code (e.g. `fr`, `de`, `es`).
+**GVoice dictates in English only.** `main.js` locks `WHISPER_LANGUAGE` to `en`
+at startup, so the setting and the old right-Ctrl language toggle no longer
+change anything in the app. The bundled on-device model is `ggml-small.en`,
+which is English-only anyway.
 
-Automatic detection (the `auto` setting, and the right-Ctrl toggle's "Auto") is deliberately limited to **Croatian + English only**. Free auto-detect across every language was making short clips come back in the wrong language, so it's pinned to the two languages this app is used in. To dictate another language, set `WHISPER_LANGUAGE` explicitly rather than relying on auto.
+Whisper itself handles 50+ languages, and the bare relay (`pnpm dev`, no
+`main.js`) still honours `WHISPER_LANGUAGE`. To dictate another language in the
+app you would need to drop the startup lock and swap in a multilingual model.
 
 ## Troubleshooting
 

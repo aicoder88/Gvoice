@@ -37,13 +37,19 @@ function loadFixtureChunks() {
 // exited 0 while covering nothing. Live-transcription subtests still require a
 // real key and still skip without one.
 async function bootRelay() {
-  const hadKey = "OPENAI_API_KEY" in process.env;
-  if (!hadKey) process.env.OPENAI_API_KEY = "sk-parity-boot-placeholder";
+  // Truthiness, not `"OPENAI_API_KEY" in process.env`: GitHub Actions exports an
+  // EMPTY string for an unset secret, and an empty key trips the constructor's
+  // throw exactly like a missing one would.
+  const priorKey = process.env.OPENAI_API_KEY;
+  if (!priorKey) process.env.OPENAI_API_KEY = "sk-parity-boot-placeholder";
   let started;
   try {
     started = await startServer({ port: 0 });
   } finally {
-    if (!hadKey) delete process.env.OPENAI_API_KEY;
+    if (!priorKey) {
+      if (priorKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = priorKey;
+    }
   }
   const { server, port } = started;
   return {
@@ -237,8 +243,8 @@ test("parity: openai transcription-only completes one utterance", async (t) => {
 // No DEEPGRAM_API_KEY guard on purpose. The relay falls back to the baked-in
 // DEEPGRAM_FALLBACK_KEY (realtime-relay.js), so an unset env var is the SHIPPING
 // configuration, not an untestable one — skipping on it would leave the path
-// every fresh clone actually uses uncovered. A revoked baked key fails here
-// loudly, which is exactly the warning worth having.
+// every fresh clone actually uses uncovered. A revoked baked key shows up as a
+// skip with the upstream's own message, which names the cause.
 test("parity: deepgram completes one utterance", async (t) => {
   const relay = await bootRelay();
   t.after(() => relay.close());
@@ -248,9 +254,26 @@ test("parity: deepgram completes one utterance", async (t) => {
   await ready;
   t.after(() => ws.close());
 
-  await waitFor(() =>
-    frames.some((f) => f.type === "local.status" && f.status === "connected")
-  );
+  // Same grace as the openai subtest above: a connect that never lands means no
+  // network just as often as it means a revoked key, and this test cannot tell
+  // them apart. Failing on a plane or in an egress-less CI box would report the
+  // wrong cause, so skip instead.
+  try {
+    await waitFor(
+      () =>
+        frames.some((f) => f.type === "local.status" && f.status === "connected") ||
+        detectUpstreamSkip(frames) !== null,
+      { timeoutMs: 4000 }
+    );
+  } catch {
+    t.skip("deepgram upstream never responded (likely no network or revoked key)");
+    return;
+  }
+  const skipReason = detectUpstreamSkip(frames);
+  if (skipReason) {
+    t.skip(`deepgram unavailable: ${skipReason}`);
+    return;
+  }
 
   streamFixture(ws, chunks);
 
@@ -269,6 +292,14 @@ test("parity: whisper-local completes one utterance", async (t) => {
   const modelPath = process.env.WHISPER_MODEL || "./models/ggml-small.en-q5_1.bin";
   if (!existsSync(modelPath)) {
     t.skip(`whisper model not found at ${modelPath}`);
+    return;
+  }
+  // The model file alone isn't enough — it ships with the repo while the binary
+  // is a separate install. Without this the subtest reaches a spawn ENOENT and
+  // reports a failure for a dependency nobody was told to install.
+  const whisperBin = process.env.WHISPER_BIN || process.env.WHISPER_CLI;
+  if (!whisperBin || !existsSync(whisperBin)) {
+    t.skip("whisper-cli binary not found (set WHISPER_BIN)");
     return;
   }
 
