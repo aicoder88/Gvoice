@@ -699,6 +699,10 @@ async function recoverMic(reason) {
   // a fresh graph, which IS the recovery. Guarding here (rather than at each of
   // the four call sites — startup, wake, mic-lost, devicechange) means no path
   // can quietly leave a hot graph running.
+  // ponytail: cold mode gives up the liveness probe with it — the first press of
+  // a session binds the bare system default, so it can't auto-switch away from a
+  // silent virtual input the way hot mode did (the user still gets the "pick your
+  // microphone" warning). Probe on press if that ever bites.
   if (!HOT_MIC) {
     log("Recovery skipped — mic opens on press (" + (reason || "") + ")");
     return;
