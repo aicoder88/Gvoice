@@ -157,7 +157,7 @@ export function attach(clientSocket, { apiKey, model, language }) {
       // key having been revoked (realtime-relay.js DEEPGRAM_FALLBACK_KEY). The
       // raw socket text ("Unexpected server response: 401") tells the user
       // nothing they can act on, so say what to do instead.
-      const message = error.message.includes("401")
+      const message = String(error.message || "").includes("401")
         ? "Deepgram rejected the key. Add your own DEEPGRAM_API_KEY in Settings."
         : "Deepgram: " + error.message;
       sendToClient(clientSocket, { type: "local.error", message });
