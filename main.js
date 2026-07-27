@@ -58,6 +58,7 @@ import { ensureModel, ensureWindowsBinaries, MODELS, WINDOWS_BINARY_ZIPS } from 
 import { saveRecording, pruneRecordings, clearRecordings } from "./src/recordings.js";
 import { appendFileSync, statSync, renameSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
 import { mkdir as mkdirAsync } from "node:fs/promises";
+import { execFile } from "node:child_process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPath = ENV_FILE;
@@ -511,6 +512,23 @@ function setPillState(
     // A short, plain-English reason shown on result pills so a red "Error" isn't
     // a mystery ("No audio reached the app — mic restarted, try again", etc.).
     reason: opts.reason || ""
+  });
+}
+
+// Open a saved recording in a media player that actually plays it.
+// macOS hands .wav (and .mp3 — switching format wouldn't help) to Music.app,
+// which refuses to play a file that isn't in its library, so shell.openPath
+// looked like it did nothing. Ask for VLC by name; LaunchServices finds it in
+// /Applications or ~/Applications. No VLC installed → fall back to the OS
+// default, which is still better than nothing.
+function playRecording(/** @type {string | null} */ path) {
+  if (!path) return;
+  if (process.platform !== "darwin") {
+    shell.openPath(path).catch(() => {});
+    return;
+  }
+  execFile("open", ["-a", "VLC", path], (err) => {
+    if (err) shell.openPath(path).catch(() => {});
   });
 }
 
@@ -1243,7 +1261,7 @@ function setupIpc() {
   });
   ipcMain.on("pill:open", () => {
     if (currentRecordingPath) {
-      shell.openPath(currentRecordingPath).catch(() => {});
+      playRecording(currentRecordingPath);
       dlog("pill-open", { path: currentRecordingPath });
     }
   });
@@ -1628,7 +1646,7 @@ function rebuildTrayMenu() {
     sub.push({
       label: hasRecording ? "Play recording" : "Recording unavailable",
       enabled: hasRecording,
-      click: () => { if (entry.recordingPath) shell.openPath(entry.recordingPath).catch(() => {}); }
+      click: () => playRecording(entry.recordingPath || null)
     });
     return {
       label: `${time}${entry.pasted ? "" : " ⚠"}  ${preview}`,
@@ -1656,8 +1674,7 @@ function rebuildTrayMenu() {
       label: "Play last recording",
       enabled: !!lastRecording,
       click: () => {
-        const p = lastRecording && lastRecording.recordingPath;
-        if (p) shell.openPath(p).catch(() => {});
+        playRecording((lastRecording && lastRecording.recordingPath) || null);
       }
     },
     { type: "separator" },
@@ -1835,9 +1852,10 @@ function needsOnboarding() {
   if (provider === "openai" && !process.env.OPENAI_API_KEY) {
     return "Add your OpenAI API key to start dictating.";
   }
-  if (provider === "deepgram" && !process.env.DEEPGRAM_API_KEY) {
-    return "Add your Deepgram API key to start dictating.";
-  }
+  // Deepgram is deliberately NOT checked: the relay ships a fallback key
+  // (realtime-relay.js DEEPGRAM_FALLBACK_KEY), so a blank DEEPGRAM_API_KEY
+  // still dictates. Asking for a key here would nag on every single launch
+  // about a problem the user doesn't have.
   if ((provider === "whisper-local" || provider === "local") &&
       !(process.env.WHISPER_MODEL && existsSync(process.env.WHISPER_MODEL))) {
     return "Point GVoice at a local Whisper model file to dictate offline.";
