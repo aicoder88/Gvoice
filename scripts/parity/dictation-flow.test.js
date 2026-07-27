@@ -234,11 +234,12 @@ test("parity: openai transcription-only completes one utterance", async (t) => {
   assertCoreInvariants(frames, "openai");
 });
 
+// No DEEPGRAM_API_KEY guard on purpose. The relay falls back to the baked-in
+// DEEPGRAM_FALLBACK_KEY (realtime-relay.js), so an unset env var is the SHIPPING
+// configuration, not an untestable one — skipping on it would leave the path
+// every fresh clone actually uses uncovered. A revoked baked key fails here
+// loudly, which is exactly the warning worth having.
 test("parity: deepgram completes one utterance", async (t) => {
-  if (!process.env.DEEPGRAM_API_KEY) {
-    t.skip("DEEPGRAM_API_KEY not set");
-    return;
-  }
   const relay = await bootRelay();
   t.after(() => relay.close());
 
