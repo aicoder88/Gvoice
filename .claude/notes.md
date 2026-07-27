@@ -1,3 +1,63 @@
+# Session notes — 2026-07-27: code review fixes + recording playback
+
+## Why the recording didn't play
+
+macOS LaunchServices binds `com.microsoft.waveform-audio` to the Music/GarageBand
+family. The SAME claim also binds `public.mp3`, so converting recordings to MP3
+would have opened the same app that was already failing — verified with
+`lsregister -dump`. The WAV itself is fine (`afinfo`: 24.4s, Int16, 24000 Hz,
+mono). The file was never the problem, the opener was. Fix: `playRecording()` in
+main.js sends the path to `open -a VLC`, falling back to `shell.openPath` when
+VLC is absent or off-macOS. All three call sites route through it.
+
+Rejected: converting to MP3 (needs ffmpeg, lands in Music anyway); QuickTime
+instead of VLC (guaranteed present, but Mark asked for VLC and VLC is installed);
+in-app `<audio>` playback (new window + new UI for something the OS does).
+`open -a VLC` by NAME, not by hardcoded path — LaunchServices finds it in
+/Applications or ~/Applications.
+
+## Decisions inside the review fixes
+
+- **Streak threshold of 3** for cleanup failures: the timeout is 2500ms, so three
+  consecutive misses is ~8s of unreachable engine, past any wifi handoff. One
+  constant, `TRANSIENT_FAILURES_BEFORE_WARNING`.
+- **`resetCleanupFailureStreak()` is exported for tests only.** The tempting
+  alternative — resetting inside `takeCleanupError()` — is a trap: main.js drains
+  after every utterance, so the counter would never reach the threshold and the
+  warning would never fire at all.
+- **429 shares the streak counter** with network failures. A mixed run (2 timeouts
+  + 1 rate-limit) reports the rate-limit wording. Imprecise, but both mean the
+  same thing to the user: cleanup is degraded, text is coming out raw.
+- **The dead `!deepgramKeyNow` branch in realtime-relay.js was LEFT in place.** It
+  is unreachable only because the baked-in fallback key is always truthy; remove
+  that key and the guard goes live again. Fixed the actual harm instead — the
+  opaque 401 — in `src/providers/deepgram.js`.
+- **The whisper-cli guard reads `WHISPER_BIN`/`WHISPER_CLI` only.** If the parity
+  test runs without bootstrap-env having populated them, a developer with the
+  binary under BIN_DIR gets a skip rather than a run. Fails safe, and that subtest
+  already skips today on the missing model file.
+
+## Open — needs Mark's decision
+
+The Deepgram key in `realtime-relay.js` is real, on a card-backed account, and the
+XOR pad hiding it is printed on the adjacent line. It is **not on GitHub yet** —
+the commits holding it are unpushed. Pushing publishes it. Options: rotate + set a
+spend cap; move it behind a hosted relay; or accept the exposure knowingly (the
+code comment already says it's deliberate). Not changed here because removing it
+guts the zero-setup feature it exists for.
+
+Separately: `GROQ_FALLBACK_KEY` in `src/cleanup.js` is ALREADY public on
+origin/main. Lower stakes — the comment says no-card free tier.
+
+## Verified
+
+Rebuilt, relaunched, confirmed on the running app: tray "Play last recording"
+opens VLC with the right clip and the clock advances; no Settings nag window with
+STT_PROVIDER=deepgram + blank key; tray icon present. unit 122/122, parity 3 pass
++ 3 skip + 0 fail. Committed (875f1ed, 73bd0c9, 5eb0512), NOT pushed.
+
+---
+
 # Session notes — 2026-06-27 (pt.2): Settings UI redesign (sidebar)
 
 Rewrote public/settings.html into a sidebar/sectioned window (Speech, AI cleanup,
