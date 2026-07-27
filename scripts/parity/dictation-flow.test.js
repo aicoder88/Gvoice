@@ -30,8 +30,22 @@ function loadFixtureChunks() {
   return chunks;
 }
 
+// The relay constructor demands OPENAI_API_KEY only when openai is the DEFAULT
+// provider. Booting the relay and rejecting a cross-origin upgrade are pure
+// guard-rail checks that never call an upstream, so a placeholder key is enough
+// to get them running — without it all six subtests skipped, and the suite
+// exited 0 while covering nothing. Live-transcription subtests still require a
+// real key and still skip without one.
 async function bootRelay() {
-  const { server, port } = await startServer({ port: 0 });
+  const hadKey = "OPENAI_API_KEY" in process.env;
+  if (!hadKey) process.env.OPENAI_API_KEY = "sk-parity-boot-placeholder";
+  let started;
+  try {
+    started = await startServer({ port: 0 });
+  } finally {
+    if (!hadKey) delete process.env.OPENAI_API_KEY;
+  }
+  const { server, port } = started;
   return {
     port,
     close: () =>
@@ -148,20 +162,12 @@ function assertCoreInvariants(frames, provider) {
 }
 
 test("parity: relay boots and serves /realtime", async (t) => {
-  if (!process.env.OPENAI_API_KEY) {
-    t.skip("OPENAI_API_KEY required even for boot (relay constructor enforces it)");
-    return;
-  }
   const relay = await bootRelay();
   t.after(() => relay.close());
   assert.ok(relay.port > 0, "ephemeral port assigned");
 });
 
 test("parity: relay rejects a cross-origin upgrade, accepts loopback + no-origin", async (t) => {
-  if (!process.env.OPENAI_API_KEY) {
-    t.skip("OPENAI_API_KEY required even for boot (relay constructor enforces it)");
-    return;
-  }
   const relay = await bootRelay();
   t.after(() => relay.close());
   const url = `ws://127.0.0.1:${relay.port}/realtime?provider=openai&model=gpt-realtime-whisper`;
@@ -229,10 +235,6 @@ test("parity: openai transcription-only completes one utterance", async (t) => {
 });
 
 test("parity: deepgram completes one utterance", async (t) => {
-  if (!process.env.OPENAI_API_KEY) {
-    t.skip("OPENAI_API_KEY required to boot the relay");
-    return;
-  }
   if (!process.env.DEEPGRAM_API_KEY) {
     t.skip("DEEPGRAM_API_KEY not set");
     return;
@@ -263,10 +265,6 @@ test("parity: deepgram completes one utterance", async (t) => {
 });
 
 test("parity: whisper-local completes one utterance", async (t) => {
-  if (!process.env.OPENAI_API_KEY) {
-    t.skip("OPENAI_API_KEY required to boot the relay");
-    return;
-  }
   const modelPath = process.env.WHISPER_MODEL || "./models/ggml-small.en-q5_1.bin";
   if (!existsSync(modelPath)) {
     t.skip(`whisper model not found at ${modelPath}`);

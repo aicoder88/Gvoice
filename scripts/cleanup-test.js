@@ -132,8 +132,15 @@ const model = process.env.CLEANUP_MODEL || "(default)";
 console.log(`\n=== cleanup test harness ===`);
 console.log(`provider: ${provider}   model: ${model}\n`);
 
+// Pace the run. Firing all cases back-to-back burns the free tier's per-MINUTE
+// token limit in seconds, so late cases 429 and fall back to raw text — which
+// reads as a quality failure when it is really a rate-limit one. A human
+// dictating never hits this. Override with CLEANUP_TEST_DELAY_MS=0 on a paid key.
+const DELAY_MS = Number(process.env.CLEANUP_TEST_DELAY_MS ?? 6000);
+
 const results = [];
-for (const c of CASES) {
+for (const [i, c] of CASES.entries()) {
+  if (i > 0 && DELAY_MS > 0) await new Promise((r) => setTimeout(r, DELAY_MS));
   const r = await runCase(c);
   results.push(r);
   console.log(`──────── ${r.name}  [${r.pass ? "PASS" : "FAIL"}]  ${r.ms}ms`);

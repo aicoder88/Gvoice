@@ -5,6 +5,9 @@ dist/
 .DS_Store
 AGENTS.md
 OPENAI_KEY_AUDIT.md
+# Audit reports name key locations, account IDs, and file:line of sensitive
+# code. This repo is public — keep them on disk, out of history.
+docs/improvement-audit-*.md
 npm-debug.log*
 
 # Runtime debug + boot logs written by the Electron main process.

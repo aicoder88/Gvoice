@@ -966,9 +966,13 @@ async function processTranscript(transcript, restoreHwnd = null) {
   if (cleanupEnabled && needsCleanup) {
     const t0 = Date.now();
     try {
-      const { polishTranscript } = await import("./src/cleanup.js");
+      const { polishTranscript, takeCleanupError } = await import("./src/cleanup.js");
       textToType = await polishTranscript(textToType);
       debug("[main] cleanup done (" + (Date.now() - t0) + "ms):", JSON.stringify(textToType));
+      // polishTranscript swallows its own errors and returns the raw text, so a
+      // permanently dead cleanup engine looks exactly like a working one with
+      // nothing to fix. Say it out loud once instead of only in a console log.
+      showCleanupWarning(takeCleanupError());
     } catch (error) {
       console.error("[main] Cleanup pass failed, using raw:", error.message);
     }
@@ -1513,6 +1517,27 @@ function handleRecoveryEscalation(reason) {
   args.push("--mic-relaunch-at=" + now);
   app.relaunch({ args });
   app.exit(0);
+}
+
+let cleanupWarned = false;
+
+// Tell the user their cleanup engine is down. Once per app run, not per
+// utterance: the dictation still lands (raw), so this is information, not an
+// interruption — but a silently dead cleanup engine went unnoticed for weeks,
+// which is worse. Pass null (the no-error case) and this does nothing.
+function showCleanupWarning(/** @type {string | null} */ message) {
+  if (!message || cleanupWarned) return;
+  cleanupWarned = true;
+  console.error("[main] cleanup warning:", message);
+  dlog("cleanup-warning", message);
+  try {
+    if (Notification.isSupported()) {
+      new Notification({ title: "GVoice — cleanup is off", body: message }).show();
+    }
+  } catch (err) {
+    console.error("[main] cleanup-warning notification failed:", err && err.message);
+  }
+  try { tray?.displayBalloon?.({ title: "GVoice — cleanup is off", content: message }); } catch {}
 }
 
 let lastMicWarningAt = 0;

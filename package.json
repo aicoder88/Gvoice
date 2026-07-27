@@ -16,15 +16,15 @@
   },
   "dependencies": {
     "@nut-tree-fork/nut-js": "^4.2.6",
-    "dotenv": "^16.4.7",
-    "koffi": "^3.0.2",
+    "dotenv": "^16.6.1",
+    "koffi": "^3.1.2",
     "uiohook-napi": "^1.5.5",
-    "ws": "^8.21.0"
+    "ws": "^8.21.1"
   },
   "devDependencies": {
-    "@electron/rebuild": "^4.0.4",
-    "electron": "^42.2.0",
-    "electron-builder": "^26.8.1"
+    "@electron/rebuild": "^4.2.0",
+    "electron": "^42.7.1",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "com.purr.gvoice",

@@ -25,12 +25,14 @@ const GROQ_FALLBACK_KEY = [
 
 /** @type {Record<string, ProviderConfig>} */
 const PROVIDER_DEFAULTS = {
-  // llama-4-scout-17b is the sweet spot for the cleanup task: faster than
-  // 70b-versatile (~250ms vs ~350ms), it formats spoken enumerations into proper
-  // numbered/bulleted lists (which 8b-instant botches), and its free-tier token
-  // limit is the highest of the lot (30k TPM vs 12k for 70b, 6k for 8b) — so it
-  // hits 429s the least. No reasoning overhead. Override with CLEANUP_MODEL.
-  groq: { kind: "openai", url: "https://api.groq.com/openai/v1/chat/completions", model: "meta-llama/llama-4-scout-17b-16e-instruct", keyEnv: "GROQ_API_KEY", fallbackKey: GROQ_FALLBACK_KEY },
+  // Was llama-4-scout-17b until Groq retired it (2026) — every cleanup call
+  // started 404ing and dictation silently pasted raw text for weeks. Re-picked
+  // 2026-07-27 by running scripts/cleanup-test.js against every model the
+  // shipped key can reach: 70b-versatile scored highest, and at 12k TPM it has
+  // the highest free-tier token limit of the usable candidates (8k for the
+  // gpt-oss/qwen tier, 6k for 8b-instant, which also botches list formatting).
+  // If this 404s again, rerun that harness rather than guessing a successor.
+  groq: { kind: "openai", url: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile", keyEnv: "GROQ_API_KEY", fallbackKey: GROQ_FALLBACK_KEY },
   openai: { kind: "openai", url: "https://api.openai.com/v1/chat/completions", model: "gpt-4.1-mini", keyEnv: "OPENAI_API_KEY" },
   anthropic: { kind: "anthropic", url: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4-5", keyEnv: "ANTHROPIC_API_KEY" },
   google: { kind: "google", url: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-flash-lite", keyEnv: "GOOGLE_AI_KEY" }
@@ -177,6 +179,25 @@ export function looksLikeRetraction(text) {
   return typeof text === "string" && RETRACTION_CUES.test(text);
 }
 
+// Why this exists: polishTranscript never throws — it logs and hands back the
+// raw text. That is the right runtime behaviour (a dead cleanup engine must not
+// cost you the dictation), but it made a TOTAL outage invisible: when Groq
+// retired the configured model, every call 404'd and the app just pasted
+// unformatted text for weeks with nothing but a console line nobody reads in a
+// menu-bar app. Record the failure here so the caller can say so out loud once.
+let lastCleanupError = null;
+
+/**
+ * Most recent cleanup failure, consumed (cleared) by the caller so one outage
+ * is announced once rather than on every utterance.
+ * @returns {string | null}
+ */
+export function takeCleanupError() {
+  const error = lastCleanupError;
+  lastCleanupError = null;
+  return error;
+}
+
 /**
  * Send `rawText` to the configured cleanup provider with the system prompt.
  * Returns the cleaned text on success, the original on any failure (missing
@@ -261,8 +282,16 @@ export async function polishTranscript(rawText) {
   } catch (error) {
     if (error instanceof RetryableHttpError || error instanceof HttpError) {
       console.error(`Cleanup HTTP ${error.status} (${providerName}/${model}): ${error.body}`);
+      // 429 is the shared free key's per-minute limit — it clears on its own and
+      // isn't worth interrupting anyone over. A 404/401 is the engine being
+      // actually broken (model retired, key revoked) and stays broken.
+      lastCleanupError =
+        error.status === 429
+          ? null
+          : `The ${providerName} cleanup engine returned ${error.status} for ${model}. Text is being typed unformatted.`;
     } else {
       console.error("Cleanup error:", error && error.message);
+      lastCleanupError = `Cleanup couldn't reach ${providerName}. Text is being typed unformatted.`;
     }
     return rawText;
   }
