@@ -104,7 +104,7 @@ click handler in `pill.html` deliberately skips `lingerAfterAction()`.
 | 1 | Each retry failure names its own cause (`batchFailureReason`, shared with the streaming path's key-rejected wording) | unit-tested |
 | 2 | The batch retry runs on the Deepgram engine only — no more silent uploads for OpenAI users | code path + unit suite |
 | 3 | A retry that lost the pill no longer writes the clipboard | reasoned, not reproduced |
-| 4 | Clipboard fallback arms on `likelyMissed` (field read back with content, ours missing) instead of restoring the downgrade aedc11c removed | reasoned from logged `readLen` |
+| 4 | Clipboard fallback arms on `likelyMissed` (field read back with content, ours missing) instead of restoring the downgrade aedc11c removed | partial — see below |
 | 5 | Muted-mic recovery arms the idle timer, so the orange dot goes out | reasoned, needs a hardware mute switch |
 | 6 | Both fallback pill writes ask `pillFree()` first | reasoned, not reproduced |
 | 7 | "Transcribe again" says why when it can't run | code path |
@@ -127,3 +127,17 @@ pre-roll ring holds the whole startup window rather than the last 600ms. The
 456ms that remain are `getUserMedia` opening the device — the only way to remove
 those is to hold the mic open, which is the orange-dot problem the idle drop
 exists to solve.
+
+### The limit on #4
+
+`likelyMissed` needs the Accessibility read-back to return *some* text. Every
+paste logged on this machine today went into `cmux`, which reads back empty
+(`readLen: 0`) — so in that workflow the clipboard rescue never arms, and
+behaviour is exactly what aedc11c left: pill up for 8 seconds with a Copy
+button. It arms in apps whose text fields AX can actually read (native
+composers, Notes, Mail).
+
+The alternative — treating an unreadable field as a failed paste again — is the
+bug aedc11c removed, so it stays out. If silent misses keep happening in
+terminal-style targets, the fix has to come from a different signal than the
+read-back, not from re-tightening this one.
