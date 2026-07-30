@@ -704,7 +704,13 @@ async function recoverMic(reason) {
   // silent virtual input the way hot mode did (the user still gets the "pick your
   // microphone" warning). Probe on press if that ever bites.
   if (!HOT_MIC) {
-    log("Recovery skipped — mic opens on press (" + (reason || "") + ")");
+    // Not a full no-op: cold mode's per-hold teardown keeps the AudioContext,
+    // and the post-sleep wedge is IN that context (it keeps delivering zeros
+    // onto a fresh stream). Mark it stale so the next press does the full
+    // rebuild — otherwise the first press after a lid-open records silence and
+    // blames the user's mic. Safe mid-hold, unlike tearing down here.
+    captureStale = true;
+    log("Recovery deferred to next press — mic opens on press (" + (reason || "") + ")");
     return;
   }
   if (isRecording || startInFlight) {

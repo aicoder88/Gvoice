@@ -252,7 +252,14 @@ function startHotkeyUiohook({ onPress, onRelease }) {
     try { uIOhook.off("keyup", handleUp); } catch {}
     try { uIOhook.off("mousedown", handleMouseDown); } catch {}
     try { uIOhook.off("mouseup", handleMouseUp); } catch {}
-    throw new Error("uIOhook.start failed: " + (err && /** @type {any} */ (err).message));
+    // Keep the native addon's `code` on the wrapper. macOS reports a missing
+    // Accessibility grant as UIOHOOK_ERROR_AXAPI_DISABLED, and main.js keys the
+    // "allow GVoice under Accessibility" message off it — a bare new Error()
+    // drops it and that message can never fire.
+    throw Object.assign(
+      new Error("uIOhook.start failed: " + (err && /** @type {any} */ (err).message)),
+      { code: err && /** @type {any} */ (err).code }
+    );
   }
 
   return {

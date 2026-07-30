@@ -41,6 +41,14 @@ test("posts the wav as audio/wav with no raw-audio params, trims the transcript"
   assert.doesNotMatch(url, /encoding=|sample_rate=/);
 });
 
+// A half-open connection (captive portal, VPN drop) would otherwise hang on
+// undici's 300s default with the user staring at "Transcribing…".
+test("the upload carries an abort signal so a dead connection can't hang", async () => {
+  const calls = stubFetch([{ status: 200, body: okBody }]);
+  await transcribeWavFile(wav, { apiKey: "k", language: "en" });
+  assert.ok(calls[0].init.signal, "fetch was called without a timeout signal");
+});
+
 test("language auto uses batch language detection, not one request per language", async () => {
   const calls = stubFetch([{ status: 200, body: okBody }]);
   await transcribeWavFile(wav, { apiKey: "k", language: "auto" });

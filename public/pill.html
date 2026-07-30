@@ -52,14 +52,17 @@
         text-overflow: ellipsis;
         max-width: 380px;
       }
-      body.has-actions .label { max-width: 160px; }
-      /* Result reasons can be full sentences; let them wrap to two lines
+      /* The action row eats ~430px of the 760 result pill; this is what's left.
+         The old 160 capped the text regardless of window width, which is why
+         widening the window alone never fixed the truncated reason. */
+      body.has-actions .label { max-width: 265px; }
+      /* Result reasons can be full sentences; let them wrap to three lines
          instead of ellipsizing away the instruction at the end. */
       body[data-state="success"] .label,
       body[data-state="error"] .label {
         white-space: normal;
         display: -webkit-box;
-        -webkit-line-clamp: 2;
+        -webkit-line-clamp: 3;
         -webkit-box-orient: vertical;
         font-size: 13px;
         line-height: 1.25;

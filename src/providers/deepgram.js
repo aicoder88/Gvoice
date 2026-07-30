@@ -350,7 +350,12 @@ export async function transcribeWavFile(wavPath, { apiKey, model = "nova-3", lan
     const res = await fetch(`https://api.deepgram.com/v1/listen?${params.toString()}`, {
       method: "POST",
       headers: { Authorization: `Token ${apiKey}`, "Content-Type": "audio/wav" },
-      body
+      body,
+      // Without this a half-open connection (captive portal, VPN drop) hangs on
+      // undici's 300s default while the user waits. A clip this size comes back
+      // in seconds, so 30 is generous. AbortError isn't retryable, so this is a
+      // hard ceiling, not 30s per attempt.
+      signal: AbortSignal.timeout(30000)
     });
     if (!res.ok) throw httpError(res.status, (await res.text().catch(() => "")).slice(0, 200));
     return res.json();

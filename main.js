@@ -460,9 +460,11 @@ const PILL_SIZES = {
   transcribing: { width: 220, height: 56 },
   // Wide enough for the full action row (Copy · Play recording · Transcribe
   // again · Add word · ✕) plus a readable reason — at 560 the label ellipsized
-  // away the instruction the user needs.
-  success: { width: 700, height: 56 },
-  error: { width: 700, height: 56 }
+  // away the instruction the user needs. Taller too: the longest reason (the
+  // "pick your microphone" one) needs three lines beside the buttons, and
+  // widening alone left it clipped.
+  success: { width: 760, height: 72 },
+  error: { width: 760, height: 72 }
 };
 
 // Pick the display the pill should appear on: the one holding the window the
@@ -549,7 +551,7 @@ function showPillResult(
   /** @type {"success" | "error"} */ state,
   /** @type {string | null} */ transcript,
   /** @type {string | null} */ recordingPath,
-  /** @type {{ reason?: string, uncertain?: boolean }} */ opts = {}
+  /** @type {{ reason?: string, uncertain?: boolean, holdMs?: number }} */ opts = {}
 ) {
   currentTranscript = transcript;
   currentRecordingPath = recordingPath;
@@ -565,7 +567,9 @@ function showPillResult(
   //    landed, but lingers a bit longer (8s) so a rare silent miss is still
   //    catchable before the pill clears. The text is in Recent dictations and
   //    the ✕ clears it instantly either way.
-  const holdMs = state === "error" ? 30000 : opts.uncertain ? 8000 : 3000;
+  //  - `opts.holdMs` overrides all of it, for a success whose text only landed
+  //    on the clipboard (the retry recovery) and so needs reading time.
+  const holdMs = opts.holdMs ?? (state === "error" ? 30000 : opts.uncertain ? 8000 : 3000);
   setPillState(state, { canCopy: !!transcript, canOpen: !!recordingPath, holdMs, reason: opts.reason });
   pillWindow?.showInactive();
   // Crash backstop only — must outlive the renderer's own timer so it never
@@ -1208,18 +1212,31 @@ async function saveTempRecording(chunks, sampleRate) {
 // user was dictating into is often no longer the one in front.
 //
 // @param {string | null} recordingPath
-// @returns {Promise<string>} the recovered text, or "" if the retry found none
+// @returns {Promise<string | null>} the recovered text, "" if the retry ran and
+//   found none, or null if it never ran at all (caller still owns the pill).
 let retryInFlight = false;
 async function retranscribeRecording(recordingPath) {
-  if (!recordingPath || !existsSync(recordingPath)) return "";
+  if (!recordingPath || !existsSync(recordingPath)) return null;
   // The tray offers this on every saved clip, so two retries can be started
   // seconds apart — they'd fight over the pill and both write history. One at a
   // time; the second click is a no-op rather than a race.
-  if (retryInFlight) return "";
+  if (retryInFlight) return null;
+  // Batch is Deepgram's cloud. Someone running the on-device engine chose local
+  // on purpose (privacy, or no internet) — uploading their audio behind their
+  // back would break that, and offline it can't work anyway.
+  const provider = (process.env.STT_PROVIDER || "openai").toLowerCase();
+  if (provider === "whisper-local" || provider === "local") return null;
   retryInFlight = true;
   const t0 = Date.now();
-  setPillState("transcribing");
-  pillWindow?.showInactive();
+  // The session is deliberately re-opened before this round trip, so a press
+  // during it starts a NEW dictation — and that one owns the pill from then on.
+  // This retry still reaches the clipboard and history, it just must not paint
+  // over a live "Listening…".
+  const ownsPill = () => !dictation.busy;
+  if (ownsPill()) {
+    setPillState("transcribing");
+    pillWindow?.showInactive();
+  }
   try {
     const text = await transcribeWavFile(recordingPath, {
       apiKey: resolveDeepgramKey(),
@@ -1228,12 +1245,17 @@ async function retranscribeRecording(recordingPath) {
     });
     dlog("retranscribe", { path: recordingPath, len: text.length, ms: Date.now() - t0 });
     if (!text) {
-      showPillResult("error", null, recordingPath, { reason: "Retried — no speech in the recording." });
+      if (ownsPill()) showPillResult("error", null, recordingPath, { reason: "Retried — no speech in the recording." });
       return "";
     }
     const cleaned = stripWhisperNoiseTokens(text) || text;
     clipboard.writeText(cleaned);
-    showPillResult("error", cleaned, recordingPath, { reason: "Got it on retry — press ⌘V." });
+    // It WORKED — green dot. (This used to ride the error state purely to buy
+    // the 30s linger, so a rescued dictation looked like a failure.) The text is
+    // only on the clipboard, so keep the long linger via holdMs.
+    if (ownsPill()) {
+      showPillResult("success", cleaned, recordingPath, { reason: "Got it on retry — press ⌘V.", holdMs: 30000 });
+    }
     recordTranscript(cleaned, false, recordingPath);
     rebuildTrayMenu();
     return cleaned;
@@ -1241,10 +1263,23 @@ async function retranscribeRecording(recordingPath) {
     const detail = error && (error.message || String(error));
     console.error("[main] retranscribe failed:", detail);
     dlog("retranscribe-failed", { path: recordingPath, error: String(detail) });
-    showPillResult("error", null, recordingPath, { reason: "Retry failed — check your internet." });
+    if (ownsPill()) showPillResult("error", null, recordingPath, { reason: "Retry failed — check your internet." });
     return "";
   } finally {
     retryInFlight = false;
+  }
+}
+
+// "Transcribe again" from the pill or the tray. Same retry, but nobody else is
+// holding the pill — so when it can't run at all (the on-device engine has no
+// batch API to call), say so instead of letting the click do nothing visible.
+async function retranscribeOnDemand(/** @type {string | null} */ recordingPath) {
+  if ((await retranscribeRecording(recordingPath)) !== null) return;
+  const provider = (process.env.STT_PROVIDER || "openai").toLowerCase();
+  if (provider === "whisper-local" || provider === "local") {
+    showPillResult("error", null, recordingPath, {
+      reason: "Transcribe again needs the online engine — GVoice is set to on-device."
+    });
   }
 }
 
@@ -1269,6 +1304,10 @@ function setupIpc() {
     // audio (a too-short accidental tap), hide quietly; an Error on every
     // misfire would just be noise.
     if (!text || !text.trim()) {
+      // Re-open the session BEFORE the retry below. The batch round trip takes
+      // seconds (minutes on a half-open connection), and every hotkey press in
+      // that window would otherwise be dropped in silence — no pill, no clue.
+      dictation.done();
       if (chunks && chunks.length) {
         const failedPath = await saveTempRecording(chunks, sampleRate);
         // The live stream heard nothing, but the audio is on disk — try the
@@ -1276,11 +1315,11 @@ function setupIpc() {
         // the stream lost to a slow connect or a timeout rather than to real
         // silence, and it owns the pill from here (it knows whether the retry
         // found words, found silence, or couldn't reach the engine at all).
-        const recovered = failedPath ? await retranscribeRecording(failedPath) : "";
-        // Only claim a recording was saved when one actually was (saving can
-        // be off in Settings, or the write can fail) — with none there's
-        // nothing to retry either.
-        if (!failedPath) showPillResult("error", null, null, { reason: "No speech detected." });
+        const recovered = failedPath ? await retranscribeRecording(failedPath) : null;
+        // null = the retry never ran (nothing saved, one already in flight, or
+        // an on-device-only engine). It never touched the pill, so this path
+        // still has to say what happened instead of leaving "Transcribing…" up.
+        if (recovered === null) showPillResult("error", null, failedPath, { reason: "No speech detected." });
         // The retry logs its own history entry when it recovers text; otherwise
         // record the failed attempt so the clip stays playable from the tray.
         if (!recovered) {
@@ -1290,7 +1329,6 @@ function setupIpc() {
       } else {
         hidePill();
       }
-      dictation.done();
       return;
     }
 
@@ -1370,12 +1408,12 @@ function setupIpc() {
     // retry, that retry owns the pill start to finish. Flashing this handler's
     // reason first would be replaced within a frame AND would leave its own
     // 45s safety-hide timer armed behind the retry's shorter states.
-    if (!recordingPath) {
-      const reason = (payload && payload.reason) || "Couldn't transcribe.";
-      showPillResult("error", null, null, { reason });
-      return;
-    }
-    if (!(await retranscribeRecording(recordingPath))) {
+    const reason = (payload && payload.reason) || "Couldn't transcribe.";
+    const recovered = recordingPath ? await retranscribeRecording(recordingPath) : null;
+    // null = no retry happened (see retranscribeRecording) — show the
+    // renderer's plain-English reason rather than a pill stuck on "Transcribing…".
+    if (recovered === null) showPillResult("error", null, recordingPath, { reason });
+    if (!recovered && recordingPath) {
       recordTranscript("", false, recordingPath);
       rebuildTrayMenu();
     }
@@ -1407,7 +1445,7 @@ function setupIpc() {
   // automatic retry already ran, so this is for a second try after the network
   // came back, or on a clip whose transcript was wrong rather than missing.
   ipcMain.on("pill:retry", () => {
-    if (currentRecordingPath) retranscribeRecording(currentRecordingPath);
+    if (currentRecordingPath) retranscribeOnDemand(currentRecordingPath);
   });
   ipcMain.on("pill:hide", () => hidePill());
   ipcMain.on("pill:add-word", () => openDictionaryWindow());
@@ -1797,7 +1835,7 @@ function rebuildTrayMenu() {
     if (hasRecording) {
       sub.push({
         label: "Transcribe again",
-        click: () => retranscribeRecording(entry.recordingPath || null)
+        click: () => retranscribeOnDemand(entry.recordingPath || null)
       });
     }
     return {
@@ -1843,7 +1881,7 @@ function rebuildTrayMenu() {
       label: "Transcribe last recording again",
       enabled: !!lastRecording,
       click: () => {
-        retranscribeRecording((lastRecording && lastRecording.recordingPath) || null);
+        retranscribeOnDemand((lastRecording && lastRecording.recordingPath) || null);
       }
     },
     { type: "separator" },
