@@ -524,3 +524,31 @@ same problem means the next app with a quiet composer needs another entry.
   I can't force); each was fixed from the code path, not from a repro.
 - **Tray icon not re-verified visually** — the display was asleep during the
   test window and nothing in this change touches tray or startup code.
+
+## Third-pass review — 2026-07-30 (side notes)
+
+Full findings: `docs/code-review-2026-07-30-third-pass.md`. These are the
+for-the-record items that didn't belong in the report.
+
+- **Codex CLI is broken on this machine.** `codex --version` and `codex exec`
+  both die with
+  `spawn /Users/macpro/.npm-global/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex ENOENT`
+  — the npm package is installed but its native binary is missing. So this
+  review had no cross-model adversarial pass. Fix with a reinstall of
+  `@openai/codex` if that second opinion is wanted on future reviews.
+- **Specialist subagents were deliberately not dispatched.** The `/review` skill
+  fans out to parallel specialist reviewers; this session's rules forbid
+  spawning agents that weren't asked for. The whole diff was read inline
+  instead — same input, one reader.
+- **Regression test proven to fail without its fix.** The hoist in
+  `transcribeWavFile` was reverted in place and
+  `retry shares one deadline instead of restarting the clock` reported
+  `not ok 3`. Restored immediately. Worth recording because a strict-equality
+  assertion on two `undefined`s would have passed silently — it doesn't here.
+- **Untracked duplicate:** `docs/client-feedback-mic-likght-and-mac-setup-plan.txt`
+  (typo, "likght") duplicates the committed
+  `docs/client-feedback-mic-light-and-mac-setup-plan.md`. Left alone.
+- **Rejected as not worth a finding:** `scripts/setup-whisper-mac.sh` exits
+  silently if `brew install whisper-cpp` succeeds but the binary isn't on the
+  current shell's PATH (`WHISPER_BIN="$(command -v whisper-cli)"` fails under
+  `set -e` with no message). Cosmetic, one-time, dev-only script.
