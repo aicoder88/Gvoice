@@ -61,8 +61,8 @@ export function classifyCapability(facts) {
  * Which whisper.cpp build + model the capable machine should fetch. NVIDIA gets
  * the CUDA build and the larger (more accurate) small model; everyone else gets
  * the CPU build and the lighter base model so the download + per-clip latency
- * stay reasonable. Apple Silicon is moot for v1 (Mac is cloud-only) but kept
- * honest for when Mac-local lands.
+ * stay reasonable. On a Mac the `variant` is unused — Homebrew's whisper-cpp is
+ * already Metal-accelerated — so only the model choice applies there.
  *
  * @param {{ gpu: string, platform?: string }} facts
  * @returns {{ variant: "cuda"|"cpu", model: "ggml-small-q5_1.bin"|"ggml-base-q5_1.bin" }}

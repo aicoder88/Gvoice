@@ -54,7 +54,7 @@ import { writeEnvFile, settingsView, patchFromView, micIdleMinutes, VALID_PROVID
 import { probeCapability, recommendedAssets } from "./src/hardware.js";
 import { suggestBeforeBenchmark } from "./src/benchmark.js";
 import { runLocalBenchmark } from "./src/benchmark-run.js";
-import { ensureModel, ensureWindowsBinaries, MODELS, WINDOWS_BINARY_ZIPS } from "./src/model-download.js";
+import { ensureModel, ensureWindowsBinaries, findInstalledWhisperCli, hasWhisperServer, MODELS, WINDOWS_BINARY_ZIPS } from "./src/model-download.js";
 import { saveRecording, pruneRecordings, clearRecordings } from "./src/recordings.js";
 import { transcribeWavFile, batchFailureReason } from "./src/providers/deepgram.js";
 import { resolveDeepgramKey } from "./realtime-relay.js";
@@ -64,6 +64,32 @@ import { execFile } from "node:child_process";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const envPath = ENV_FILE;
+
+// The one Mac-specific step of the on-device engine: the binaries come from
+// Homebrew instead of a download, so the app can only point at them.
+const LOCAL_ENGINE_INSTALL_HINT =
+  "The free on-device engine needs a one-time install. Open Terminal, run: brew install whisper-cpp — then reopen this window.";
+
+// Half an install: whisper-cli present, whisper-server missing. It still works,
+// but every clip reloads the model — including the speed test's, which then
+// reads far slower than everyday use would.
+const LOCAL_ENGINE_NO_SERVER_HINT =
+  "Heads up: whisper-server is missing next to whisper-cli, so this will time the slow path. `brew install whisper-cpp` installs both.";
+
+/**
+ * Is the on-device engine usable on this machine, and where is its binary?
+ * Windows answers "ready" without a path because the benchmark downloads the
+ * binaries itself.
+ *
+ * @returns {{ state: "ready" | "install" | "unsupported", bin: string | null, server: boolean }}
+ */
+function localEngineState() {
+  if (process.platform === "win32") return { state: "ready", bin: null, server: true };
+  if (process.platform !== "darwin") return { state: "unsupported", bin: null, server: false };
+  const bin = findInstalledWhisperCli();
+  if (!bin) return { state: "install", bin: null, server: false };
+  return { state: "ready", bin, server: hasWhisperServer(bin) };
+}
 
 /** @type {import("electron").BrowserWindow | null} */
 let splashWindow = null;
@@ -1639,9 +1665,18 @@ function setupIpc() {
   // The settings window's "speech engine" panel drives these. The benchmark is
   // the real decision-maker (a hardware guess is unreliable), so local is only
   // ever kept after it measurably beats the cloud — or the user opts in anyway.
+  //
+  // Where the engine binaries come from differs by platform, and that is the
+  // ONLY difference — the model download, the speed test and the apply step are
+  // already cross-platform:
+  //   Windows — downloaded on demand into BIN_DIR by ensureWindowsBinaries.
+  //   macOS   — Homebrew's whisper-cpp (ships whisper-cli AND whisper-server),
+  //             installed once by the user; we only locate it.
+  //   Linux   — not wired up.
   let benchmarkInFlight = false;
   ipcMain.handle("engine:probe", () => {
     const probe = probeCapability();
+    const local = localEngineState();
     return {
       probe,
       suggestion: suggestBeforeBenchmark(probe),
@@ -1649,7 +1684,11 @@ function setupIpc() {
       recommendedModel: recommendedAssets(probe).model,
       currentProvider: (process.env.STT_PROVIDER || "openai").toLowerCase(),
       currentModel: process.env.WHISPER_MODEL ? basename(process.env.WHISPER_MODEL) : "",
-      platform: process.platform
+      platform: process.platform,
+      localEngine: local.state,
+      localEngineHint: local.state === "install"
+        ? LOCAL_ENGINE_INSTALL_HINT
+        : (local.state === "ready" && !local.server ? LOCAL_ENGINE_NO_SERVER_HINT : "")
     };
   });
 
@@ -1669,17 +1708,25 @@ function setupIpc() {
       try { event.sender.send("engine:progress", { stage, ...extra }); } catch {}
     };
     try {
-      if (process.platform !== "win32") {
-        throw new Error("The on-device engine isn't available on this platform yet — use a cloud engine.");
+      // 1) Engine binaries. Windows downloads them (the CUDA build is a 700 MB
+      // pull — say so up front instead of surprising a metered connection);
+      // macOS uses the Homebrew install, which we only have to locate.
+      let bin;
+      if (process.platform === "win32") {
+        const zipMB = WINDOWS_BINARY_ZIPS[variant] ? WINDOWS_BINARY_ZIPS[variant].sizeMB : "?";
+        send(`Getting the on-device engine ready (${zipMB} MB download if not yet installed)…`);
+        bin = await ensureWindowsBinaries(variant, BIN_DIR, {
+          onProgress: (p) => send(`Downloading the on-device engine (${zipMB} MB)…`, p)
+        });
+      } else {
+        const local = localEngineState();
+        if (local.state !== "ready") {
+          throw new Error(local.state === "install"
+            ? LOCAL_ENGINE_INSTALL_HINT
+            : "The on-device engine isn't available on this platform yet — use a cloud engine.");
+        }
+        bin = local.bin;
       }
-      // 1) Engine binaries (skipped instantly if already present). The CUDA
-      // build is a 700 MB pull — say so up front instead of surprising a
-      // metered connection.
-      const zipMB = WINDOWS_BINARY_ZIPS[variant] ? WINDOWS_BINARY_ZIPS[variant].sizeMB : "?";
-      send(`Getting the on-device engine ready (${zipMB} MB download if not yet installed)…`);
-      const bin = await ensureWindowsBinaries(variant, BIN_DIR, {
-        onProgress: (p) => send(`Downloading the on-device engine (${zipMB} MB)…`, p)
-      });
       // 2) The speech model (only downloaded if missing).
       const sizeMB = MODELS[modelName] ? MODELS[modelName].sizeMB : "?";
       send(`Downloading the speech model (${sizeMB} MB)…`);
@@ -1723,7 +1770,20 @@ function setupIpc() {
         return { error: "That speech model isn't downloaded yet — run the speed test first." };
       }
       patch.WHISPER_MODEL = modelPath;
-      if (process.platform === "win32") patch.WHISPER_BIN = join(BIN_DIR, "whisper-cli.exe");
+      // Always an ABSOLUTE path: a Finder-launched .app inherits none of your
+      // shell's PATH, so a bare "whisper-cli" works in dev and dies installed.
+      if (process.platform === "win32") {
+        patch.WHISPER_BIN = join(BIN_DIR, "whisper-cli.exe");
+      } else {
+        // macOS/Linux: whisper.cpp comes from the system (Homebrew, or a
+        // self-build). Pin the absolute path when we can find it; if we can't,
+        // leave WHISPER_BIN unset so the existing PATH default still carries a
+        // working install rather than blocking it. On a Mac that IS the guided
+        // path, so say what's missing instead of writing a config that fails.
+        const cli = findInstalledWhisperCli();
+        if (cli) patch.WHISPER_BIN = cli;
+        else if (process.platform === "darwin") return { error: LOCAL_ENGINE_INSTALL_HINT };
+      }
     }
     try {
       writeEnvFile(envPath, patch);

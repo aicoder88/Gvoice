@@ -8,7 +8,14 @@ Push-to-talk dictation. Hold **Ctrl+Shift** (either side) anywhere on Windows �
 
 Runs the whole pipeline on your own machine: a small Whisper model transcribes the clip, optional cleanup model polishes it. No key, no internet, nothing leaves the computer.
 
-**On macOS**
+**On macOS — from inside the app (easiest)**
+
+1. Install whisper.cpp once: `brew install whisper-cpp` (get Homebrew from https://brew.sh first).
+2. Open GVoice → **Settings** → the speech-engine panel → **Run the speed test**. It downloads the model, times it on your machine, and — if you keep it — writes `STT_PROVIDER`, `WHISPER_BIN` and `WHISPER_MODEL` for you.
+
+If the panel still says the engine needs installing, close and reopen Settings after the brew install finishes.
+
+**On macOS — from the terminal**
 
 1. Install dependencies:
    ```

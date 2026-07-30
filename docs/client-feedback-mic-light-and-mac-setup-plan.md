@@ -228,8 +228,23 @@ back in 5.1s.
   off, dictate → text pastes.
 - Re-run the script → skips both downloads, exits clean.
 
-**Parked, not in scope:** the in-app "on-device engine" panel still hard-blocks
-non-Windows (`main.js:1548`). The model download and speed test are already
-cross-platform; only the binary step is Windows-shaped. The client asked for a
-documented path, not a GUI installer that runs brew for them. Say the word and
-it becomes Goal 4.
+## Goal 4 — the in-app panel works on a Mac (done 30 Jul 2026)
+
+Was parked; built on request. The panel used to hard-block anything but
+Windows. Only the *binary* step was ever Windows-shaped — the model download,
+the speed test and the apply step were already cross-platform — so that one step
+now branches: Windows downloads the binaries, a Mac points at Homebrew's
+`whisper-cpp`, everything else still says "not on this platform".
+
+- No Mac install yet → the panel says the one command that fixes it
+  (`brew install whisper-cpp`) instead of a dead end.
+- `whisper-cli` present but `whisper-server` missing → still usable, but the
+  panel warns, because the speed test would then time the reload-per-clip path
+  and could fail a machine that's actually fast.
+- Apply always writes an **absolute** `WHISPER_BIN` — a Finder-launched .app
+  gets none of your shell's `PATH`.
+
+**Watched working on the built app:** Settings → speed test → Homebrew's
+whisper-server warmed with the Metal backend, 749 ms, "fast enough to use
+locally"; "Use on-device" wrote `WHISPER_BIN=/opt/homebrew/bin/whisper-cli` plus
+an absolute model path; "Keep cloud" put Deepgram back.

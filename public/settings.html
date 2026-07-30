@@ -445,13 +445,20 @@
         let info;
         try { info = await window.settingsBridge.engineProbe(); }
         catch { suggest.textContent = "Couldn't check this computer — pick a cloud engine above and paste its key."; return; }
-        if (info.platform && info.platform !== "win32") {
-          suggest.textContent = "The free on-device engine isn't available on this platform yet — use a cloud engine above (paste its key under API keys).";
+        // "install" = Mac without Homebrew's whisper-cpp: the panel can't run
+        // yet, but it's one command away, so say the command instead of a flat
+        // "not available".
+        if (info.localEngine === "install" || info.localEngine === "unsupported") {
+          suggest.textContent = info.localEngineHint
+            || "The free on-device engine isn't available on this platform yet — use a cloud engine above (paste its key under API keys).";
           el("benchBtn").style.display = "none"; el("localModel").style.display = "none";
           el("localModelHint").style.display = "none";
           return;
         }
-        suggest.textContent = info.suggestion ? info.suggestion.text : "";
+        // localEngineHint here means "usable, but half-installed" — keep the
+        // hardware suggestion and add the warning rather than replacing it.
+        suggest.textContent = (info.suggestion ? info.suggestion.text : "")
+          + (info.localEngineHint ? " " + info.localEngineHint : "");
         if (info.recommendedModel) el("localModel").value = info.recommendedModel;
         if (info.currentModel) el("localModel").value = info.currentModel;
       }

@@ -10,7 +10,7 @@
 
 import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { execFile } from "node:child_process";
-import { join, basename } from "node:path";
+import { join, basename, isAbsolute } from "node:path";
 import { Readable } from "node:stream";
 import { withRetry, httpError } from "./retry.js";
 
@@ -161,6 +161,42 @@ export async function ensureWindowsBinaries(variant, binDir, opts = {}) {
   try { unlinkSync(zip); } catch {}
   if (!existsSync(cli)) throw new Error("whisper-cli.exe not found after extracting " + basename(url));
   return cli;
+}
+
+/**
+ * Find an already-installed whisper-cli on macOS/Linux, where there is no
+ * binary download: whisper.cpp comes from Homebrew (`brew install whisper-cpp`)
+ * or the user's own build. Returns an ABSOLUTE path or null.
+ *
+ * Absolute matters: a Finder-launched .app inherits none of your shell's PATH,
+ * so a bare "whisper-cli" works in dev and dies in the installed app.
+ * PATH is still searched (dev runs, custom installs), but the brew prefixes
+ * come first because those are the ones a packaged app can't see.
+ *
+ * @returns {string | null}
+ */
+export function findInstalledWhisperCli() {
+  // An explicit, working WHISPER_BIN wins outright — never second-guess a path
+  // the user configured (their own build may deliberately live elsewhere).
+  const configured = process.env.WHISPER_BIN || process.env.WHISPER_CLI;
+  if (configured && isAbsolute(configured) && existsSync(configured)) return configured;
+  const candidates = [];
+  const dirs = ["/opt/homebrew/bin", "/usr/local/bin", ...(process.env.PATH || "").split(":")];
+  for (const dir of dirs) {
+    if (!dir || !isAbsolute(dir)) continue;
+    const cli = join(dir, "whisper-cli");
+    if (existsSync(cli)) candidates.push(cli);
+  }
+  // An install WITH whisper-server wins over one without, wherever it sits.
+  // Without the server, whisper-local reloads the model on every clip and the
+  // speed test measures that cold path — which can fail a machine that is
+  // actually fast. So prefer the complete install rather than the first hit.
+  return candidates.find(hasWhisperServer) || candidates[0] || null;
+}
+
+/** True if `whisper-server` sits next to this `whisper-cli` (Homebrew ships both). */
+export function hasWhisperServer(cliPath) {
+  return !!cliPath && existsSync(cliPath.replace(/-cli(\.exe)?$/i, "-server$1"));
 }
 
 /** Expand a .zip into a directory via PowerShell (Windows). */
