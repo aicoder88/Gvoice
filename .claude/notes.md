@@ -355,3 +355,70 @@ The dev launch (Electron.app, not the built GVoice.app) loops `recovery-escalate
 built-in mic and it is the system default, so this smells like the dev Electron binary missing its
 own Microphone TCC grant rather than a device problem. Not touched by any of today's changes — the
 hotkey press/release still logged correctly through it. Not investigated.
+
+## 2026-07-30 (later) — "no voice detected, but the recording plays fine"
+
+### What the evidence says
+Mark's failing dictation is 14:29:31Z, clip `dictation-1785421777117-cxhz.wav`. Measured: 2.05s,
+max_volume -12.8 dB — real speech, not a quiet room. Live result was
+`ALL EMPTY (reason=safety_timeout) en:words=0`, i.e. Deepgram answered nothing in the 3s window
+after commit.
+
+**Replayed that exact clip through the same relay + Deepgram, same query string the renderer uses
+(`?provider=deepgram&language=en&model=nova-3`): `"Testing one two three."`, conf 0.917, answer in
+319ms after commit.** So the audio, the baked Deepgram key, the relay, and the params are all fine.
+A healthy flush is ~320ms, so the 3s timeout is not tight — that run simply got nothing back.
+
+### The actionable finding
+`/Applications/GVoice.app` was built **Jul 27 19:52**. Extracted its asar:
+`grep -c armSafetyTimeout` = 0, `grep -c retranscribeRecording` = 0. It contains **none** of today's
+deepgram work — not the discarded-transcript fix, not the automatic batch retry from disk. Mark has
+been hitting the exact bug that was fixed in source this morning and never built. Rebuilt
+(`pnpm build`); the new `dist/mac-arm64/GVoice.app` has both (armSafetyTimeout present, tray
+verified via System Events). Swapping it into /Applications is pending Mark's OK.
+Note the retry is what actually rescues this symptom: on THIS clip the batch path returns the
+sentence, so the same failure now lands the text on the clipboard instead of showing nothing.
+
+### Correction to the earlier "your mic is deaf" report — that was wrong
+It was based on (a) a synthetic nut-js hold that logged `peak=0.0000` and (b) `ffmpeg -f
+avfoundation` recording -91 dB. Mark's own 16:29 dictation captured clean speech minutes later, so
+the mic works. The ffmpeg silence is most likely ffmpeg (via the shell) lacking its own Microphone
+TCC grant, which macOS answers with zeros rather than an error. Don't repeat that claim.
+
+### Not a repro (recorded so nobody re-runs it)
+Playing the clip through the speakers into the built-in mic during a simulated hold produced a
+5.29s clip at -17.2 dB that is genuinely unintelligible — Deepgram returns empty for it BOTH live
+and on replay. That is correct behavior, not the bug. Acoustic playback can't reproduce this;
+it needs Mark's voice.
+
+## 2026-07-30 (later still) — "the paste didn't land" on every dictation, wrongly
+
+### Root cause, proven on the running app
+`typed {"len":22,...,"pasted":true,"verified":false,"target":"cmux","readLen":0}`
+
+The post-paste read-back (main.js, `readbackPasteTarget`) asks the focused element for its AXValue
+and downgrades the paste when our text isn't in it. cmux — Mark's main app — answers with an
+**empty string**, not null. `typeof "" === "string"`, so the old code took the empty-but-readable
+branch, `"".includes(text)` was false, and it declared a paste that had visibly landed a failure:
+a 30s error pill saying "Click Copy — the paste didn't land" over text already on screen. Seven in
+a row at 14:50. The code was IDENTICAL in the Jul 27 build (diffed the extracted asars) — nothing
+regressed; he simply started dictating into an app whose composer reads back empty.
+
+### Fix
+A failed read-back no longer sets `pasted = false`. It can't tell "the paste missed" from "this app
+doesn't expose its composer" (web areas, Electron/rich-text editors), so it now only feeds
+`uncertain` — success pill, 8s linger, text still copyable. The signals that genuinely prove a miss
+are untouched: typeText threw, no editable field focused, Windows foreground lost.
+Also added `verified` / `target` / `readLen` to the `typed` log line (app name and length only —
+never the dictated text or the field's contents) so the next weird paste is diagnosable.
+
+### Verified end-to-end on the running installed app
+Played Mark's own clip through the speakers at full volume into the mic during a simulated hold:
+Deepgram returned "Testing one two three." (conf 0.956) and the paste logged `pasted:true,
+verified:false` — no error pill, no "Click Copy" line in the renderer log (the failing runs logged
+`Final: Click the copy. The paste didn't land.`). Side effect: that test typed one sentence into
+whatever had focus (cmux).
+
+### Rejected
+Adding "cmux" to TERMINAL_BINARIES. The generic fix already covers it; a second mechanism for the
+same problem means the next app with a quiet composer needs another entry.

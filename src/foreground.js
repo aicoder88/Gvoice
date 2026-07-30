@@ -283,19 +283,22 @@ const pidPathBuf = Buffer.alloc(4096); // PROC_PIDPATHINFO_MAXSIZE
 
 // Is `focused` (an already-acquired AX element) owned by a terminal emulator?
 // Walks element → owning pid → executable path and matches the app/binary name.
-// False whenever we can't tell, so a non-terminal app is never mistaken for one.
-function elementIsTerminal(/** @type {unknown} */ focused) {
-  if (!AXUIElementGetPid || !proc_pidpath) return false;
+// Empty strings whenever we can't tell, so a non-terminal app is never mistaken
+// for one.
+function elementApp(/** @type {unknown} */ focused) {
+  const none = { bundle: "", basename: "" };
+  if (!AXUIElementGetPid || !proc_pidpath) return none;
   const pidOut = [0];
-  if (AXUIElementGetPid(focused, pidOut) !== 0 || !pidOut[0]) return false;
+  if (AXUIElementGetPid(focused, pidOut) !== 0 || !pidOut[0]) return none;
   const len = proc_pidpath(pidOut[0], pidPathBuf, pidPathBuf.length);
-  if (len <= 0) return false;
+  if (len <= 0) return none;
   const path = pidPathBuf.toString("utf8", 0, len).toLowerCase();
   // e.g. "/applications/iterm.app/contents/macos/iterm2" → bundle "iterm",
   // basename "iterm2". Exact match against each (not substring — see above).
-  const bundle = (path.match(/\/([^/]+)\.app\//) || [])[1] || "";
-  const basename = path.slice(path.lastIndexOf("/") + 1);
-  return TERMINAL_BINARIES.has(bundle) || TERMINAL_BINARIES.has(basename);
+  return {
+    bundle: (path.match(/\/([^/]+)\.app\//) || [])[1] || "",
+    basename: path.slice(path.lastIndexOf("/") + 1)
+  };
 }
 
 /**
@@ -306,18 +309,26 @@ function elementIsTerminal(/** @type {unknown} */ focused) {
  * traversals used to be able to flip the result), and a non-terminal paste no
  * longer pays for two separate system-wide traversals.
  *
- * @returns {{ isTerminal: boolean, value: string | null }}
+ * @returns {{ isTerminal: boolean, value: string | null, app: string }}
  *   isTerminal — skip read-back verification and trust the paste.
  *   value — the focused field's text, or null when it can't be read (callers
  *   must treat null as "couldn't verify", never as a failed paste). Always
  *   {isTerminal:false, value:null} when AX is unavailable / not trusted.
+ *   app — the target's bundle/binary name, for the log only. "" when unknown,
+ *   which is also how "AX told us nothing at all" looks: without it, a read-back
+ *   that never ran is indistinguishable in the log from one that ran and found
+ *   an unreadable field.
  */
 export function readbackPasteTarget() {
-  return withFocusedElement((focused) =>
-    elementIsTerminal(focused)
-      ? { isTerminal: true, value: null }
-      : { isTerminal: false, value: readFocusedStringValue(focused) }
-  ) || { isTerminal: false, value: null };
+  return withFocusedElement((focused) => {
+    const { bundle, basename } = elementApp(focused);
+    const isTerminal = TERMINAL_BINARIES.has(bundle) || TERMINAL_BINARIES.has(basename);
+    return {
+      isTerminal,
+      value: isTerminal ? null : readFocusedStringValue(focused),
+      app: bundle || basename
+    };
+  }) || { isTerminal: false, value: null, app: "" };
 }
 
 /**

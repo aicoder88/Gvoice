@@ -1103,10 +1103,14 @@ async function processTranscript(transcript, restoreHwnd = null) {
   // so a focus change can't make them disagree about which app is focused.
   let verified = null;
   let isTerminalTarget = false;
+  let readTarget = "";
+  let readLen = /** @type {number | null} */ (null);
   if (pasted) {
     await new Promise((resolve) => setTimeout(resolve, 150)); // let the paste settle
-    const { isTerminal, value: fieldValue } = readbackPasteTarget();
+    const { isTerminal, value: fieldValue, app } = readbackPasteTarget();
     isTerminalTarget = isTerminal;
+    readTarget = app;
+    readLen = typeof fieldValue === "string" ? fieldValue.length : null;
     if (!isTerminal && typeof fieldValue === "string") {
       // Normalize what apps auto-substitute (smart quotes, em-dashes, NBSP,
       // collapsed whitespace) so autocorrect can't turn a good paste into a
@@ -1115,11 +1119,31 @@ async function processTranscript(transcript, restoreHwnd = null) {
         s.replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
          .replace(/[–—]/g, "-").replace(/\s+/g, " ").trim();
       verified = norm(fieldValue).includes(norm(textToType));
-      if (!verified) pasted = false;
+      // A read-back that can't find the text used to mean "the paste failed".
+      // It doesn't: 2026-07-30, seven pastes in a row that visibly LANDED were
+      // all called failures, each one a 30s error pill telling the user to click
+      // Copy for text already sitting in front of them. An app that doesn't
+      // expose its composer's text faithfully (web areas, Electron editors,
+      // rich-text composers) is indistinguishable from a real miss here, so this
+      // signal can only ever mean "unconfirmed" — it feeds `uncertain` below,
+      // which keeps the pill up a little longer with the text still copyable.
+      // The signals that CAN prove a miss (typeText threw, no editable field,
+      // Windows focus lost) still set pasted = false above.
     }
   }
   debug("[main] paste done (" + (Date.now() - tType) + "ms paste, restored=" + restored + ", fieldFocused=" + fieldFocused + ", verified=" + verified + ", pasted=" + pasted + ")");
-  dlog("typed", { len: textToType.length, ms: Date.now() - tType, fieldFocused, pasted });
+  // target/readLen say WHY a paste came back unverified — which app owned the
+  // field and whether anything was readable in it — without ever logging what
+  // the user dictated or what was already in the field.
+  dlog("typed", {
+    len: textToType.length,
+    ms: Date.now() - tType,
+    fieldFocused,
+    pasted,
+    verified,
+    target: readTarget,
+    readLen
+  });
   // verified: true = read back and confirmed, false = read back and missing
   // (already downgraded pasted), null = couldn't read the field to check.
   // uncertain: pasted, but we could neither read it back to confirm NOR trust
