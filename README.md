@@ -21,7 +21,7 @@ First launch with no API key set? GVoice opens its **Settings** window so you ca
 Pick one with `STT_PROVIDER` in `.env`:
 
 - **`deepgram`** — fast cloud transcription. Works with no setup: a shared key ships with the app. Set `DEEPGRAM_API_KEY` to use your own.
-- **`whisper-local`** — runs entirely on your machine, no per-clip cost (needs whisper.cpp binaries + a model; see SETUP.md). On Windows, the Settings window can set this up for you: it downloads the engine and a model, runs a speed test on your actual hardware, and only suggests keeping local if it's fast enough.
+- **`whisper-local`** — runs entirely on your machine, no per-clip cost (needs whisper.cpp binaries + a model; see SETUP.md). One setup script per platform: `./scripts/setup-whisper-mac.sh` (Homebrew) or `scripts\setup-whisper-windows.ps1`. On Windows the Settings window can also do it for you: it downloads the engine and a model, runs a speed test on your actual hardware, and only suggests keeping local if it's fast enough.
 - **`openai`** — OpenAI's realtime transcription (needs `OPENAI_API_KEY`).
 
 ## Custom dictionary

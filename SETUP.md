@@ -4,9 +4,32 @@ Push-to-talk dictation. Hold **Ctrl+Shift** (either side) anywhere on Windows �
 
 ## One-time setup
 
-### Option A — Local Whisper on Windows (no per-clip API cost)
+### Option A — Local Whisper (Mac or Windows, no per-clip API cost)
 
-Runs the whole pipeline on your PC: a small Whisper model transcribes the clip, optional cleanup model polishes it.
+Runs the whole pipeline on your own machine: a small Whisper model transcribes the clip, optional cleanup model polishes it. No key, no internet, nothing leaves the computer.
+
+**On macOS**
+
+1. Install dependencies:
+   ```
+   pnpm install
+   ```
+2. Install whisper.cpp + download the model. From the repo root:
+   ```
+   ./scripts/setup-whisper-mac.sh
+   ```
+   Installs `whisper-cpp` with Homebrew (get Homebrew from https://brew.sh first) and pulls a ~190 MB multilingual quantized model into `models/`. Re-runnable — skips whatever is already there. Different model: pass its name, e.g. `./scripts/setup-whisper-mac.sh ggml-base-q5_1.bin`.
+3. Paste the three lines the script prints at the end into your `.env`. They look like this, and **the paths must be absolute** — an app launched from Finder doesn't get your shell's `PATH`, so a bare `whisper-cli` works in `pnpm start` and fails in the installed app:
+   ```
+   STT_PROVIDER=whisper-local
+   WHISPER_BIN=/opt/homebrew/bin/whisper-cli
+   WHISPER_MODEL=/Users/you/dev/voice/models/ggml-small-q5_1.bin
+   ```
+   The installed app reads `~/Library/Application Support/GVoice/.env`; a dev run (`pnpm start`) reads the `.env` in the repo.
+
+Homebrew's `whisper-cpp` includes `whisper-server`, so GVoice keeps the model loaded between clips (a 34-second clip transcribes in about 5 seconds on an M2). If you build whisper.cpp from source instead, build it with `-DWHISPER_BUILD_SERVER=ON` — without a `whisper-server` next to `whisper-cli`, GVoice falls back to starting a fresh process per clip, which reloads the model every time.
+
+**On Windows**
 
 1. Install dependencies:
    ```powershell
@@ -25,7 +48,7 @@ Runs the whole pipeline on your PC: a small Whisper model transcribes the clip, 
    ```
 4. LLM cleanup (punctuation, filler removal, list formatting) works out of the box — GVoice ships a free-tier Groq key. To use your own provider/quota instead, set `CLEANUP_PROVIDER` + the matching key (`GROQ_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GOOGLE_AI_KEY`) in `.env`, or set `CLEANUP_ENABLED=false` to type raw Whisper text as-is.
 
-> Prefer not to touch the terminal? The Settings window (tray → **Settings…**) has an "On-device engine" panel that downloads the binaries and a model for you, runs a speed test on your machine, and switches the engine over — no script needed.
+> Prefer not to touch the terminal? On Windows the Settings window (tray → **Settings…**) has an "On-device engine" panel that downloads the binaries and a model for you, runs a speed test on your machine, and switches the engine over — no script needed. On macOS that panel isn't wired up yet; use the script above.
 
 ### Option B — OpenAI Realtime (Mac or Windows, pay per clip)
 
@@ -77,8 +100,8 @@ An Electron window opens with status info. A tray icon shows up in the system tr
 | `OPENAI_REALTIME_MODEL` | `gpt-realtime-2` | Realtime session model when `STT_PROVIDER=openai`. |
 | `DEEPGRAM_API_KEY` | *(empty — a shared key ships with the app)* | Optional for the `deepgram` provider. Set your own from console.deepgram.com to stop sharing, or if the shipped key stops working. |
 | `DEEPGRAM_MODEL` | `nova-3` | Deepgram model. |
-| `WHISPER_BIN` | `whisper-cli` | Full path to whisper.cpp's `whisper-cli.exe`. Set by the Windows setup script. (`WHISPER_CLI` is accepted as a legacy alias.) |
-| `WHISPER_MODEL` | `./models/ggml-small.en-q5_1.bin` | Full path to a GGML model file. Set by the Windows setup script. |
+| `WHISPER_BIN` | `whisper-cli` | Full path to whisper.cpp's `whisper-cli` (`whisper-cli.exe` on Windows). Printed by the setup script for your platform — keep it absolute. (`WHISPER_CLI` is accepted as a legacy alias.) |
+| `WHISPER_MODEL` | `./models/ggml-small.en-q5_1.bin` | Full path to a GGML model file. Printed by the setup script for your platform — keep it absolute. |
 | `WHISPER_PORT` | *(free port each launch)* | Port the whisper-server child process listens on. Picked automatically; set this only to pin a fixed port. |
 | `WHISPER_LANGUAGE` | `en` | Dictation language for the local Whisper and Deepgram engines (the OpenAI engine ignores it). **The app overrides this to `en` at startup** — the bundled local model is `ggml-small.en` (English-only), so there is no language to choose. The setting still applies to the bare relay (`pnpm dev`), which runs without `main.js`. |
 | `CLEANUP_ENABLED` | `true` | LLM polish (punctuation, remove "um"/"uh"). |
@@ -89,6 +112,7 @@ An Electron window opens with status info. A tray icon shows up in the system tr
 | `PORT` | *(free port each launch)* | Local relay port. Auto-picked so it never collides with a dev server on 3000; set it only to pin one, and even a pinned-but-busy port falls back to a free one. |
 | `RECORDINGS_ENABLED` | `true` | Keep dictation audio on disk so a missed paste stays recoverable. Set `false` to keep none. Also a toggle in the Settings window. |
 | `RECORDING_RETENTION_DAYS` | `7` | How long saved clips linger before auto-delete (on top of the last-50 count cap). `0` = keep until the count cap evicts them. |
+| `MIC_IDLE_MINUTES` | `5` | Minutes the mic may sit open with no dictation before GVoice closes it — which is what puts the macOS orange "mic in use" light out. `0` = close after every hold (no pre-roll, so hold the key a beat before speaking). `never` = keep it open all the time. Also a dropdown in the Settings window. |
 | `GVOICE_CORRECTION_WATCH_MS` | `12000` | How long after a dictation GVoice watches for a hand-typed correction (macOS/Linux). Set to `0` to turn manual-edit suggestions off. |
 | `GVOICE_DEBUG` | *(off)* | Set to `1` to echo per-event traces (presses, paste timing, cleanup) to the console. They're always written to the app-data `debug.log` regardless (macOS: `~/Library/Application Support/GVoice/debug.log`). |
 
