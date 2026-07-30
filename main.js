@@ -102,6 +102,11 @@ let maxHoldTimer = null;
 // (tray, splash "Ready") while every key-hold silently does nothing — so the
 // tooltip and splash must tell the truth instead.
 let hotkeyFailed = false;
+// Narrower case: the key hook was refused because macOS Accessibility isn't
+// granted (uiohook throws UIOHOOK_ERROR_AXAPI_DISABLED). "Quit and reopen" is
+// wrong advice for it — reopening changes nothing until the permission is
+// granted — so this drives its own message and a tray item that opens the pane.
+let hotkeyNeedsAccessibility = false;
 let isQuitting = false;
 // The busy guard must outlive the renderer's 20s transcriber watchdog
 // (public/dictation.js FAILURE_MS): with the old 500ms default it expired on
@@ -851,7 +856,9 @@ process.env.WHISPER_LANGUAGE = DICTATION_LANGUAGE;
 function updateTrayTooltip() {
   if (!tray) return;
   if (hotkeyFailed) {
-    tray.setToolTip("GVoice — the dictation key couldn't start.\nQuit and reopen the app. Details: debug.log");
+    tray.setToolTip(hotkeyNeedsAccessibility
+      ? "GVoice can't read the dictation key.\nAllow GVoice under Privacy & Security > Accessibility, then reopen."
+      : "GVoice — the dictation key couldn't start.\nQuit and reopen the app. Details: debug.log");
     try { tray.setImage(makeTrayIcon()); } catch {}
     return;
   }
@@ -925,20 +932,43 @@ async function setupHotkey() {
     return true;
   } catch (error) {
     hotkeyFailed = true;
+    // uiohook-napi throws this code (src/lib/addon.c) when macOS refused the
+    // global key hook for want of Accessibility permission. libuiohook asks for
+    // it with the system prompt, so the user is looking at macOS's "control this
+    // computer" dialog at this exact moment — telling them to restart the app
+    // instead of to grant it is what made this look like a broken app.
+    hotkeyNeedsAccessibility = process.platform === "darwin"
+      && !!error && error.code === "UIOHOOK_ERROR_AXAPI_DISABLED";
     console.error("Failed to start global hotkey:", error.message);
-    dlog("hotkey-failed", error && (error.stack || error.message));
+    dlog("hotkey-failed", { code: error && error.code, detail: error && (error.stack || error.message) });
     // The app would otherwise look alive while every key-hold does nothing.
     updateTrayTooltip();
+    rebuildTrayMenu();
     try {
       if (Notification.isSupported()) {
-        new Notification({
-          title: "GVoice — the dictation key couldn't start",
-          body: "Quit and reopen the app. Details are in debug.log."
-        }).show();
+        const note = hotkeyNeedsAccessibility
+          ? new Notification({
+              title: "GVoice needs permission to hear the dictation key",
+              body: "Allow GVoice under Privacy & Security > Accessibility, then reopen the app. Click here to open it."
+            })
+          : new Notification({
+              title: "GVoice — the dictation key couldn't start",
+              body: "Quit and reopen the app. Details are in debug.log."
+            });
+        if (hotkeyNeedsAccessibility) note.on("click", () => openAccessibilitySettings());
+        note.show();
       }
     } catch {}
     return false;
   }
+}
+
+// Open System Settings straight to the Accessibility list. The tray item and the
+// permission notification both land here so the user never has to hunt for the
+// pane. Silently a no-op off macOS — nothing else calls it there.
+function openAccessibilitySettings() {
+  if (process.platform !== "darwin") return;
+  shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility").catch(() => {});
 }
 
 // Clean up a raw transcript (strip Whisper noise tokens, optional LLM polish,
@@ -1756,6 +1786,16 @@ function rebuildTrayMenu() {
   const lastRecording = history.find((e) => e.recordingPath && existsSync(e.recordingPath));
 
   const menu = Menu.buildFromTemplate([
+    // Only present when macOS refused the key hook. First item in the menu
+    // because nothing else in the app works until it's dealt with.
+    ...(hotkeyNeedsAccessibility ? [
+      { label: "⚠ Dictation key blocked — needs permission", enabled: false },
+      {
+        label: "Allow GVoice in Accessibility…",
+        click: () => openAccessibilitySettings()
+      },
+      { type: /** @type {const} */ ("separator") }
+    ] : []),
     {
       label: "Recent dictations",
       enabled: historyItems.length > 0,

@@ -10,6 +10,7 @@
     "dev": "node server.js",
     "start": "electron .",
     "build": "node scripts/copy-native.cjs && electron-builder",
+    "test": "pnpm run test:unit && pnpm run test:parity",
     "test:parity": "node --test --test-force-exit scripts/parity/dictation-flow.test.js",
     "test:cleanup": "node scripts/cleanup-test.js",
     "test:unit": "node --test scripts/unit/*.test.js"

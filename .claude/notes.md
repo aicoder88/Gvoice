@@ -281,3 +281,77 @@ not write a confident story for it.
   state machine.
 - Side effect worth knowing: a successful retry writes a NEW history entry, so retrying an old
   clip shows up at the retry's timestamp, not the original dictation's.
+
+## 2026-07-30 — polish candidates (asked "any other fixes?"; nothing edited yet)
+
+Repo state at scan: clean tree, unit 127/127, no TODO/FIXME/ponytail markers in source.
+
+### Proposed, ranked
+1. **Start at login.** No `setLoginItemSettings`/`openAtLogin` anywhere in main.js. A menu-bar
+   push-to-talk app that doesn't come back after a reboot is dead until the user remembers it.
+   Size: tray checkbox + one Electron call + persist in settings. Verifiable by reading back
+   `app.getLoginItemSettings().openAtLogin` and rebooting.
+2. **Accessibility-denied message is wrong advice.** VERIFIED against the dep source, not guessed:
+   `uiohook-napi` addon.c:229 throws `UIOHOOK_ERROR_AXAPI_DISABLED` when Accessibility is off, so
+   `setupHotkey()`'s catch (main.js ~930) DOES fire — the app is not silently dead. But the
+   notification says "Quit and reopen the app. Details are in debug.log", which never mentions
+   permission. libuiohook calls `AXIsProcessTrustedWithOptions` WITH the prompt option
+   (libuiohook/src/darwin/input_helper.c:62-72), so macOS shows its own "control this computer"
+   dialog at the same moment — user sees a system permission prompt and an app notification that
+   says to restart. Fix: branch on the AXAPI code, say "Allow GVoice in Privacy & Security >
+   Accessibility, then reopen", and open the pane with
+   `x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`.
+   Note for verification: this machine already has the grant, and dev (Electron.app) and built
+   (GVoice.app) are SEPARATE grants — an unsigned rebuild can drop it, so this is not a
+   fresh-install-only path. The false branch can only be seen by forcing it in dev or revoking
+   the grant; do not revoke unprompted.
+3. **`commit_no_live_legs` instrumentation, not a fix.** The 2026-07-30 notes above say the
+   12:42:41 failure is unexplained. deepgram.js:288 emits that reason from leg bookkeeping alone.
+   Log the leg states + last close code/reason at commit so the next occurrence is diagnosable.
+   Proposing a fix for an unproven cause would be the symptom-patch this repo normally rejects.
+4. **`pnpm test` alias** in package.json (unit + parity). Trivial; the 2026-06-17 continuation
+   already listed it as an open follow-up (item 4f).
+
+### Considered and dropped (do NOT re-raise)
+- Retry writes a new history entry at the retry's timestamp — already evaluated and accepted on
+  2026-07-30. Not a new finding.
+- Recovered text goes to clipboard instead of auto-paste — deliberate (stale `savedForegroundHwnd`).
+- parity "openai bad-key" test always skips — network-dependent, zero user-visible value.
+- Log rotation, recordings pruning (count + age caps), history atomic write: all already correct.
+
+### Outcome (same day) — 3 fixed, 1 was already there
+
+**Item 1 was WRONG: "Start at login" already exists** (main.js `rebuildTrayMenu`, checkbox wired to
+`app.setLoginItemSettings`). The earlier scan missed it because `grep -n ... main.js | head -20`
+truncated before line 1795. Confirmed on the running app: the tray menu shows it, already ticked.
+Lesson worth keeping: never conclude "X is absent" from a `head`-truncated grep.
+
+**Item 2 — Accessibility (done).** main.js: new `hotkeyNeedsAccessibility`, set in setupHotkey's
+catch when `error.code === "UIOHOOK_ERROR_AXAPI_DISABLED"` on darwin. Drives (a) its own tray
+tooltip, (b) a notification whose body names the permission and whose click opens the pane, (c) two
+new tray items at the very top ("⚠ Dictation key blocked — needs permission" + "Allow GVoice in
+Accessibility…"). `openAccessibilitySettings()` opens
+`x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility`.
+`dlog("hotkey-failed")` now records the error code, not just the stack.
+VERIFIED both branches on the running app: granted -> the two items are absent and the menu is
+normal; forced-denied (temporary `GVOICE_FAKE_AXAPI` throw in dev, since revoking the real grant was
+off-limits) -> dlog shows `{"code":"UIOHOOK_ERROR_AXAPI_DISABLED"}`, both items render at the top,
+and clicking the second opened System Settings on Privacy & Security > Accessibility with GVoice.app
+in the list (screenshot). The temporary throw was removed afterwards.
+
+**Item 3 — commit instrumentation (done).** deepgram.js logs one line at commit with each leg's
+socket state, before the loop that silently marks a closing/closed leg `flushed`.
+VERIFIED live by driving the running relay over WebSocket (append + commit, no mic needed):
+`[relay] deepgram commit en:connecting` — and that run went on to `safety_timeout`, so the line
+already does its job. Note it reaches debug.log only in a PACKAGED launch (main.js mirrors
+console.error to the file behind `app.isPackaged`); in dev it goes to the terminal.
+
+**Item 4 — `pnpm test` (done).** unit + parity, not cleanup (that one needs a live LLM). Ran:
+127/127 unit, parity 3 pass / 3 skip (whisper model absent, OPENAI_API_KEY absent).
+
+### Unrelated thing seen while verifying — dev app gets no audio
+The dev launch (Electron.app, not the built GVoice.app) loops `recovery-escalate {"reason":
+"startup"}` and answers a real hold with "No sound is reaching GVoice". Default input is the
+built-in mic and it is the system default, so this smells like the dev Electron binary missing its
+own Microphone TCC grant rather than a device problem. Not touched by any of today's changes — the
+hotkey press/release still logged correctly through it. Not investigated.

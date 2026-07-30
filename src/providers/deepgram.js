@@ -21,6 +21,9 @@ import * as vocab from "../vocab.js";
 
 const AUTO_LANGUAGES = ["hr", "en"];
 
+// WebSocket.readyState numbers, for log lines a human has to read at 2am.
+const READY_STATE_NAMES = ["connecting", "open", "closing", "closed"];
+
 /** Append the user's dictionary as keyterm/keywords params, same as the legs do. */
 function addKeyterms(/** @type {URLSearchParams} */ params, /** @type {string} */ model) {
   try {
@@ -273,6 +276,15 @@ export function attach(clientSocket, { apiKey, model, language }) {
 
     if (parsed.type === "input_audio_buffer.commit") {
       finalizeSent = true;
+      // What each leg's socket was doing the instant the key came up. The loop
+      // below marks a closing/closed leg `flushed` SILENTLY, which is how a
+      // dictation can complete as `commit_no_live_legs` with nothing in the log
+      // to explain it — on 2026-07-30 one did, and the matching `deepgram
+      // closed` line only arrived 22s later. This is the missing evidence.
+      const stateSummary = legs
+        .map((l) => `${l.lang}:${READY_STATE_NAMES[l.dgSocket.readyState] || l.dgSocket.readyState}`)
+        .join(" ");
+      console.error(`[relay] deepgram commit ${stateSummary}`);
       for (const leg of legs) {
         if (leg.dgSocket.readyState === WebSocket.OPEN) {
           leg.dgSocket.send(JSON.stringify({ type: "Finalize" }));
