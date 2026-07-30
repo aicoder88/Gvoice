@@ -834,6 +834,15 @@ async function recoverMic(reason) {
       }
       if (round >= MAX_PROBE_ROUNDS) {
         log("Mic still silent after " + round + " rounds — escalating to main");
+        // Same leak the muted branch above closes: the probe loop left its last
+        // candidate's stream OPEN, and macOS lights the orange dot for any open
+        // stream. Escalation only sometimes kills this renderer — main reloads
+        // it on the FIRST escalation of an episode, but the "mic never worked
+        // this session" and relaunch-cooldown branches (main.js
+        // handleRecoveryEscalation) just warn and leave us running. Without this
+        // the dot then burns forever over a mic delivering nothing, which is the
+        // exact thing the idle drop exists to prevent.
+        armIdleTimer();
         // Escalation (reload renderer → relaunch app) is this path's own
         // user-visible response, so drop any pending generic "disconnected"
         // notice rather than letting it fire alongside the escalation.

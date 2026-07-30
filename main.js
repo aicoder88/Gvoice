@@ -1378,6 +1378,12 @@ async function retranscribeRecording(recordingPath) {
 // holding the pill — so when it can't run at all, say so instead of letting the
 // click do nothing visible.
 async function retranscribeOnDemand(/** @type {string | null} */ recordingPath) {
+  // A dictation is live right now (tray "Transcribe again" is clickable during
+  // one). Running would upload the clip and then throw every result away —
+  // retranscribeRecording gates its pill AND its clipboard write on pillFree() —
+  // and the message below would paint over a live "Listening…". The pill the
+  // user is already looking at is the answer, so leave it alone.
+  if (!pillFree()) return;
   if (!retryCanRun(recordingPath)) {
     // Nothing will happen, so say why. The button used to sit there doing
     // absolutely nothing on every one of these.

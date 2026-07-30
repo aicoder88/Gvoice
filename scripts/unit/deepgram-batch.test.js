@@ -49,6 +49,20 @@ test("the upload carries an abort signal so a dead connection can't hang", async
   assert.ok(calls[0].init.signal, "fetch was called without a timeout signal");
 });
 
+// The retry must share the FIRST attempt's deadline. With a fresh signal per
+// attempt, a socket-level failure (TypeError "fetch failed", which withRetry
+// retries) buys a second full 30s — measured at 44.4s in the wild, with the
+// pill stuck on "Transcribing…" the whole time.
+test("retry shares one deadline instead of restarting the clock", async () => {
+  const calls = stubFetch([
+    { status: 503, body: { err_msg: "upstream" } },
+    { status: 200, body: okBody }
+  ]);
+  await transcribeWavFile(wav, { apiKey: "k", language: "en" });
+  assert.equal(calls.length, 2);
+  assert.strictEqual(calls[0].init.signal, calls[1].init.signal);
+});
+
 test("language auto uses batch language detection, not one request per language", async () => {
   const calls = stubFetch([{ status: 200, body: okBody }]);
   await transcribeWavFile(wav, { apiKey: "k", language: "auto" });

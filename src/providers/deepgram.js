@@ -373,16 +373,22 @@ export async function transcribeWavFile(wavPath, { apiKey, model = "nova-3", lan
   // The WAV header carries the format, so encoding/sample_rate must be omitted —
   // those are raw-audio params and sending them with a WAV is a 400.
   const body = await readFile(wavPath);
+  // ONE deadline for the whole call, retry included — created out here, not
+  // inside the attempt. Without this a half-open connection (captive portal, VPN
+  // drop) hangs on undici's 300s default, and a per-attempt signal makes the
+  // "30s" a per-try budget instead of a ceiling: a socket-level failure comes
+  // back as TypeError("fetch failed"), which withRetry DOES retry, so the user
+  // waits 30s + 30s. Measured on 2026-07-30 with Deepgram degraded: one retry
+  // ran 44.4s (debug.log `retranscribe ... ms:44373`) with the pill stuck on
+  // "Transcribing…" the whole time. A clip this size comes back in seconds, so
+  // 30 total is generous.
+  const deadline = AbortSignal.timeout(30000);
   const json = await withRetry(async () => {
     const res = await fetch(`https://api.deepgram.com/v1/listen?${params.toString()}`, {
       method: "POST",
       headers: { Authorization: `Token ${apiKey}`, "Content-Type": "audio/wav" },
       body,
-      // Without this a half-open connection (captive portal, VPN drop) hangs on
-      // undici's 300s default while the user waits. A clip this size comes back
-      // in seconds, so 30 is generous. AbortError isn't retryable, so this is a
-      // hard ceiling, not 30s per attempt.
-      signal: AbortSignal.timeout(30000)
+      signal: deadline
     });
     if (!res.ok) throw httpError(res.status, (await res.text().catch(() => "")).slice(0, 200));
     return res.json();
