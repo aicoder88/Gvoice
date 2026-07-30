@@ -552,3 +552,85 @@ for-the-record items that didn't belong in the report.
   silently if `brew install whisper-cpp` succeeds but the binary isn't on the
   current shell's PATH (`WHISPER_BIN="$(command -v whisper-cli)"` fails under
   `set -e` with no message). Cosmetic, one-time, dev-only script.
+
+## Loose-ends sweep — 2026-07-30 (no fourth review pass)
+
+Three reviews already ran on these 19 commits; the third one deliberately mined
+the sibling-caller angle. No new code read this round — this is a state check.
+
+- **Tests as of now:** 134/134 unit pass. Parity: 6 tests, 3 pass, 3 skip
+  (whisper model file absent, OPENAI_API_KEY unset ×2). `test:cleanup` not run.
+- **continuation.md was stale** (dated 2026-06-17) and listed two follow-ups
+  that are actually done: the parity bad-key test (4a) now overrides the key
+  *before* `bootRelay()` and restores it after, and the `test` alias (4f) exists
+  in package.json. Both lines corrected in place. 4d (dictation-session unit
+  test) and 4e (mic-health holdMs cases) are genuinely still missing.
+- **The untracked `.txt` is an older draft, not a byte-copy.** It's the
+  pre-STATUS version of the plan — its Goal 1 heading still reads "Mic opens
+  only while you hold the key", which the shipped design replaced with the idle
+  timer. Nothing in it that the committed `.md` lacks. 7,590 bytes.
+- **Still unverified live:** third-pass fix 2 (idle timer armed on recovery
+  escalation) needs a machine escalating twice in one episode with no working
+  mic. Unchanged from the review doc.
+- **Left alone on purpose, already triaged:** setup-whisper-mac.sh's silent exit
+  when brew succeeds but the binary isn't on PATH (cosmetic, dev-only), and the
+  broken Codex CLI (environment, not this repo).
+- **Parked, needs Mark's word:** the in-app on-device-engine panel still blocks
+  non-Windows (`main.js:1548`). Goal 4 in the client-feedback plan.
+
+## Mac on-device panel (Goal 4) — 30 Jul 2026
+
+- **Only the binary step was ever Windows-shaped.** Model download, benchmark
+  and apply were already cross-platform, so the fix is one branch, not a port.
+- **The server sibling decides the verdict, not just the binary.**
+  `ensureWhisperServer` derives `whisper-server` by string-replacing `-cli`, so a
+  cli-only install silently drops `runLocalBenchmark` into its cold-CLI fallback
+  — a pessimistic number that can fail a machine that is actually fast.
+  `findInstalledWhisperCli` therefore PREFERS a directory that has both, and the
+  panel warns when it can only find the cli.
+- **An explicit `WHISPER_BIN` still wins outright** over that preference — a
+  self-build may deliberately live elsewhere, and second-guessing a configured
+  path is worse than a slow benchmark.
+- **Linux was nearly regressed.** The first draft made `engine:apply` error on
+  any non-Windows platform without a located binary; Linux previously fell
+  through with `WHISPER_BIN` unset and relied on the PATH default in
+  `whisper-local.js` / `realtime-relay.js`. Now only macOS errors (it's the
+  guided path); Linux falls through as before.
+- **Verified on the BUILT app, not `pnpm start`** — the whole point is the
+  Finder PATH trap, which a dev run can't reproduce (it inherits your shell's
+  PATH). The settings window was driven over CDP
+  (`--remote-debugging-port`, no app code changed) because AppleScript's
+  AXPress and synthetic clicks don't reach Electron's web contents.
+  Speed test: brew whisper-server warmed with the Metal backend, 749 ms,
+  "fast enough". Apply wrote an absolute `WHISPER_BIN`; the env was restored to
+  Deepgram afterward.
+- **Not observed live:** the "needs installing" message — it needs a Mac without
+  Homebrew's whisper-cpp. Covered by unit tests on the locator instead.
+
+## Mac on-device panel (Goal 4) — 30 Jul 2026
+
+- **Only the binary step was ever Windows-shaped.** Model download, benchmark
+  and apply were already cross-platform, so the fix is one branch, not a port.
+- **The server sibling decides the verdict, not just the binary.**
+  `ensureWhisperServer` derives `whisper-server` by string-replacing `-cli`, so a
+  cli-only install silently drops `runLocalBenchmark` into its cold-CLI fallback
+  — a pessimistic number that can fail a machine that is actually fast.
+  `findInstalledWhisperCli` therefore PREFERS a directory that has both, and the
+  panel warns when it can only find the cli.
+- **An explicit `WHISPER_BIN` still wins outright** over that preference — a
+  self-build may deliberately live elsewhere, and second-guessing a configured
+  path is worse than a slow benchmark.
+- **Linux was nearly regressed.** The first draft made `engine:apply` error on
+  any non-Windows platform without a located binary; Linux previously fell
+  through with `WHISPER_BIN` unset and relied on the PATH default in
+  `whisper-local.js` / `realtime-relay.js`. Now only macOS errors (it's the
+  guided path); Linux falls through as before.
+- **Verified on the BUILT app, not `pnpm start`** — the whole point is the
+  Finder PATH trap, which a dev run can't reproduce (it inherits your shell's
+  PATH). The settings window was driven over CDP
+  (`--remote-debugging-port`, no app code changed) because AppleScript's AXPress
+  and synthetic clicks don't reach Electron's web contents. Speed test: brew
+  whisper-server warmed with the Metal backend, 749 ms, "fast enough". Apply
+  wrote an absolute `WHISPER_BIN`; the env was restored to Deepgram afterward.
+- **Not observed live:** the "needs installing" message — it needs a Mac without
+  Homebrew's whisper-cpp. Covered by unit tests on the locator instead.

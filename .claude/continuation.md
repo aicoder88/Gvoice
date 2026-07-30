@@ -39,10 +39,12 @@ Quit installed app → launched dev build → verified, then restored installed 
 - #15 relay/WS not closed on quit — OS reaps socket on exit; no real leak. Leave.
 - #3-async the full async GPU-probe fix (removes even the first-call block) — Windows-only, can't test here.
 
-## Known follow-ups (prior-plan items still open, NOT done this pass)
-- parity test "openai bad-key" (item 4a): restores the key before connect, so it can never fail → always skips.
-  Fixing it (keep bad key until after the assertion) would actually exercise the #0 relay path. Network-dependent.
-- NEW scripts/unit/dictation-session.test.js (4d); package.json "test" alias (4f); mic-health holdMs cases (4e).
+## Known follow-ups — rechecked 2026-07-30
+- 4a parity "openai bad-key" — DONE. It now overrides the key before `bootRelay()` and restores after,
+  so the relay really boots with the bad key. Skips here only because OPENAI_API_KEY is unset.
+- 4f package.json "test" alias — DONE (`test: pnpm run test:unit && pnpm run test:parity`).
+- 4d scripts/unit/dictation-session.test.js — still missing.
+- 4e mic-health holdMs cases — still missing (0 hits for `holdMs` in scripts/unit/mic-health.test.js).
 
 ## Key files touched
 main.js, public/dictation.js, src/providers/{whisper-local,deepgram}.js, src/{vocab,cleanup,hardware,model-download,settings,foreground,bootstrap-env}.js,
