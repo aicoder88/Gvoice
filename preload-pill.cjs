@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("pillBridge", {
   onState: (callback) => ipcRenderer.on("pill:state", (_event, data) => callback(data)),
   copy: () => ipcRenderer.send("pill:copy"),
   openRecording: () => ipcRenderer.send("pill:open"),
+  // Force the saved clip back through transcription.
+  retry: () => ipcRenderer.send("pill:retry"),
   hide: () => ipcRenderer.send("pill:hide"),
   // Opens the dictionary window so the user can add a misheard word.
   addWord: () => ipcRenderer.send("pill:add-word"),

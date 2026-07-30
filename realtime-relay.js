@@ -30,6 +30,20 @@ const DEEPGRAM_FALLBACK_KEY = [
   109, 63, 108, 56, 56, 56, 107, 63, 108, 108, 60, 110, 108, 63, 110, 62, 110, 105, 60, 56
 ].map((b) => String.fromCharCode(b ^ 0x5a)).join("");
 
+/**
+ * The Deepgram key any caller should use: a real key from the environment
+ * first, then whatever was passed at construction, then the baked-in fallback.
+ * Exported so the app's retry path (main.js) resolves the key EXACTLY the way a
+ * live dictation does — a different order would make "the retry failed too"
+ * impossible to reason about.
+ *
+ * @param {string} [passed]
+ * @returns {string}
+ */
+export function resolveDeepgramKey(passed) {
+  return process.env.DEEPGRAM_API_KEY || passed || DEEPGRAM_FALLBACK_KEY;
+}
+
 const defaultInstructions =
   "You are a warm, emotionally aware realtime voice companion. Be natural, friendly, honest, lightly witty, and easy to interrupt. Listen for tone and context, avoid empty praise, and keep spoken replies conversational unless the user wants depth.";
 
@@ -136,7 +150,7 @@ export function attachRealtimeRelay(server, options = {}) {
     // window's "save a new API key" take effect on the very next dictation
     // without restarting the app (main.js updates process.env on save).
     const openaiKeyNow = process.env.OPENAI_API_KEY || apiKey;
-    const deepgramKeyNow = process.env.DEEPGRAM_API_KEY || deepgramApiKey || DEEPGRAM_FALLBACK_KEY;
+    const deepgramKeyNow = resolveDeepgramKey(deepgramApiKey);
 
     if (provider === "deepgram") {
       if (!deepgramKeyNow) {

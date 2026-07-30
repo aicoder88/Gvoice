@@ -127,6 +127,7 @@
       <div class="actions">
         <button id="copy" type="button">Copy</button>
         <button id="open" type="button">Play recording</button>
+        <button id="retry" type="button">Transcribe again</button>
         <button id="addword" type="button">Add word</button>
         <!-- Always present on result pills so any pop-up can be dismissed on
              demand, even a bare "No speech detected" with nothing to copy. -->
@@ -144,6 +145,7 @@
       const labelEl = document.getElementById("label");
       const copyBtn = document.getElementById("copy");
       const openBtn = document.getElementById("open");
+      const retryBtn = document.getElementById("retry");
       const addWordBtn = document.getElementById("addword");
       const dismissBtn = document.getElementById("dismiss");
 
@@ -176,6 +178,9 @@
         const showOpen = isResult && data && data.canOpen;
         copyBtn.style.display = showCopy ? "" : "none";
         openBtn.style.display = showOpen ? "" : "none";
+        // A saved clip is a clip that can be re-sent to the speech engine, so
+        // "Transcribe again" rides along wherever "Play recording" does.
+        retryBtn.style.display = showOpen ? "" : "none";
         addWordBtn.style.display = isResult ? "" : "none";
         // Dismiss rides on every result pill, even one with no Copy/Open.
         dismissBtn.style.display = isResult ? "" : "none";
@@ -208,6 +213,11 @@
       openBtn.addEventListener("click", () => {
         window.pillBridge.openRecording();
         lingerAfterAction();
+      });
+      retryBtn.addEventListener("click", () => {
+        window.pillBridge.retry();
+        // Main takes the pill straight to "Transcribing…" and back to a result,
+        // so no linger call here — that would fight its own state updates.
       });
       addWordBtn.addEventListener("click", () => {
         window.pillBridge.addWord();

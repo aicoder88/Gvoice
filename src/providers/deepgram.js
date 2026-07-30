@@ -14,10 +14,21 @@
 // simultaneously, so latency is unchanged; per-clip cost doubles (pennies).
 
 import WebSocket from "ws";
+import { readFile } from "node:fs/promises";
 import { sendToClient, forwardUnexpectedResponse } from "./_shared.js";
+import { withRetry, httpError } from "../retry.js";
 import * as vocab from "../vocab.js";
 
 const AUTO_LANGUAGES = ["hr", "en"];
+
+/** Append the user's dictionary as keyterm/keywords params, same as the legs do. */
+function addKeyterms(/** @type {URLSearchParams} */ params, /** @type {string} */ model) {
+  try {
+    const terms = vocab.deepgramKeyterms();
+    const param = /nova-3/i.test(model) ? "keyterm" : "keywords";
+    for (const term of terms) params.append(param, term);
+  } catch {}
+}
 
 /**
  * @param {WebSocket} clientSocket
@@ -60,11 +71,7 @@ export function attach(clientSocket, { apiKey, model, language }) {
     // older Deepgram models use the keywords param. Each term is appended as a
     // repeated query param. Re-read per connection so freshly-added words apply
     // to the very next dictation.
-    try {
-      const terms = vocab.deepgramKeyterms();
-      const param = /nova-3/i.test(model) ? "keyterm" : "keywords";
-      for (const term of terms) params.append(param, term);
-    } catch {}
+    addKeyterms(params, model);
     return `wss://api.deepgram.com/v1/listen?${params.toString()}`;
   }
 
@@ -98,6 +105,12 @@ export function attach(clientSocket, { apiKey, model, language }) {
       // truncate the transcript).
       if (finalizeSent && !leg.flushed) {
         try { dgSocket.send(JSON.stringify({ type: "Finalize" })); } catch {}
+        // The safety timeout armed at commit was counting down while this leg
+        // was still handshaking — on a slow connect it fires BEFORE the leg has
+        // said a word, latches completedSent, and the real transcript arriving
+        // moments later is discarded (an empty paste on perfectly good audio).
+        // Restart the clock now that the engine can actually answer.
+        armSafetyTimeout();
       }
     });
 
@@ -193,6 +206,18 @@ export function attach(clientSocket, { apiKey, model, language }) {
 
   const legs = langs.map(makeLeg);
 
+  let safetyTimer = null;
+  // Safety net only — the from_finalize Results frames are the normal
+  // completion path. Long enough that it can't beat a healthy flush. If THIS is
+  // what completes the utterance, the flush never came back — worth seeing in
+  // the log (reason=safety_timeout). Armed at commit and re-armed by any leg
+  // that opens afterwards, so the clock always measures time the engine had to
+  // answer, never time it spent connecting.
+  function armSafetyTimeout() {
+    clearTimeout(safetyTimer);
+    safetyTimer = setTimeout(() => emitCompleted("safety_timeout"), 3000);
+  }
+
   function emitCompleted(/** @type {string} */ reason = "unknown") {
     if (completedSent) return;
     completedSent = true;
@@ -261,11 +286,7 @@ export function attach(clientSocket, { apiKey, model, language }) {
       // Every leg already dead at commit time: complete now with whatever was
       // heard instead of making the user wait out the 3s safety timeout.
       if (legs.every((l) => l.flushed)) emitCompleted("commit_no_live_legs");
-      // Safety net only — the from_finalize Results frames above are the
-      // normal completion path. Long enough that it can't beat a healthy flush.
-      // If THIS is what completes the utterance, the flush never came back —
-      // worth seeing in the log (reason=safety_timeout).
-      setTimeout(() => emitCompleted("safety_timeout"), 3000);
+      armSafetyTimeout();
       return;
     }
   });
@@ -288,4 +309,39 @@ export function attach(clientSocket, { apiKey, model, language }) {
       setTimeout(() => { try { leg.dgSocket.close(); } catch {} }, 200);
     }
   });
+}
+
+/**
+ * Transcribe a saved .wav with Deepgram's prerecorded (batch) API.
+ *
+ * This is the second chance for a dictation the streaming path came back empty
+ * on — the audio is already on disk, so a failed stream never has to mean lost
+ * words. Batch is a plain request/response with no handshake to race, and it
+ * has real language detection, so "auto" is ONE request here instead of the
+ * one-leg-per-language workaround streaming needs.
+ *
+ * @param {string} wavPath
+ * @param {{ apiKey: string, model?: string, language?: string }} opts
+ * @returns {Promise<string>} the transcript, or "" if it genuinely heard nothing
+ */
+export async function transcribeWavFile(wavPath, { apiKey, model = "nova-3", language } = {}) {
+  const lang = (language || process.env.WHISPER_LANGUAGE || "auto").toLowerCase();
+  const params = new URLSearchParams({ model, punctuate: "true", smart_format: "true" });
+  if (lang === "auto" || lang === "multi") params.set("detect_language", "true");
+  else params.set("language", lang);
+  addKeyterms(params, model);
+
+  // The WAV header carries the format, so encoding/sample_rate must be omitted —
+  // those are raw-audio params and sending them with a WAV is a 400.
+  const body = await readFile(wavPath);
+  const json = await withRetry(async () => {
+    const res = await fetch(`https://api.deepgram.com/v1/listen?${params.toString()}`, {
+      method: "POST",
+      headers: { Authorization: `Token ${apiKey}`, "Content-Type": "audio/wav" },
+      body
+    });
+    if (!res.ok) throw httpError(res.status, (await res.text().catch(() => "")).slice(0, 200));
+    return res.json();
+  });
+  return (json?.results?.channels?.[0]?.alternatives?.[0]?.transcript || "").trim();
 }

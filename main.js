@@ -56,6 +56,8 @@ import { suggestBeforeBenchmark } from "./src/benchmark.js";
 import { runLocalBenchmark } from "./src/benchmark-run.js";
 import { ensureModel, ensureWindowsBinaries, MODELS, WINDOWS_BINARY_ZIPS } from "./src/model-download.js";
 import { saveRecording, pruneRecordings, clearRecordings } from "./src/recordings.js";
+import { transcribeWavFile } from "./src/providers/deepgram.js";
+import { resolveDeepgramKey } from "./realtime-relay.js";
 import { appendFileSync, statSync, renameSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
 import { mkdir as mkdirAsync } from "node:fs/promises";
 import { execFile } from "node:child_process";
@@ -451,8 +453,11 @@ const PILL_BOTTOM_MARGIN = 28; // gap above the dock / taskbar
 const PILL_SIZES = {
   listening: { width: 200, height: 56 },
   transcribing: { width: 220, height: 56 },
-  success: { width: 560, height: 56 },
-  error: { width: 560, height: 56 }
+  // Wide enough for the full action row (Copy · Play recording · Transcribe
+  // again · Add word · ✕) plus a readable reason — at 560 the label ellipsized
+  // away the instruction the user needs.
+  success: { width: 700, height: 56 },
+  error: { width: 700, height: 56 }
 };
 
 // Pick the display the pill should appear on: the one holding the window the
@@ -1138,6 +1143,49 @@ async function saveTempRecording(chunks, sampleRate) {
   }
 }
 
+// Second chance for a dictation that came back with nothing. The audio is
+// already on disk, so a failed live stream doesn't have to mean lost words:
+// re-send the saved .wav to Deepgram's batch API, which has no handshake to
+// race and no streaming timeouts. Runs automatically after every empty result,
+// and on demand from the pill's "Transcribe again" button or the tray.
+//
+// The recovered text goes to the CLIPBOARD and the pill, not straight into the
+// focused app: the round-trip takes a few seconds, by which time the window the
+// user was dictating into is often no longer the one in front.
+//
+// @param {string | null} recordingPath
+// @returns {Promise<string>} the recovered text, or "" if the retry found none
+async function retranscribeRecording(recordingPath) {
+  if (!recordingPath || !existsSync(recordingPath)) return "";
+  const t0 = Date.now();
+  setPillState("transcribing");
+  pillWindow?.showInactive();
+  try {
+    const text = await transcribeWavFile(recordingPath, {
+      apiKey: resolveDeepgramKey(),
+      model: process.env.DEEPGRAM_MODEL || "nova-3",
+      language: DICTATION_LANGUAGE
+    });
+    dlog("retranscribe", { path: recordingPath, len: text.length, ms: Date.now() - t0 });
+    if (!text) {
+      showPillResult("error", null, recordingPath, { reason: "Retried — no speech in the recording." });
+      return "";
+    }
+    const cleaned = stripWhisperNoiseTokens(text) || text;
+    clipboard.writeText(cleaned);
+    showPillResult("error", cleaned, recordingPath, { reason: "Got it on retry — press ⌘V." });
+    recordTranscript(cleaned, false, recordingPath);
+    rebuildTrayMenu();
+    return cleaned;
+  } catch (error) {
+    const detail = error && (error.message || String(error));
+    console.error("[main] retranscribe failed:", detail);
+    dlog("retranscribe-failed", { path: recordingPath, error: String(detail) });
+    showPillResult("error", null, recordingPath, { reason: "Retry failed — check your internet." });
+    return "";
+  }
+}
+
 function setupIpc() {
   ipcMain.on("dictation:transcript", async (_event, payload) => {
     // payload is { text, chunks, sampleRate } on a real transcript, or "" on a
@@ -1161,11 +1209,22 @@ function setupIpc() {
     if (!text || !text.trim()) {
       if (chunks && chunks.length) {
         const failedPath = await saveTempRecording(chunks, sampleRate);
+        // The live stream heard nothing, but the audio is on disk — try the
+        // batch API before calling it a failure. That recovers every dictation
+        // the stream lost to a slow connect or a timeout rather than to real
+        // silence, and it owns the pill from here (it knows whether the retry
+        // found words, found silence, or couldn't reach the engine at all).
+        const recovered = failedPath ? await retranscribeRecording(failedPath) : "";
         // Only claim a recording was saved when one actually was (saving can
-        // be off in Settings, or the write can fail).
-        showPillResult("error", null, failedPath, { reason: failedPath ? "No speech detected — recording saved." : "No speech detected." });
-        recordTranscript("", false, failedPath);
-        rebuildTrayMenu();
+        // be off in Settings, or the write can fail) — with none there's
+        // nothing to retry either.
+        if (!failedPath) showPillResult("error", null, null, { reason: "No speech detected." });
+        // The retry logs its own history entry when it recovers text; otherwise
+        // record the failed attempt so the clip stays playable from the tray.
+        if (!recovered) {
+          recordTranscript("", false, failedPath);
+          rebuildTrayMenu();
+        }
       } else {
         hidePill();
       }
@@ -1246,7 +1305,10 @@ function setupIpc() {
     // recording is what we offer. Logged in history too for tray playback.
     const reason = (payload && payload.reason) || (recordingPath ? "Couldn't transcribe — recording saved." : "Couldn't transcribe.");
     showPillResult("error", null, recordingPath, { reason });
-    if (recordingPath) {
+    // Same second chance as the empty-transcript path: the stream died, but the
+    // saved audio can still go to the batch API.
+    const recovered = recordingPath ? await retranscribeRecording(recordingPath) : "";
+    if (recordingPath && !recovered) {
       recordTranscript("", false, recordingPath);
       rebuildTrayMenu();
     }
@@ -1273,6 +1335,12 @@ function setupIpc() {
       playRecording(currentRecordingPath);
       dlog("pill-open", { path: currentRecordingPath });
     }
+  });
+  // "Transcribe again" — force the saved clip back through the batch API. The
+  // automatic retry already ran, so this is for a second try after the network
+  // came back, or on a clip whose transcript was wrong rather than missing.
+  ipcMain.on("pill:retry", () => {
+    if (currentRecordingPath) retranscribeRecording(currentRecordingPath);
   });
   ipcMain.on("pill:hide", () => hidePill());
   ipcMain.on("pill:add-word", () => openDictionaryWindow());
@@ -1657,6 +1725,14 @@ function rebuildTrayMenu() {
       enabled: hasRecording,
       click: () => playRecording(entry.recordingPath || null)
     });
+    // Force the saved audio back through transcription — the way to rescue a
+    // dictation whose words never arrived (or arrived wrong) at the time.
+    if (hasRecording) {
+      sub.push({
+        label: "Transcribe again",
+        click: () => retranscribeRecording(entry.recordingPath || null)
+      });
+    }
     return {
       label: `${time}${entry.pasted ? "" : " ⚠"}  ${preview}`,
       submenu: sub
@@ -1684,6 +1760,13 @@ function rebuildTrayMenu() {
       enabled: !!lastRecording,
       click: () => {
         playRecording((lastRecording && lastRecording.recordingPath) || null);
+      }
+    },
+    {
+      label: "Transcribe last recording again",
+      enabled: !!lastRecording,
+      click: () => {
+        retranscribeRecording((lastRecording && lastRecording.recordingPath) || null);
       }
     },
     { type: "separator" },

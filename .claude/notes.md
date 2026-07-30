@@ -216,3 +216,60 @@ LEFT INTENTIONAL: the `|| failureHandled` guard in finalizeAndSend (dictation.js
   OPENAI_API_KEY even to boot the relay) — origin-rejection logic verified by reasoning + the
   new parity test asserts it. cleanup-test needs a live LLM; not run.
 - main.js/dictation.js/providers have no automated coverage; verified by the adversarial workflow.
+
+## 2026-07-30 — empty transcripts on good audio: root cause + batch retry
+
+### Root cause (from ~/Library/Application Support/GVoice/debug.log)
+The 12:45:17 dictation is a latch race, not silence:
+```
+12:45:21.127  Sending commit (socket readyState=1)
+12:45:24.127  ALL EMPTY (reason=safety_timeout)   <- exactly commit+3000ms
+12:45:27.894  [relay] deepgram connected          <- open lands 3.8s LATER
+```
+`emitCompleted` sets `completedSent = true` and nothing ever resets it, so the transcript
+Deepgram returned after the open was discarded. Proof the audio was fine: the batch API on
+that same clip (dictation-1785415524136-6tx2.wav) returns "Go through all my chats in all the
+repos." The 3s safety timeout was being spent on the HANDSHAKE instead of on the engine.
+
+Fix: `armSafetyTimeout()` — armed at commit, RE-armed in the leg's `open` handler when a
+Finalize was owed. The clock now only ever measures time the engine had to answer.
+
+The 12:42:41 failure (`commit_no_live_legs`, 7.2s handshake, no `deepgram closed` logged until
+22s later) is NOT explained by the code as read. Same shape — completion decided on socket
+bookkeeping rather than on "did the engine answer" — but the specific cause is unproven. Did
+not write a confident story for it.
+
+### Decisions
+- CHOSE: recovered text goes to the CLIPBOARD + pill, NOT auto-pasted. Timed the batch path
+  end-to-end: 1.1-6.2s (upload-bound; 1.7MB/36s clip took 6.3s). `savedForegroundHwnd` is
+  stale by then, so auto-paste would land in whatever window the user moved to. Auto-paste is
+  one line away (`processTranscript(text, null)`) if Mark wants it.
+- CHOSE: batch retry runs AUTOMATICALLY on every empty result, not only on a button. The user's
+  complaint was that a recorded clip should have transcribed — making them click for it keeps
+  the bug's symptom.
+- CHOSE: `detect_language=true` for language auto/multi in batch. Streaming needs the
+  one-leg-per-language workaround because streaming has no hr detection; batch does. Half the
+  cost, one request.
+- CHOSE: reuse `withRetry`/`httpError` from src/retry.js. Deepgram batch returned a real 408
+  SLOW_UPLOAD during testing on this network, and 408 is already in `isRetryableHttpStatus`.
+- CHOSE: `resolveDeepgramKey()` exported from realtime-relay.js and used by BOTH the relay and
+  main.js. A different resolution order would make "the retry failed too" undebuggable.
+- REJECTED: a new src/providers/deepgram-batch.js. Second export in deepgram.js shares
+  `addKeyterms` (extracted from legUrl) so a retried dictation spells custom names the same way
+  a live one does.
+- REJECTED: running the LLM cleanup pass on recovered text. Adds seconds to an already-slow
+  path; the raw transcript is what the user is missing.
+- NOT sent to Deepgram batch: `encoding`/`sample_rate`. Those are raw-audio params; with a WAV
+  body they 400 with a message that reads like an auth failure. Asserted in the unit test.
+
+### Verified on the running app (pnpm start, 2026-07-30)
+- Tray icon present; menu opens; new "Transcribe last recording again" item present (screenshot).
+- Clicked it: `retranscribe {... len:41, ms:1103}`, clipboard held the recovered sentence.
+- Clicked the pill's new "Transcribe again" button (nut-js real mouse move + click): second
+  `retranscribe` entry at 13:23:07. Pill renders all four buttons + ✕ at width 700, nothing
+  clipped; the reason label wraps to two lines and stays fully readable.
+- unit 131/131 (4 new). parity 3/3 runnable — "deepgram completes one utterance" still passes,
+  so the safety-timer refactor didn't break the normal streaming path.
+- The slow-handshake race itself is NOT reproducible on demand (needs Deepgram to take >3s to
+  connect). Fix is verified by reasoning against the log + the unchanged parity pass, not by a
+  live repro.
