@@ -50,3 +50,41 @@ test("peak exactly at the silence threshold is silent (boundary)", () => {
   const r = classifyHold({ ...BASE, bytes: 48000, peak: 0.01, silentStreak: 0 });
   assert.equal(r.action, "ok");
 });
+
+// ---- the no-frames-at-all wedge (holdMs) ----
+// A half-built capture graph delivers ZERO frames, so every peak check below is
+// blind to it — there is no frame to have a peak. The only evidence is "the key
+// was held a long time and almost nothing arrived".
+
+test("a long hold with no bytes is a dead mic, not a tap", () => {
+  const r = classifyHold({ ...BASE, bytes: 0, peak: 0, silentStreak: 0, holdMs: 3000 });
+  assert.equal(r.action, "dead");
+  assert.equal(r.silentStreak, 0);
+});
+
+test("a short tap with no bytes is still ignored, however dead the mic looks", () => {
+  // The whole point of the byte gate: a 200ms fumble must never accuse the mic.
+  const r = classifyHold({ ...BASE, bytes: 0, peak: 0, silentStreak: 1, holdMs: 200 });
+  assert.equal(r.action, "ignore");
+  assert.equal(r.silentStreak, 1, "an ignored hold leaves the streak alone");
+});
+
+test("a hold exactly at minHoldMs counts as long enough (boundary)", () => {
+  const r = classifyHold({ ...BASE, bytes: 0, peak: 0, silentStreak: 0, holdMs: 1000, minHoldMs: 1000 });
+  assert.equal(r.action, "dead");
+});
+
+test("without holdMs the old behaviour is unchanged", () => {
+  // Older renderers (and the pre-holdMs call sites) pass no hold length. Those
+  // must keep filing a byte-starved hold as a tap rather than a dead mic.
+  const r = classifyHold({ ...BASE, bytes: 0, peak: 0, silentStreak: 2 });
+  assert.equal(r.action, "ignore");
+  assert.equal(r.silentStreak, 2);
+});
+
+test("a long hold with real audio is still ok", () => {
+  // holdMs must not shadow the normal path: enough bytes means the byte gate
+  // never fires, however long the hold.
+  const r = classifyHold({ ...BASE, bytes: 48000, peak: 0.4, silentStreak: 0, holdMs: 9000 });
+  assert.equal(r.action, "ok");
+});
