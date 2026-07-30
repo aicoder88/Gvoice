@@ -107,6 +107,10 @@ let hotkeyFailed = false;
 // wrong advice for it — reopening changes nothing until the permission is
 // granted — so this drives its own message and a tray item that opens the pane.
 let hotkeyNeedsAccessibility = false;
+// The hook started fine and then delivered nothing (see the watchdog below).
+// Deliberately NOT hotkeyFailed: that one gates the ready path, and by the time
+// we can tell, the app has long since reported itself ready.
+let hotkeyDeaf = false;
 let isQuitting = false;
 // The busy guard must outlive the renderer's 20s transcriber watchdog
 // (public/dictation.js FAILURE_MS): with the old 500ms default it expired on
@@ -867,6 +871,11 @@ function updateTrayTooltip() {
     try { tray.setImage(makeTrayIcon()); } catch {}
     return;
   }
+  if (hotkeyDeaf) {
+    tray.setToolTip(DEAF_HOTKEY_TITLE + "\n" + DEAF_HOTKEY_BODY);
+    try { tray.setImage(makeTrayIcon()); } catch {}
+    return;
+  }
   const keyLabel = process.platform === "darwin" ? "right Option" : "Ctrl+Shift";
   tray.setToolTip(`GVoice\nHold ${keyLabel} to dictate.`);
   try { tray.setImage(makeTrayIcon()); } catch {}
@@ -879,6 +888,72 @@ function updateTrayTooltip() {
 // leaves the session permanently "busy" and EVERY later press is silently
 // ignored — the app looks dead while the process is healthy.
 const MAX_HOLD_MS = 90000;
+
+// --- Deaf-hotkey watchdog -----------------------------------------------------
+// The failure this catches: the key hook STARTS cleanly and then delivers
+// nothing. A client hit it by launching GVoice from a terminal — on macOS the
+// Accessibility grant belongs to the process that launched the app, so a
+// terminal without it produces an app that looks completely healthy (tray icon,
+// "Ready") whose dictation key does nothing. uiohook reports no error for this,
+// and isTrustedAccessibilityClient() answers for GVoice rather than the
+// launcher, so silence is the only symptom there is.
+//
+// So: armed, but not one keyboard or mouse event, WHILE the user is
+// demonstrably at the machine. powerMonitor.getSystemIdleTime() is the
+// cross-check — it reads real HID activity and needs no permission of its own
+// (verified with an untrusted app: isTrustedAccessibilityClient() false, idle
+// time still readable) — so a machine nobody is touching never trips this.
+const DEAF_HOTKEY_TITLE = "GVoice isn't hearing your keyboard";
+const DEAF_HOTKEY_BODY =
+  "If you started it from a terminal, quit and open GVoice from Finder instead — " +
+  "or allow that terminal under Privacy & Security > Accessibility.";
+const HOOK_CHECK_MS = 15000;
+// The user must look active on two checks in a row, so one unlucky sample
+// (a keystroke that landed just before we looked) can't convict a live hook.
+const HOOK_STRIKES = 2;
+// Seconds since the last real input that still counts as "at the machine".
+const HOOK_ACTIVE_IDLE_S = 5;
+let hookWatchdogTimer = null;
+
+function startHookWatchdog(/** @type {() => boolean} */ sawEvent) {
+  if (hookWatchdogTimer) clearInterval(hookWatchdogTimer);
+  let strikes = 0;
+  hookWatchdogTimer = setInterval(() => {
+    // Any event at all means the hook is alive — stop looking, for good.
+    if (sawEvent()) return stopHookWatchdog();
+    // Nobody's touching the machine: no verdict either way.
+    if (powerMonitor.getSystemIdleTime() >= HOOK_ACTIVE_IDLE_S) {
+      strikes = 0;
+      return;
+    }
+    strikes += 1;
+    if (strikes < HOOK_STRIKES) return;
+    // One verdict per launch: stop before telling the user, so this can't nag.
+    stopHookWatchdog();
+    reportDeafHotkey();
+  }, HOOK_CHECK_MS);
+}
+
+function stopHookWatchdog() {
+  if (!hookWatchdogTimer) return;
+  clearInterval(hookWatchdogTimer);
+  hookWatchdogTimer = null;
+}
+
+function reportDeafHotkey() {
+  hotkeyDeaf = true;
+  console.error("[hotkey] armed but receiving no events — likely launched from a terminal without Accessibility");
+  dlog("hotkey-deaf", {});
+  updateTrayTooltip();
+  rebuildTrayMenu();
+  try {
+    if (Notification.isSupported()) {
+      const note = new Notification({ title: DEAF_HOTKEY_TITLE, body: DEAF_HOTKEY_BODY });
+      note.on("click", () => openAccessibilitySettings());
+      note.show();
+    }
+  } catch {}
+}
 
 async function setupHotkey() {
   if (!serverPort || !dictationWindow) return false;
@@ -930,6 +1005,7 @@ async function setupHotkey() {
       }
     });
     updateTrayTooltip();
+    startHookWatchdog(hotkeyEngine.sawEvent);
     const altLabel = process.platform === "darwin"
       ? "right Option (⌥), left Ctrl+Cmd, or mouse back button"
       : "Ctrl+Shift (either side)";
@@ -1859,6 +1935,17 @@ function rebuildTrayMenu() {
       },
       { type: /** @type {const} */ ("separator") }
     ] : []),
+    // Same placement, for the hook that started and then heard nothing: the
+    // fix is either to relaunch from Finder or to grant the launcher the
+    // permission, so offer the pane here too.
+    ...(hotkeyDeaf && !hotkeyNeedsAccessibility ? [
+      { label: "⚠ Not hearing your keyboard — open from Finder", enabled: false },
+      {
+        label: "Open Accessibility settings…",
+        click: () => openAccessibilitySettings()
+      },
+      { type: /** @type {const} */ ("separator") }
+    ] : []),
     {
       label: "Recent dictations",
       enabled: historyItems.length > 0,
@@ -2205,6 +2292,7 @@ app.on("window-all-closed", (event) => {
 // immediately after.
 function shutdownAll() {
   if (maxHoldTimer) { clearTimeout(maxHoldTimer); maxHoldTimer = null; }
+  stopHookWatchdog();
   if (hotkeyEngine && typeof hotkeyEngine.stop === "function") {
     try { hotkeyEngine.stop(); } catch {}
   }

@@ -52,8 +52,12 @@ function debug(/** @type {any[]} */ ...args) {
  */
 
 /**
+ * `sawEvent()` answers "is this detector actually receiving input?" — the
+ * caller uses it to notice a hook that started cleanly and then delivered
+ * nothing (see main.js's watchdog).
+ *
  * @param {HotkeyCallbacks} callbacks
- * @returns {{ stop: () => void }}
+ * @returns {{ stop: () => void, sawEvent: () => boolean }}
  */
 export function startHotkey(callbacks) {
   if (process.platform === "win32") {
@@ -66,7 +70,7 @@ export function startHotkey(callbacks) {
  * Windows polling implementation. Logic is byte-identical to the pre-split
  * version — only relocated inside this function.
  * @param {HotkeyCallbacks} callbacks
- * @returns {{ stop: () => void }}
+ * @returns {{ stop: () => void, sawEvent: () => boolean }}
  */
 function startHotkeyWindows({ onPress, onRelease }) {
   let holdWas = false;
@@ -97,7 +101,12 @@ function startHotkeyWindows({ onPress, onRelease }) {
   return {
     stop() {
       clearInterval(timer);
-    }
+    },
+    // Nothing to report: this path has no event stream to go quiet. It asks the
+    // kernel for the current key state on every tick, so it can't be "armed but
+    // deaf" the way a global hook can — always answer yes so the caller's
+    // deaf-hook watchdog never fires here.
+    sawEvent: () => true
   };
 }
 
@@ -116,7 +125,7 @@ function startHotkeyWindows({ onPress, onRelease }) {
  *     a held Ctrl+Cmd keystroke triggers the chord path instead.
  *
  * @param {HotkeyCallbacks} callbacks
- * @returns {{ stop: () => void }}
+ * @returns {{ stop: () => void, sawEvent: () => boolean }}
  */
 function startHotkeyUiohook({ onPress, onRelease }) {
   // Lazy require so Windows builds don't choke if uiohook-napi isn't present
@@ -177,8 +186,15 @@ function startHotkeyUiohook({ onPress, onRelease }) {
 
   let ctrlLDown = false;
   let cmdLDown = false;
+  // Set by the FIRST event of any kind. uIOhook.start() can succeed and then
+  // deliver nothing at all (macOS: the process that launched us holds the
+  // Accessibility grant and doesn't have it; Windows/RDP: a low-level hook that
+  // silently dies), and there is no error for that — silence is the only
+  // symptom. The caller polls this to tell "armed" from "armed but deaf".
+  let sawEvent = false;
 
   const handleDown = (/** @type {any} */ event) => {
+    sawEvent = true;
     const code = event && event.keycode;
     // Self-heal stale chord state: if a keyup was swallowed (lock screen,
     // emoji picker, focus churn) a flag can stay latched and a later lone
@@ -213,6 +229,7 @@ function startHotkeyUiohook({ onPress, onRelease }) {
   };
 
   const handleUp = (/** @type {any} */ event) => {
+    sawEvent = true;
     const code = event && event.keycode;
     if (ALT_KEYCODES.has(code)) {
       releaseSource("alt");
@@ -231,9 +248,11 @@ function startHotkeyUiohook({ onPress, onRelease }) {
   };
 
   const handleMouseDown = (/** @type {any} */ event) => {
+    sawEvent = true;
     if (event && event.button === MOUSE_BACK_BUTTON) pressSource("mouseBack");
   };
   const handleMouseUp = (/** @type {any} */ event) => {
+    sawEvent = true;
     if (event && event.button === MOUSE_BACK_BUTTON) releaseSource("mouseBack");
   };
 
@@ -269,6 +288,7 @@ function startHotkeyUiohook({ onPress, onRelease }) {
       try { uIOhook.off("mousedown", handleMouseDown); } catch {}
       try { uIOhook.off("mouseup", handleMouseUp); } catch {}
       try { uIOhook.stop(); } catch {}
-    }
+    },
+    sawEvent: () => sawEvent
   };
 }

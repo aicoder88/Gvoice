@@ -125,6 +125,8 @@ app you would need to drop the startup lock and swap in a multilingual model.
 
 **Hotkey doesn't fire** - check the Electron console for `Failed to start global hotkey`. On macOS/Linux, if `uiohook-napi` failed to load, run `npx electron-rebuild`. On macOS, also make sure the app has Accessibility permission (System Settings → Privacy & Security → Accessibility).
 
+**Hotkey doesn't fire on macOS and nothing looks wrong** - launch the app from Finder, or with `open -a GVoice`, not from a terminal. macOS grants the right to watch the keyboard to whatever *started* the app, so a terminal that doesn't have Accessibility produces a GVoice that starts perfectly, shows its tray icon, and never sees a keypress. If you do want to launch it from a terminal, grant that terminal (Terminal, iTerm, VS Code…) Accessibility, not GVoice. GVoice notices this on its own within about 30 seconds of you using the machine and says so in a notification and its tray tooltip.
+
 **Typing doesn't insert text** - some apps block synthetic clipboard paste. Set `TYPE_VIA_CLIPBOARD=false` to fall back to direct keystrokes.
 
 **Pill doesn't appear** - the pill is a frameless always-on-top window. Some fullscreen apps (games, video players) suppress it. The transcript still types.

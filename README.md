@@ -79,4 +79,6 @@ Everything (including the knobs not in the window — models, ports, the diction
 
 Per-event tracing (key presses, paste timing, cleanup) is written to `debug.log` in the app's data folder — on macOS that's `~/Library/Application Support/GVoice/debug.log` (rotated at ~1 MB). Set `GVOICE_DEBUG=1` to also echo those traces to the console while developing.
 
+**Dictation key does nothing on macOS?** Open GVoice from Finder (or `open -a GVoice`) rather than from a terminal. macOS gives the right to watch the keyboard to whatever *started* the app, so a terminal without Accessibility permission leaves GVoice looking healthy and completely deaf. GVoice now spots this itself and tells you within about 30 seconds of you using the machine.
+
 **Mic goes quiet after sleep?** GVoice watches for it. If the system wakes from sleep (or the audio device changes) and the mic starts delivering pure silence, the capture pipeline is rebuilt automatically on the next press — no restart needed.
