@@ -422,3 +422,18 @@ whatever had focus (cmux).
 ### Rejected
 Adding "cmux" to TERMINAL_BINARIES. The generic fix already covers it; a second mechanism for the
 same problem means the next app with a quiet composer needs another entry.
+
+## 2026-07-30 — code-review fixes: two known tradeoffs left in
+
+- **Clipboard race, accepted.** `retranscribeRecording` now runs with the
+  dictation session already re-opened, and its `clipboard.writeText(cleaned)`
+  is deliberately NOT behind the `ownsPill()` guard. So a retry landing while a
+  new dictation is mid-paste can collide (typeText saves/restores the clipboard
+  around a 250ms window). Guarding it would trade a rare collision for
+  guaranteed loss of the recovered text — the clipboard is the ONLY place that
+  text lives. Left as is.
+- **Tray "Transcribe again" during a live dictation is silent.** `ownsPill()`
+  suppresses the retry's pill writes so it can't paint over "Listening…", and
+  `retranscribeOnDemand` only speaks up for the on-device-engine case. The text
+  still reaches the clipboard and Recent dictations. Narrow; not worth a
+  queue-and-replay.
