@@ -146,20 +146,50 @@ export function settingsView(env = {}) {
     openaiKey: env.OPENAI_API_KEY || "",
     deepgramKey: env.DEEPGRAM_API_KEY || "",
     recordingsEnabled: asBool(env.RECORDINGS_ENABLED, true),
-    retentionDays: clampDays(env.RECORDING_RETENTION_DAYS, 7)
+    retentionDays: clampDays(env.RECORDING_RETENTION_DAYS, 7),
+    // Number of minutes, or "never" — rendered as a dropdown, so it round-trips
+    // as a string on the way back in.
+    micIdleMinutes: micIdleMinutes(env)
   };
 }
 
 /**
- * Should the mic stay open between presses? On by default (instant first word,
- * pre-roll captures speech that starts before the key registers). Off saves the
- * idle CPU of a permanently running audio worklet — the trade is no pre-roll,
- * so the user must hold the key a beat before speaking.
+ * How long the mic may sit open with no dictation before it closes itself.
+ * Returns a number of minutes, or the string "never".
+ *
+ *   5       default — warm all through a working session, dark when you walk
+ *           away. macOS lights the orange "mic in use" dot for as long as ANY
+ *           stream is open, so a permanently warm mic lights it all day.
+ *   0       open on press, release after every hold (no pre-roll: the user must
+ *           hold the key a beat before speaking).
+ *   "never" keep it open all the time.
+ *
+ * Back-compat: an install that set the old MIC_ALWAYS_ON boolean keeps its
+ * meaning (true → "never", false → 0) until MIC_IDLE_MINUTES is written.
  *
  * @param {Record<string, string | undefined>} env
+ * @returns {number | "never"}
  */
-export function micAlwaysOn(env = {}) {
-  return asBool(env.MIC_ALWAYS_ON, true);
+export function micIdleMinutes(env = {}) {
+  const raw = env.MIC_IDLE_MINUTES;
+  if (raw == null || String(raw).trim() === "") {
+    if (env.MIC_ALWAYS_ON != null && String(env.MIC_ALWAYS_ON).trim() !== "") {
+      return asBool(env.MIC_ALWAYS_ON, true) ? "never" : 0;
+    }
+    return MIC_IDLE_DEFAULT;
+  }
+  return clampIdleMinutes(raw, MIC_IDLE_DEFAULT);
+}
+
+const MIC_IDLE_DEFAULT = 5;
+
+/** @returns {number | "never"} */
+function clampIdleMinutes(value, fallback) {
+  const s = String(value).trim().toLowerCase();
+  if (s === "never") return "never";
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0) return fallback;
+  return Math.min(1440, Math.round(n));
 }
 
 function clampDays(value, fallback) {
@@ -198,6 +228,9 @@ export function patchFromView(payload = {}) {
   }
   if (payload.retentionDays != null && Number.isFinite(Number(payload.retentionDays))) {
     patch.RECORDING_RETENTION_DAYS = String(clampDays(payload.retentionDays, 7));
+  }
+  if (payload.micIdleMinutes != null && String(payload.micIdleMinutes).trim() !== "") {
+    patch.MIC_IDLE_MINUTES = String(clampIdleMinutes(payload.micIdleMinutes, MIC_IDLE_DEFAULT));
   }
   return patch;
 }

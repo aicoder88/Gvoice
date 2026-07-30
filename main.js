@@ -50,7 +50,7 @@ import { initHistory, getHistory, getHistoryPath, recordTranscript } from "./src
 import { computeStats } from "./src/stats.js";
 import { ensureWhisperServer, stopWhisperServer } from "./src/providers/whisper-local.js";
 import { ENV_FILE, MODELS_DIR, BIN_DIR } from "./src/bootstrap-env.js";
-import { writeEnvFile, settingsView, patchFromView, micAlwaysOn, VALID_PROVIDERS } from "./src/settings.js";
+import { writeEnvFile, settingsView, patchFromView, micIdleMinutes, VALID_PROVIDERS } from "./src/settings.js";
 import { probeCapability, recommendedAssets } from "./src/hardware.js";
 import { suggestBeforeBenchmark } from "./src/benchmark.js";
 import { runLocalBenchmark } from "./src/benchmark-run.js";
@@ -841,13 +841,14 @@ function createDictationWindow() {
 }
 
 // The renderer reads both of these once at load, so a Settings change to either
-// takes effect via reloadDictationWindow(). hotmic=0 (MIC_ALWAYS_ON=false) makes
-// the renderer open the mic on press and release it after each hold instead of
-// keeping the audio worklet running all day.
+// takes effect via reloadDictationWindow(). micidle is how many minutes the mic
+// may sit open with no dictation before the renderer closes it (putting the
+// macOS orange mic dot out): 0 = release after every hold, "never" = keep it
+// open all day.
 function dictationUrl() {
   const provider = encodeURIComponent((process.env.STT_PROVIDER || "openai").toLowerCase());
-  const hotmic = micAlwaysOn(process.env) ? "1" : "0";
-  return `http://127.0.0.1:${serverPort}/dictation.html?provider=${provider}&hotmic=${hotmic}`;
+  const micidle = encodeURIComponent(String(micIdleMinutes(process.env)));
+  return `http://127.0.0.1:${serverPort}/dictation.html?provider=${provider}&micidle=${micidle}`;
 }
 
 // Dictation is English-only: the bundled local model is ggml-small.en (English),
@@ -2023,6 +2024,9 @@ function reloadDictationWindow() {
 // settings:save and engine:apply so both take effect identically.
 async function applyEnvPatchLive(patch, source) {
   const prevProvider = (process.env.STT_PROVIDER || "openai").toLowerCase();
+  // Everything the dictation renderer reads once at load must be compared here:
+  // without a reload the new value does nothing until the app is restarted.
+  const prevUrl = serverPort ? dictationUrl() : "";
   for (const [key, value] of Object.entries(patch)) process.env[key] = value;
   const newProvider = (process.env.STT_PROVIDER || "openai").toLowerCase();
   dlog(source, { keys: Object.keys(patch), providerChanged: newProvider !== prevProvider });
@@ -2032,7 +2036,7 @@ async function applyEnvPatchLive(patch, source) {
     // may be present, try again and bring dictation fully up.
     await bootRelayServer();
     if (serverPort) await bringUpDictation();
-  } else if (newProvider !== prevProvider) {
+  } else if (dictationUrl() !== prevUrl) {
     reloadDictationWindow();
   }
   // A speed test (or an on-device setup the user then abandoned) can leave a

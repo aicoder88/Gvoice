@@ -4,13 +4,25 @@ const targetSampleRate = 24000;
 const statusEl = document.getElementById("status");
 const logEl = document.getElementById("log");
 
-// Hot mic (default) keeps the capture graph live between presses so the first
-// word of a press is never lost and the pipeline is always warm — at the cost of
-// a permanently running audio worklet (~10-15% CPU idle on a laptop). With
-// MIC_ALWAYS_ON=false (passed through as ?hotmic=0) the mic is opened on press
-// and released after each hold: no pre-roll, so the user holds the key a beat
-// before speaking, but the machine is idle between dictations.
-const HOT_MIC = new URLSearchParams(window.location.search).get("hotmic") !== "0";
+// How long the capture graph may sit open with no dictation before we close it
+// (?micidle=, minutes, from MIC_IDLE_MINUTES). A warm graph means the first word
+// of a press is never lost (pre-roll) and the pipeline is always ready — but
+// macOS lights the orange "mic in use" dot for as long as ANY stream is open, so
+// leaving it warm forever lights the dot all day. Dropping it after an idle
+// stretch keeps every press inside a working session instant and still puts the
+// dot out when the user walks away.
+//   "never" → never close it (the old MIC_ALWAYS_ON=true behavior)
+//   0       → close after every hold (the old MIC_ALWAYS_ON=false cold mode:
+//             no pre-roll, so hold the key a beat before speaking)
+const micIdleParam = new URLSearchParams(window.location.search).get("micidle");
+const MIC_IDLE_MS = (() => {
+  if (micIdleParam === "never") return Infinity;
+  const n = Number(micIdleParam);
+  return (Number.isFinite(n) && n >= 0 ? n : 5) * 60000;
+})();
+// Cold mode: nothing is kept warm between presses, so every press builds a fresh
+// graph (which is also its own recovery).
+const COLD_MIC = MIC_IDLE_MS === 0;
 
 let socket = null;
 let audioContext = null;
@@ -569,6 +581,53 @@ function teardownCapture(full = false) {
   }
 }
 
+// --- Idle mic drop ------------------------------------------------------------
+// Close the mic after MIC_IDLE_MS with no dictation so the macOS orange mic dot
+// goes out when the user walks away. Partial teardown + suspend — exactly what
+// cold mode does after every hold — so the next press rebuilds through the
+// normal initCapture path and pays the open cost once, not every press.
+let idleTimer = null;
+// The idle timer fired: there is deliberately no warm graph until the next
+// press. Background recovery must NOT relight the mic (and the dot) on a
+// devicechange while we're in this state.
+let idleDropped = false;
+// How soon to re-check when the idle deadline lands on a busy moment (a hold, an
+// in-flight rebuild) instead of waiting another full idle period.
+const IDLE_RECHECK_MS = 5000;
+
+function clearIdleTimer() {
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+}
+
+// Drop the device stream (and suspend the context) but keep the AudioContext and
+// the loaded worklet module, so rebuilding is as cheap as possible.
+function dropCapture(why) {
+  clearIdleTimer();
+  teardownCapture();
+  try { audioContext && audioContext.suspend(); } catch {}
+  log("Mic released (" + why + ")");
+}
+
+function armIdleTimer(ms = MIC_IDLE_MS) {
+  clearIdleTimer();
+  if (COLD_MIC || !Number.isFinite(MIC_IDLE_MS)) return; // per-hold teardown, or "never"
+  idleTimer = setTimeout(() => {
+    idleTimer = null;
+    // Never tear a graph down under a live hold or an in-flight rebuild —
+    // captureBusy exists for exactly that race. Look again shortly instead.
+    if (isRecording || startInFlight || draining || recovering || captureBusy) {
+      armIdleTimer(IDLE_RECHECK_MS);
+      return;
+    }
+    if (!captureReady) return;
+    idleDropped = true;
+    dropCapture("idle " + Math.round(MIC_IDLE_MS / 60000) + " min");
+  }, ms);
+}
+
 // The mic died or was taken (track ended/muted, or a run of silent holds).
 // Drop the dead pipeline, surface a visible warning, and reset so the next
 // press re-acquires. Safe to call mid-hold: we just abandon the current one.
@@ -695,16 +754,18 @@ async function ensureLiveCapture() {
 // time) and deferred while a hold is in progress so it can't abandon live audio.
 // Also serves the system-wake path (main sends "resume"/"unlock-screen").
 async function recoverMic(reason) {
-  // Cold-mic mode has nothing to keep alive between presses: every press builds
-  // a fresh graph, which IS the recovery. Guarding here (rather than at each of
+  // Two states have nothing to keep alive between presses: cold mode (every
+  // press builds a fresh graph, which IS the recovery) and an idle-dropped mic
+  // (rebuilding here would relight the orange dot the drop just put out).
+  // Either way the next press rebuilds. Guarding here (rather than at each of
   // the four call sites — startup, wake, mic-lost, devicechange) means no path
   // can quietly leave a hot graph running.
   // ponytail: cold mode gives up the liveness probe with it — the first press of
   // a session binds the bare system default, so it can't auto-switch away from a
   // silent virtual input the way hot mode did (the user still gets the "pick your
   // microphone" warning). Probe on press if that ever bites.
-  if (!HOT_MIC) {
-    // Not a full no-op: cold mode's per-hold teardown keeps the AudioContext,
+  if (COLD_MIC || idleDropped) {
+    // Not a full no-op: the teardown these states use keeps the AudioContext,
     // and the post-sleep wedge is IN that context (it keeps delivering zeros
     // onto a fresh stream). Mark it stale so the next press does the full
     // rebuild — otherwise the first press after a lid-open records silence and
@@ -735,6 +796,9 @@ async function recoverMic(reason) {
         captureStale = false;
         setStatus("Ready");
         log("Mic recovered (round " + round + ") on " + currentLabel);
+        // The graph is warm again — start its idle clock, so a mic warmed at
+        // startup (or healed while the user was away) still goes dark on its own.
+        armIdleTimer();
         // Beat the grace-delayed warning: the mic is back, so a deferred
         // "disconnected" notice must never fire after this.
         clearPendingMicWarning();
@@ -787,6 +851,10 @@ async function startRecording(profile) {
   // A press supersedes any pending grace-delayed mic warning — it must not pop
   // a "disconnected" notice in the middle of a fresh dictation.
   clearPendingMicWarning();
+  // The mic is about to be in use again: cancel the idle countdown, and let
+  // background recovery work on the rebuilt graph once more.
+  clearIdleTimer();
+  idleDropped = false;
   holdStartedAt = Date.now();
   // If recovery is mid-rebuild, wait it out — it sees startInFlight and stops
   // after this build, so we won't race it into a second (stacked) graph.
@@ -827,6 +895,12 @@ async function startRecording(profile) {
     return;
   }
 
+  // Did THIS press have to open the mic itself — because nothing was warm (cold
+  // mode, or the idle timer dropped it) or because the warm graph is stale and
+  // about to be rebuilt below? Read it before the teardown, while captureReady
+  // still describes what we had.
+  const wasCold = !captureReady || captureStale;
+
   // A device change since the last press means our warm stream is bound to the
   // wrong (old) device — drop it so initCapture re-acquires the new default.
   if (captureStale) {
@@ -856,11 +930,11 @@ async function startRecording(profile) {
   }
 
   utterancePeak = 0;
-  // Cold mic: the hold clock restarts once the device is actually open. Opening
-  // it can eat a few hundred ms, and the dead-mic check reads "held ≥1s but
-  // almost no audio" as a wedged pipeline — timing from the key press would let
-  // a short hold on a slow-to-open mic fake that verdict.
-  if (!HOT_MIC) holdStartedAt = Date.now();
+  // Opened the mic on this press: restart the hold clock now that the device is
+  // actually open. Opening it can eat a few hundred ms, and the dead-mic check
+  // reads "held ≥1s but almost no audio" as a wedged pipeline — timing from the
+  // key press would let a short hold on a slow-to-open mic fake that verdict.
+  if (wasCold) holdStartedAt = Date.now();
 
   transcriptParts = [];
   alreadyFinalized = false;
@@ -966,15 +1040,14 @@ function finishUtterance() {
   // remember it as the one to re-pin first if the mic ever needs recovery.
   if (currentDeviceId) lastGoodDeviceId = currentDeviceId;
 
-  // Hot mic: leave the capture pipeline warm for the next press — only stop
-  // streaming. Cold mic: drop the device stream so the mic indicator goes out
-  // and the worklet stops burning CPU until the next press. Partial teardown
-  // (keeps the AudioContext + loaded worklet module) plus a suspend, so the
-  // rebuild on the next press is as cheap as possible.
-  if (!HOT_MIC) {
-    teardownCapture();
-    try { audioContext && audioContext.suspend(); } catch {}
-    log("Mic released (cold-mic mode)");
+  // Cold mic: drop the device stream now, so the mic indicator goes out and the
+  // worklet stops burning CPU until the next press. Otherwise leave the pipeline
+  // warm for the next press — only stop streaming — and start the idle clock
+  // that closes it if no further dictation arrives.
+  if (COLD_MIC) {
+    dropCapture("cold-mic mode");
+  } else {
+    armIdleTimer();
   }
 
   if (socket && socket.readyState === WebSocket.OPEN) {
