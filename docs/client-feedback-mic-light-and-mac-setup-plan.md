@@ -18,14 +18,26 @@ own exactly 60s after the commit, next press reopened the mic in ~130ms and
 captured real audio with no false "no sound is reaching GVoice", timer re-armed
 and dropped again. Changing the setting in Settings reloaded the dictation
 window live (`…&micidle=15`) and persisted to `.env`; "Only while I hold the
-key" still tears down per hold; tray icon present throughout.
+key" still tears down per hold; tray icon present throughout. Separately, an
+app launched and then not used at all went dark 60s after startup with no press
+ever — the "I opened it this morning and forgot about it" case.
 
 **Goal 2 — done, warning path watched firing.** The watchdog stays quiet on a
 healthy launch (verified across several launches with real key events). Forced
 deaf, it reported within 30s: tray menu switched to "⚠ Not hearing your
 keyboard — open from Finder" + "Open Accessibility settings…", and the
 notification was raised (its banner was suppressed by the Mac's Focus mode, so
-the banner itself wasn't eyeballed — the tray change was).
+the banner itself wasn't eyeballed — the tray change was). On a machine left
+untouched for 11 minutes it stayed silent, which is the idle cross-check doing
+its job.
+
+One fix on top of the plan: the "is the user here" signal and the "did we hear
+anything" signal have to count the same input. System idle time counts mouse
+MOVEMENT and scrolling; the four key/button events the plan listed do not. So a
+perfectly healthy app would have accused itself the first time somebody read a
+page for half a minute without typing. It listens on uiohook's `input`
+catch-all instead — measured: 12 mouse moves produce 12 `input` events and zero
+key events.
 
 **Goal 3 — gate run, and it came back better than the plan assumed.**
 Homebrew's `whisper-cpp` (1.9.1) **does** ship `whisper-server` — the plan's
@@ -42,10 +54,12 @@ brew binaries in 5.1s through the server path, matching the cloud transcript.
   *after* `initCapture()`, where that is always false. The press snapshots
   "did I have to open the mic myself" before the rebuild instead.
 
-**Not checked, and why:** the walked-away case for Goal 2 (idle user, no false
-warning) — this Mac never went idle during the work (real HID idle sat at 0s
-the whole time, confirmed against `ioreg`), so the branch couldn't be observed.
-The lid-sleep/wake press for Goal 1, and Goal 3 with WiFi physically off, also
+**Not checked, and why:** the mouse-only false alarm couldn't be driven
+end-to-end — synthetic events reach the key hook but do NOT reset the OS idle
+clock (measured: idle kept climbing through both synthetic keys and synthetic
+mouse movement), so that condition needs a real hand on the trackpad. The fix
+was verified one level down instead, on the event stream itself. The
+lid-sleep/wake press for Goal 1, and Goal 3 with WiFi physically off, also
 weren't run.
 
 ---

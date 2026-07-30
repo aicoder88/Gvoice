@@ -467,3 +467,14 @@ same problem means the next app with a quiet composer needs another entry.
   `/Applications` build still honours the old one).
 - **Rejected:** shipping a `GVOICE_FORCE_DEAF_HOTKEY` test seam. It would ship a
   fake-failure switch forever to save one temporary build during verification.
+- **The deaf-hotkey watchdog must listen on uiohook's `input`, not on the four
+  key/button events.** `powerMonitor.getSystemIdleTime()` counts mouse movement
+  and scrolling; keydown/keyup/mousedown/mouseup don't. Listening narrowly
+  would have shipped a false "GVoice isn't hearing your keyboard" at anyone who
+  read a page for 30s after launch without typing. Measured on this machine: 6
+  seconds of mouse movement = 12 `input` events, 12 `mousemove`, 0 `keydown`.
+- **Synthetic CGEvents can't drive the watchdog's active-user branch.** They
+  ARE delivered to uiohook (a synthetic right-Option hold starts a real
+  dictation) but they do NOT reset HIDIdleTime — measured, idle kept climbing
+  through both synthetic keys and synthetic mouse movement. Any future test of
+  "user active + hook deaf" needs a real hand on the hardware.

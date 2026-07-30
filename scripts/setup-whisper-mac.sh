@@ -26,8 +26,12 @@ if [ -f "$MODELS_DIR/$MODEL" ]; then
   echo "[setup] already have $MODEL, skipping download"
 else
   echo "[setup] downloading $MODEL"
-  curl -L --fail --progress-bar -o "$MODELS_DIR/$MODEL" \
+  # Into .part first: an interrupted 190 MB download would otherwise leave a
+  # truncated .bin that the skip-if-present check above treats as done forever,
+  # and whisper fails on it every launch with no hint why.
+  curl -L --fail --progress-bar -o "$MODELS_DIR/$MODEL.part" \
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$MODEL"
+  mv "$MODELS_DIR/$MODEL.part" "$MODELS_DIR/$MODEL"
 fi
 
 # Absolute paths, always. An app launched from Finder starts with a bare PATH —

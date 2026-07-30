@@ -191,10 +191,16 @@ function startHotkeyUiohook({ onPress, onRelease }) {
   // Accessibility grant and doesn't have it; Windows/RDP: a low-level hook that
   // silently dies), and there is no error for that — silence is the only
   // symptom. The caller polls this to tell "armed" from "armed but deaf".
+  //
+  // It listens on "input", uiohook's catch-all, NOT on the four keys/buttons
+  // this module actually acts on. The caller cross-checks against the system
+  // idle time, which counts ALL human input — mouse movement and scrolling
+  // included — so anything narrower here would read a healthy app as deaf the
+  // moment someone reads a page for half a minute without typing.
   let sawEvent = false;
+  const markSeen = () => { sawEvent = true; };
 
   const handleDown = (/** @type {any} */ event) => {
-    sawEvent = true;
     const code = event && event.keycode;
     // Self-heal stale chord state: if a keyup was swallowed (lock screen,
     // emoji picker, focus churn) a flag can stay latched and a later lone
@@ -229,7 +235,6 @@ function startHotkeyUiohook({ onPress, onRelease }) {
   };
 
   const handleUp = (/** @type {any} */ event) => {
-    sawEvent = true;
     const code = event && event.keycode;
     if (ALT_KEYCODES.has(code)) {
       releaseSource("alt");
@@ -248,14 +253,13 @@ function startHotkeyUiohook({ onPress, onRelease }) {
   };
 
   const handleMouseDown = (/** @type {any} */ event) => {
-    sawEvent = true;
     if (event && event.button === MOUSE_BACK_BUTTON) pressSource("mouseBack");
   };
   const handleMouseUp = (/** @type {any} */ event) => {
-    sawEvent = true;
     if (event && event.button === MOUSE_BACK_BUTTON) releaseSource("mouseBack");
   };
 
+  uIOhook.on("input", markSeen);
   uIOhook.on("keydown", handleDown);
   uIOhook.on("keyup", handleUp);
   uIOhook.on("mousedown", handleMouseDown);
@@ -267,6 +271,7 @@ function startHotkeyUiohook({ onPress, onRelease }) {
     // Detach so a caller retry can't double-register, then surface the
     // failure — a silent catch here leaves the app looking alive with a
     // dead hotkey.
+    try { uIOhook.off("input", markSeen); } catch {}
     try { uIOhook.off("keydown", handleDown); } catch {}
     try { uIOhook.off("keyup", handleUp); } catch {}
     try { uIOhook.off("mousedown", handleMouseDown); } catch {}
@@ -283,6 +288,7 @@ function startHotkeyUiohook({ onPress, onRelease }) {
 
   return {
     stop() {
+      try { uIOhook.off("input", markSeen); } catch {}
       try { uIOhook.off("keydown", handleDown); } catch {}
       try { uIOhook.off("keyup", handleUp); } catch {}
       try { uIOhook.off("mousedown", handleMouseDown); } catch {}

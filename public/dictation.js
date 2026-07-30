@@ -17,7 +17,9 @@ const logEl = document.getElementById("log");
 const micIdleParam = new URLSearchParams(window.location.search).get("micidle");
 const MIC_IDLE_MS = (() => {
   if (micIdleParam === "never") return Infinity;
-  const n = Number(micIdleParam);
+  // Number(null) is 0, which would silently mean cold mode — a missing param
+  // must land on the same default a junk one does.
+  const n = micIdleParam == null ? NaN : Number(micIdleParam);
   return (Number.isFinite(n) && n >= 0 ? n : 5) * 60000;
 })();
 // Cold mode: nothing is kept warm between presses, so every press builds a fresh
