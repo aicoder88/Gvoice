@@ -37,7 +37,14 @@ fi
 # Absolute paths, always. An app launched from Finder starts with a bare PATH —
 # /opt/homebrew/bin isn't on it — so a bare `WHISPER_BIN=whisper-cli` works in
 # dev and dies in the installed app. Same for a relative model path.
-WHISPER_BIN="$(command -v whisper-cli)"
+# `|| true` first: under `set -e` a failed lookup would otherwise abort the
+# script with no message at all, right after a brew install that looked fine.
+WHISPER_BIN="$(command -v whisper-cli || true)"
+if [ -z "$WHISPER_BIN" ]; then
+  echo "[setup] whisper-cli installed but not on this shell's PATH." >&2
+  echo "[setup] Open a new terminal (or run: eval \"\$(/opt/homebrew/bin/brew shellenv)\") and re-run this script." >&2
+  exit 1
+fi
 
 echo
 echo "[setup] done."

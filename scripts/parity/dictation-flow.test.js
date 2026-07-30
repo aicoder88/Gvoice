@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { WebSocket } from "ws";
 import { startServer } from "../../server.js";
+import { findInstalledWhisperCli } from "../../src/model-download.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = join(HERE, "fixtures", "tone-1500ms.pcm16");
@@ -289,19 +290,29 @@ test("parity: deepgram completes one utterance", async (t) => {
 });
 
 test("parity: whisper-local completes one utterance", async (t) => {
-  const modelPath = process.env.WHISPER_MODEL || "./models/ggml-small.en-q5_1.bin";
-  if (!existsSync(modelPath)) {
-    t.skip(`whisper model not found at ${modelPath}`);
+  // Default to the models the setup scripts actually download, not one fixed
+  // name — the old default (ggml-small.en-q5_1.bin) matched nothing either
+  // script produces, so this subtest skipped on every machine that HAD a
+  // working local engine.
+  const modelPath = process.env.WHISPER_MODEL
+    || ["ggml-small-q5_1.bin", "ggml-base-q5_1.bin", "ggml-small.en-q5_1.bin"]
+      .map((n) => join("models", n))
+      .find((p) => existsSync(p));
+  if (!modelPath || !existsSync(modelPath)) {
+    t.skip("no whisper model in models/ (run scripts/setup-whisper-mac.sh or the .ps1)");
     return;
   }
-  // The model file alone isn't enough — it ships with the repo while the binary
-  // is a separate install. Without this the subtest reaches a spawn ENOENT and
-  // reports a failure for a dependency nobody was told to install.
-  const whisperBin = process.env.WHISPER_BIN || process.env.WHISPER_CLI;
+  // The model file alone isn't enough — the binary is a separate install.
+  // Without this the subtest reaches a spawn ENOENT and reports a failure for a
+  // dependency nobody was told to install. findInstalledWhisperCli covers the
+  // Homebrew install the Mac setup path produces.
+  const whisperBin = process.env.WHISPER_BIN || process.env.WHISPER_CLI || findInstalledWhisperCli();
   if (!whisperBin || !existsSync(whisperBin)) {
     t.skip("whisper-cli binary not found (set WHISPER_BIN)");
     return;
   }
+  process.env.WHISPER_MODEL = modelPath;
+  process.env.WHISPER_BIN = whisperBin;
 
   const relay = await bootRelay();
   t.after(() => relay.close());
