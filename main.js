@@ -56,7 +56,7 @@ import { suggestBeforeBenchmark } from "./src/benchmark.js";
 import { runLocalBenchmark } from "./src/benchmark-run.js";
 import { ensureModel, ensureWindowsBinaries, MODELS, WINDOWS_BINARY_ZIPS } from "./src/model-download.js";
 import { saveRecording, pruneRecordings, clearRecordings } from "./src/recordings.js";
-import { transcribeWavFile } from "./src/providers/deepgram.js";
+import { transcribeWavFile, batchFailureReason } from "./src/providers/deepgram.js";
 import { resolveDeepgramKey } from "./realtime-relay.js";
 import { appendFileSync, statSync, renameSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
 import { mkdir as mkdirAsync } from "node:fs/promises";
@@ -1065,7 +1065,7 @@ function openAccessibilitySettings() {
 //
 // @param {string} transcript
 // @param {number | null} [restoreHwnd]
-// @returns {Promise<{ text: string, pasted: boolean, verified: boolean | null } | null>}
+// @returns {Promise<{ text: string, pasted: boolean, verified: boolean | null, uncertain: boolean, likelyMissed: boolean } | null>}
 async function processTranscript(transcript, restoreHwnd = null) {
   if (!transcript || !transcript.trim()) return null;
   let textToType = stripWhisperNoiseTokens(transcript.trim());
@@ -1232,7 +1232,14 @@ async function processTranscript(transcript, restoreHwnd = null) {
   // landed, but worth lingering a little longer on the pill so a rare silent
   // miss is still catchable. Terminals are trusted, so they are NOT uncertain.
   const uncertain = pasted && verified !== true && !isTerminalTarget;
-  return { text: textToType, pasted, verified, uncertain };
+  // The strongest miss signal we have that still isn't strong enough to call a
+  // failure: we read the field back, it had real content in it, and our text
+  // wasn't there. The seven false "paste failed" pills that got the downgrade
+  // removed all read back EMPTY (readLen 0 — an app that just doesn't expose
+  // its composer), so requiring content separates them. Not enough to show an
+  // error, but enough to leave the text on the clipboard so ⌘V rescues it.
+  const likelyMissed = pasted && verified === false && (readLen || 0) > 0;
+  return { text: textToType, pasted, verified, uncertain, likelyMissed };
 }
 
 // How many recent recordings to keep on disk — matched to the history length so
@@ -1278,11 +1285,40 @@ async function saveTempRecording(chunks, sampleRate) {
   }
 }
 
+let retryInFlight = false;
+
+// The pill belongs to whatever is happening NOW. A retry takes seconds, and a
+// key-press during it starts a fresh dictation that owns the pill from then on —
+// so every late write (the retry's own, and the callers' fallbacks below) has to
+// ask first instead of painting over a live "Listening…".
+function pillFree() {
+  return !dictation.busy;
+}
+
+// Can the batch retry run for this clip at all? Three ways it can't, and the
+// on-demand path below turns each into a message rather than a dead button.
+//   - no clip (never saved, or pruned since)
+//   - one retry already in flight (the tray offers this on every saved clip, so
+//     two can be started seconds apart — they'd fight over the pill and both
+//     write history)
+//   - the engine isn't Deepgram. Batch IS Deepgram's cloud: sending an OpenAI
+//     or on-device user's audio there, with our shared fallback key, would ship
+//     it to a vendor they never chose (and for on-device, break the whole point
+//     of choosing it).
+function retryCanRun(recordingPath) {
+  return !!recordingPath && existsSync(recordingPath) && !retryInFlight && sttProvider() === "deepgram";
+}
+
+function sttProvider() {
+  return (process.env.STT_PROVIDER || "openai").toLowerCase();
+}
+
 // Second chance for a dictation that came back with nothing. The audio is
 // already on disk, so a failed live stream doesn't have to mean lost words:
 // re-send the saved .wav to Deepgram's batch API, which has no handshake to
-// race and no streaming timeouts. Runs automatically after every empty result,
-// and on demand from the pill's "Transcribe again" button or the tray.
+// race and no streaming timeouts. Runs automatically after an empty result on
+// the Deepgram engine (see retryCanRun), and on demand from the pill's
+// "Transcribe again" button or the tray.
 //
 // The recovered text goes to the CLIPBOARD and the pill, not straight into the
 // focused app: the round-trip takes a few seconds, by which time the window the
@@ -1291,26 +1327,11 @@ async function saveTempRecording(chunks, sampleRate) {
 // @param {string | null} recordingPath
 // @returns {Promise<string | null>} the recovered text, "" if the retry ran and
 //   found none, or null if it never ran at all (caller still owns the pill).
-let retryInFlight = false;
 async function retranscribeRecording(recordingPath) {
-  if (!recordingPath || !existsSync(recordingPath)) return null;
-  // The tray offers this on every saved clip, so two retries can be started
-  // seconds apart — they'd fight over the pill and both write history. One at a
-  // time; the second click is a no-op rather than a race.
-  if (retryInFlight) return null;
-  // Batch is Deepgram's cloud. Someone running the on-device engine chose local
-  // on purpose (privacy, or no internet) — uploading their audio behind their
-  // back would break that, and offline it can't work anyway.
-  const provider = (process.env.STT_PROVIDER || "openai").toLowerCase();
-  if (provider === "whisper-local" || provider === "local") return null;
+  if (!retryCanRun(recordingPath)) return null;
   retryInFlight = true;
   const t0 = Date.now();
-  // The session is deliberately re-opened before this round trip, so a press
-  // during it starts a NEW dictation — and that one owns the pill from then on.
-  // This retry still reaches the clipboard and history, it just must not paint
-  // over a live "Listening…".
-  const ownsPill = () => !dictation.busy;
-  if (ownsPill()) {
+  if (pillFree()) {
     setPillState("transcribing");
     pillWindow?.showInactive();
   }
@@ -1322,15 +1343,21 @@ async function retranscribeRecording(recordingPath) {
     });
     dlog("retranscribe", { path: recordingPath, len: text.length, ms: Date.now() - t0 });
     if (!text) {
-      if (ownsPill()) showPillResult("error", null, recordingPath, { reason: "Retried — no speech in the recording." });
+      if (pillFree()) showPillResult("error", null, recordingPath, { reason: "Retried — no speech in the recording." });
       return "";
     }
     const cleaned = stripWhisperNoiseTokens(text) || text;
-    clipboard.writeText(cleaned);
     // It WORKED — green dot. (This used to ride the error state purely to buy
     // the 30s linger, so a rescued dictation looked like a failure.) The text is
     // only on the clipboard, so keep the long linger via holdMs.
-    if (ownsPill()) {
+    //
+    // Both the clipboard and the pill are gated on still owning the moment: a
+    // press during the round trip starts a new dictation, and dropping this
+    // (older) text onto the clipboard behind it would silently replace whatever
+    // the user had copied — with no pill to explain where their ⌘V went. The
+    // rescued text is still in history and the tray.
+    if (pillFree()) {
+      clipboard.writeText(cleaned);
       showPillResult("success", cleaned, recordingPath, { reason: "Got it on retry — press ⌘V.", holdMs: 30000 });
     }
     recordTranscript(cleaned, false, recordingPath);
@@ -1339,8 +1366,8 @@ async function retranscribeRecording(recordingPath) {
   } catch (error) {
     const detail = error && (error.message || String(error));
     console.error("[main] retranscribe failed:", detail);
-    dlog("retranscribe-failed", { path: recordingPath, error: String(detail) });
-    if (ownsPill()) showPillResult("error", null, recordingPath, { reason: "Retry failed — check your internet." });
+    dlog("retranscribe-failed", { path: recordingPath, error: String(detail), status: error?.status });
+    if (pillFree()) showPillResult("error", null, recordingPath, { reason: batchFailureReason(error) });
     return "";
   } finally {
     retryInFlight = false;
@@ -1348,16 +1375,23 @@ async function retranscribeRecording(recordingPath) {
 }
 
 // "Transcribe again" from the pill or the tray. Same retry, but nobody else is
-// holding the pill — so when it can't run at all (the on-device engine has no
-// batch API to call), say so instead of letting the click do nothing visible.
+// holding the pill — so when it can't run at all, say so instead of letting the
+// click do nothing visible.
 async function retranscribeOnDemand(/** @type {string | null} */ recordingPath) {
-  if ((await retranscribeRecording(recordingPath)) !== null) return;
-  const provider = (process.env.STT_PROVIDER || "openai").toLowerCase();
-  if (provider === "whisper-local" || provider === "local") {
-    showPillResult("error", null, recordingPath, {
-      reason: "Transcribe again needs the online engine — GVoice is set to on-device."
-    });
+  if (!retryCanRun(recordingPath)) {
+    // Nothing will happen, so say why. The button used to sit there doing
+    // absolutely nothing on every one of these.
+    const provider = sttProvider();
+    const engine = provider === "whisper-local" || provider === "local" ? "on-device" : provider;
+    const reason = provider !== "deepgram"
+      ? "Transcribe again needs the Deepgram engine — GVoice is set to " + engine + "."
+      : retryInFlight
+        ? "Already trying that one again — give it a few seconds."
+        : "That recording is gone — there's nothing left to retry.";
+    showPillResult("error", null, recordingPath, { reason });
+    return;
   }
+  await retranscribeRecording(recordingPath);
 }
 
 function setupIpc() {
@@ -1394,9 +1428,14 @@ function setupIpc() {
         // found words, found silence, or couldn't reach the engine at all).
         const recovered = failedPath ? await retranscribeRecording(failedPath) : null;
         // null = the retry never ran (nothing saved, one already in flight, or
-        // an on-device-only engine). It never touched the pill, so this path
-        // still has to say what happened instead of leaving "Transcribing…" up.
-        if (recovered === null) showPillResult("error", null, failedPath, { reason: "No speech detected." });
+        // a non-Deepgram engine). It never touched the pill, so this path still
+        // has to say what happened instead of leaving "Transcribing…" up —
+        // unless a new press has taken the pill since (saving the clip and the
+        // retry both take long enough for that), in which case this stale "No
+        // speech detected." would paint over a live "Listening…".
+        if (recovered === null && pillFree()) {
+          showPillResult("error", null, failedPath, { reason: "No speech detected." });
+        }
         // The retry logs its own history entry when it recovers text; otherwise
         // record the failed attempt so the clip stays playable from the tray.
         if (!recovered) {
@@ -1446,10 +1485,11 @@ function setupIpc() {
         // gone.
         recordTranscript(result.text, result.pasted, recordingPath);
         rebuildTrayMenu();
-        // Failed paste: also put the text on the clipboard so it's recoverable
+        // Failed paste — or one that read back as missing from a field with
+        // other text in it: leave the text on the clipboard so it's recoverable
         // with ⌘V even if the pill is missed. Delayed past typeText's 250ms
         // clipboard restore, which would otherwise overwrite it.
-        if (!result.pasted) {
+        if (!result.pasted || result.likelyMissed) {
           const lostText = result.text;
           setTimeout(() => { try { clipboard.writeText(lostText); } catch {} }, 450);
         }
@@ -1488,8 +1528,9 @@ function setupIpc() {
     const reason = (payload && payload.reason) || "Couldn't transcribe.";
     const recovered = recordingPath ? await retranscribeRecording(recordingPath) : null;
     // null = no retry happened (see retranscribeRecording) — show the
-    // renderer's plain-English reason rather than a pill stuck on "Transcribing…".
-    if (recovered === null) showPillResult("error", null, recordingPath, { reason });
+    // renderer's plain-English reason rather than a pill stuck on "Transcribing…",
+    // but only if a new press hasn't claimed the pill in the meantime.
+    if (recovered === null && pillFree()) showPillResult("error", null, recordingPath, { reason });
     if (!recovered && recordingPath) {
       recordTranscript("", false, recordingPath);
       rebuildTrayMenu();

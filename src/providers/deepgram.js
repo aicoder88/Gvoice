@@ -21,6 +21,12 @@ import * as vocab from "../vocab.js";
 
 const AUTO_LANGUAGES = ["hr", "en"];
 
+// One wording for "your key was refused", shared by the streaming leg and the
+// batch retry — the two paths hit it for the same reason (the shipped fallback
+// key in realtime-relay.js having been revoked) and must not disagree about
+// what the user should do.
+const KEY_REJECTED = "Deepgram rejected the key. Add your own DEEPGRAM_API_KEY in Settings.";
+
 // WebSocket.readyState numbers, for log lines a human has to read at 2am.
 const READY_STATE_NAMES = ["connecting", "open", "closing", "closed"];
 
@@ -174,7 +180,7 @@ export function attach(clientSocket, { apiKey, model, language }) {
       // raw socket text ("Unexpected server response: 401") tells the user
       // nothing they can act on, so say what to do instead.
       const message = String(error.message || "").includes("401")
-        ? "Deepgram rejected the key. Add your own DEEPGRAM_API_KEY in Settings."
+        ? KEY_REJECTED
         : "Deepgram: " + error.message;
       sendToClient(clientSocket, { type: "local.error", message });
     });
@@ -321,6 +327,27 @@ export function attach(clientSocket, { apiKey, model, language }) {
       setTimeout(() => { try { leg.dgSocket.close(); } catch {} }, 200);
     }
   });
+}
+
+/**
+ * Why a batch retry failed, in words the user can act on.
+ *
+ * Every failure used to read "check your internet", which is wrong for most of
+ * them: a 401 (revoked key) is not a network problem, and pointing someone at a
+ * working connection leaves them with no way out.
+ *
+ * @param {any} error  the throw from transcribeWavFile
+ * @returns {string}
+ */
+export function batchFailureReason(error) {
+  const status = error && error.status;
+  if (status === 401 || status === 403) return KEY_REJECTED;
+  // 429/5xx survived withRetry's attempts, so it's their end, not the clip.
+  if (status === 429 || status >= 500) return "Deepgram is busy or down (error " + status + ") — try again shortly.";
+  if (status) return "Deepgram refused the clip (error " + status + ").";
+  const name = error && error.name;
+  if (name === "TimeoutError" || name === "AbortError") return "Retry timed out — the connection stalled.";
+  return "Retry failed — check your internet.";
 }
 
 /**

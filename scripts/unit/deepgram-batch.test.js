@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { writeFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { transcribeWavFile } from "../../src/providers/deepgram.js";
+import { transcribeWavFile, batchFailureReason } from "../../src/providers/deepgram.js";
 
 const wav = join(mkdtempSync(join(tmpdir(), "gvoice-")), "clip.wav");
 writeFileSync(wav, Buffer.from("RIFF____WAVEfmt "));
@@ -68,4 +68,23 @@ test("retries a transient upload timeout instead of losing the dictation", async
 test("silence comes back as empty string, not a crash", async () => {
   stubFetch([{ status: 200, body: { results: { channels: [{ alternatives: [{ transcript: "" }] }] } } }]);
   assert.equal(await transcribeWavFile(wav, { apiKey: "k", language: "en" }), "");
+});
+
+// A revoked key used to show "check your internet" — sending the user to fix a
+// connection that was never broken. Each failure has to name its own cause.
+test("a refused key says the key was refused, not that the internet is down", async () => {
+  stubFetch([{ status: 401, body: { err_msg: "Invalid credentials" } }]);
+  const error = await transcribeWavFile(wav, { apiKey: "bad", language: "en" }).catch((e) => e);
+  const reason = batchFailureReason(error);
+  assert.match(reason, /key/i);
+  assert.doesNotMatch(reason, /internet/i);
+});
+
+test("a network throw still points at the connection", () => {
+  assert.match(batchFailureReason(new TypeError("fetch failed")), /internet/i);
+});
+
+test("a stalled upload says it timed out", () => {
+  const timeout = Object.assign(new Error("aborted"), { name: "TimeoutError" });
+  assert.match(batchFailureReason(timeout), /timed out/i);
 });

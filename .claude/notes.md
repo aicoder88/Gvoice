@@ -478,3 +478,49 @@ same problem means the next app with a quiet composer needs another entry.
   dictation) but they do NOT reset HIDIdleTime — measured, idle kept climbing
   through both synthetic keys and synthetic mouse movement. Any future test of
   "user active + hook deaf" needs a real hand on the hardware.
+
+## 2026-07-30 (evening) — cold-press latency + the seven review findings
+
+- **Measured, on the running packaged build.** Cold press (mic idle-dropped),
+  key-down → first captured frame: **2939ms before, 456ms after**. Old
+  breakdown from the user's own log: 650ms IPC, +1356ms WS open, +2340ms relay
+  upstream, +2939ms mic actually open, pre-roll `0B`. Every word said in that
+  window was gone, which is exactly the "hold it several seconds before I start
+  talking" report.
+- **Why the socket stopped blocking the mic.** `startRecording` awaited
+  `ensureSocket()` *then* `initCapture()`. Nothing in the mic path needs the
+  socket: the relay queues binaries for its upstream leg, and the pre-roll flush
+  re-sends whatever the ring holds once the socket is up. Kicking the handshake
+  off and awaiting it after the mic is open makes the cost `max(mic, socket)`
+  instead of `mic + socket`.
+- **Why the pre-roll ring grows while `startInFlight`.** With the mic open first,
+  the ring is the ONLY place the opening words live until the socket is up. The
+  usual 600ms cap would clip a slow handshake. 20× (~12s) is a ceiling against a
+  hung handshake, not a target.
+- **The remaining 456ms is `getUserMedia` + worklet.** Unavoidable without
+  holding the mic open, which is the orange-dot complaint the idle drop exists
+  to answer. Not chased further.
+- **The batch retry is now Deepgram-only, not "any non-local engine".** An
+  OpenAI user's audio was being uploaded to api.deepgram.com with the shared
+  fallback key on every empty dictation. Cost of the fix: OpenAI users lose
+  automatic recovery — they get "No speech detected." and the pill, same as
+  before the retry existed.
+- **A retry that lost the pill no longer writes the clipboard either.** It could
+  land seconds after a *newer* dictation had already restored the user's
+  clipboard, silently replacing it with older text and no pill to explain it.
+  Rescued text still reaches history and the tray.
+- **Finding #4 was NOT fixed by restoring the `verified === false` downgrade** —
+  that's the bug aedc11c removed (seven false "paste failed" pills). Instead the
+  clipboard fallback arms on `likelyMissed` = read the field back, it had real
+  content, ours wasn't in it. All seven false positives read back EMPTY
+  (`readLen: 0`), so requiring content separates them. Reasoned from the logged
+  `readLen`, not reproduced.
+- **Muted mic arms the idle timer rather than dropping the stream.** Dropping it
+  would also drop it for someone who set `MIC_IDLE_MINUTES=never`, overriding an
+  explicit choice. Arming means the dot goes out on the user's own schedule.
+- **Verified by hand:** cold-press timing, warm-press pre-roll, the idle drop
+  itself, the auto-retry firing on an empty clip. **Not reproduced:** the
+  clipboard race, the pill stomp, the muted-mic dot (all need timing or hardware
+  I can't force); each was fixed from the code path, not from a repro.
+- **Tray icon not re-verified visually** — the display was asleep during the
+  test window and nothing in this change touches tray or startup code.
