@@ -437,3 +437,33 @@ same problem means the next app with a quiet composer needs another entry.
   `retranscribeOnDemand` only speaks up for the on-device-engine case. The text
   still reaches the clipboard and Recent dictations. Narrow; not worth a
   queue-and-replay.
+
+## Client-feedback pass — mic light, deaf hotkey, Mac local engine (30 Jul 2026)
+
+- **`powerMonitor.getSystemIdleTime()` is not Accessibility-gated.** Probed with
+  a throwaway ad-hoc-signed app bundle that had never been granted anything:
+  `isTrustedAccessibilityClient()` returned false, idle time still read fine.
+  That's what makes the deaf-hotkey watchdog's cross-check viable at all — if
+  the idle read had needed the same permission we were missing, the warning
+  could never have fired in the case it exists for.
+- **The "launched from an untrusted parent" repro produces the LOUD failure,
+  not the silent one.** Launching GVoice as a child of an unsigned app with no
+  Accessibility grant makes `uIOhook.start()` throw
+  `UIOHOOK_ERROR_AXAPI_DISABLED` — the path main.js already handles. So the
+  client's silent case is something else (a hook that started and then went
+  quiet), and the watchdog was verified by forcing `sawEvent` false in a
+  throwaway build rather than by reproducing the client's exact environment.
+- **Why the idle drop is armed in `finishUtterance`, not `stopRecording`.**
+  Same branch the cold-mode teardown already lived in, and it's after the tail
+  drain and the commit. Arming on key-release would arm mid-drain.
+- **Why the idle timer re-checks at 5s instead of just firing.** `captureBusy` /
+  `recovering` / a live hold all mean a teardown would land under an in-flight
+  rebuild (the stacked-graph bug the codebase already guards against). Re-arming
+  for the full idle period on a busy tick would instead push the drop out by
+  minutes.
+- **Dedup vs the old key.** `MIC_ALWAYS_ON` is still read when
+  `MIC_IDLE_MINUTES` is absent, so an existing install keeps its behaviour. The
+  live `.env` here now carries both (new key wins in the new build; the old
+  `/Applications` build still honours the old one).
+- **Rejected:** shipping a `GVOICE_FORCE_DEAF_HOTKEY` test seam. It would ship a
+  fake-failure switch forever to save one temporary build during verification.
