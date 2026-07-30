@@ -518,7 +518,13 @@ async function buildCaptureGraph(deviceId = null) {
     // Maintain the rolling pre-roll window regardless of recording state.
     prerollChunks.push(pcm16);
     prerollBytes += pcm16.byteLength;
-    while (prerollBytes > PREROLL_MAX_BYTES && prerollChunks.length > 1) {
+    // While a press is still starting up, this ring is the ONLY place the
+    // user's opening words live — the socket isn't open yet, so nothing is
+    // streaming. Hold the whole startup window rather than the usual 600ms, so
+    // a slow handshake can't clip what they already said. The bigger cap is a
+    // ceiling, not a target: a hung handshake stops at ~12s of audio.
+    const cap = startInFlight ? PREROLL_MAX_BYTES * 20 : PREROLL_MAX_BYTES;
+    while (prerollBytes > cap && prerollChunks.length > 1) {
       prerollBytes -= prerollChunks.shift().byteLength;
     }
     // Always track the loudest frame for liveness probing — this runs whether or
@@ -814,6 +820,12 @@ async function recoverMic(reason) {
       // the last candidate tried). Tell the user to unmute instead of escalating.
       if (recoveryMutedSeen) {
         log("Mic appears muted — warning instead of escalating");
+        // The probe loop left that muted device's stream open, and macOS lights
+        // the orange dot for any open stream — so bailing out here without the
+        // idle clock would leave the dot burning forever over a mic that is
+        // delivering nothing. Arm it like the recovered path does; the next
+        // press rebuilds either way.
+        armIdleTimer();
         // Replace any pending generic "disconnected" notice with this specific
         // (and actionable) one rather than letting both fire.
         clearPendingMicWarning();
@@ -888,14 +900,18 @@ async function startRecording(profile) {
   }
 
   setStatus("Connecting…");
-  try {
-    await ensureSocket();
-  } catch {
-    setStatus("WS failed");
-    startInFlight = false;
-    window.dictationBridge.sendError("Dictation couldn't start — quit GVoice and reopen it, then try again.");
-    return;
-  }
+  // Start the handshake but DON'T wait on it before opening the mic. On a cold
+  // press (idle-dropped or cold mode) the measured cost was ~2.9s from key-down
+  // to the first captured frame — ~2.3s of it this socket — and every word said
+  // in that window was simply gone. Opening the mic alongside the handshake
+  // means the pre-roll ring is already filling while the socket connects, and
+  // the flush below sends that audio the moment it's open. The relay queues
+  // frames for its upstream leg, so nothing here depends on Deepgram/OpenAI
+  // being connected yet either.
+  const socketReady = ensureSocket();
+  // Awaited below — attach a no-op catch now so a failure while we're opening
+  // the mic isn't an unhandled rejection.
+  socketReady.catch(() => {});
 
   // Did THIS press have to open the mic itself — because nothing was warm (cold
   // mode, or the idle timer dropped it) or because the warm graph is stale and
@@ -931,13 +947,24 @@ async function startRecording(profile) {
     return;
   }
 
-  utterancePeak = 0;
   // Opened the mic on this press: restart the hold clock now that the device is
   // actually open. Opening it can eat a few hundred ms, and the dead-mic check
   // reads "held ≥1s but almost no audio" as a wedged pipeline — timing from the
   // key press would let a short hold on a slow-to-open mic fake that verdict.
   if (wasCold) holdStartedAt = Date.now();
 
+  // The mic is open and the ring is filling — now wait out whatever is left of
+  // the handshake.
+  try {
+    await socketReady;
+  } catch {
+    setStatus("WS failed");
+    startInFlight = false;
+    window.dictationBridge.sendError("Dictation couldn't start — quit GVoice and reopen it, then try again.");
+    return;
+  }
+
+  utterancePeak = 0;
   transcriptParts = [];
   alreadyFinalized = false;
   gotTerminalEvent = false;
