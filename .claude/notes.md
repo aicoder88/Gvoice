@@ -268,8 +268,16 @@ not write a confident story for it.
 - Clicked the pill's new "Transcribe again" button (nut-js real mouse move + click): second
   `retranscribe` entry at 13:23:07. Pill renders all four buttons + ✕ at width 700, nothing
   clipped; the reason label wraps to two lines and stays fully readable.
-- unit 131/131 (4 new). parity 3/3 runnable — "deepgram completes one utterance" still passes,
+- unit 127/127 (4 new). parity 3/3 runnable — "deepgram completes one utterance" still passes,
   so the safety-timer refactor didn't break the normal streaming path.
 - The slow-handshake race itself is NOT reproducible on demand (needs Deepgram to take >3s to
   connect). Fix is verified by reasoning against the log + the unchanged parity pass, not by a
   live repro.
+- Post-review fixes, re-verified: `dictation:failure` no longer flashes its own pill before the
+  retry (that also left a 45s safety-hide timer armed under the retry's states — only hidePill()
+  clears it); the retry owns the pill whenever a clip exists. A `retryInFlight` guard makes a
+  second tray click a no-op — confirmed: two triggers 1s apart produced ONE retranscribe entry.
+  `DictationSession.fail()` is finalize()+done(), so awaiting the retry after it can't wedge the
+  state machine.
+- Side effect worth knowing: a successful retry writes a NEW history entry, so retrying an old
+  clip shows up at the retry's timestamp, not the original dictation's.

@@ -1155,8 +1155,14 @@ async function saveTempRecording(chunks, sampleRate) {
 //
 // @param {string | null} recordingPath
 // @returns {Promise<string>} the recovered text, or "" if the retry found none
+let retryInFlight = false;
 async function retranscribeRecording(recordingPath) {
   if (!recordingPath || !existsSync(recordingPath)) return "";
+  // The tray offers this on every saved clip, so two retries can be started
+  // seconds apart — they'd fight over the pill and both write history. One at a
+  // time; the second click is a no-op rather than a race.
+  if (retryInFlight) return "";
+  retryInFlight = true;
   const t0 = Date.now();
   setPillState("transcribing");
   pillWindow?.showInactive();
@@ -1183,6 +1189,8 @@ async function retranscribeRecording(recordingPath) {
     dlog("retranscribe-failed", { path: recordingPath, error: String(detail) });
     showPillResult("error", null, recordingPath, { reason: "Retry failed — check your internet." });
     return "";
+  } finally {
+    retryInFlight = false;
   }
 }
 
@@ -1303,12 +1311,17 @@ function setupIpc() {
     // The renderer sends a plain-English reason ("didn't respond in time", "lost
     // the connection…"); show it on the pill. No transcript to copy; the
     // recording is what we offer. Logged in history too for tray playback.
-    const reason = (payload && payload.reason) || (recordingPath ? "Couldn't transcribe — recording saved." : "Couldn't transcribe.");
-    showPillResult("error", null, recordingPath, { reason });
     // Same second chance as the empty-transcript path: the stream died, but the
-    // saved audio can still go to the batch API.
-    const recovered = recordingPath ? await retranscribeRecording(recordingPath) : "";
-    if (recordingPath && !recovered) {
+    // saved audio can still go to the batch API — and when there IS a clip to
+    // retry, that retry owns the pill start to finish. Flashing this handler's
+    // reason first would be replaced within a frame AND would leave its own
+    // 45s safety-hide timer armed behind the retry's shorter states.
+    if (!recordingPath) {
+      const reason = (payload && payload.reason) || "Couldn't transcribe.";
+      showPillResult("error", null, null, { reason });
+      return;
+    }
+    if (!(await retranscribeRecording(recordingPath))) {
       recordTranscript("", false, recordingPath);
       rebuildTrayMenu();
     }
