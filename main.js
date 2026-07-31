@@ -803,20 +803,26 @@ function openDictionaryWindow() {
 // the user pick the speech engine, default language, cleanup, API keys, and
 // recording privacy without hand-editing the .env file. `firstRun` shows a short
 // welcome line; `reason` (optional) explains what's missing.
-// A speech model the speed test pulled down that wasn't on disk before. The
+// Speech models the speed test pulled down that weren't on disk before. The
 // download happens BEFORE the test can run, so a user who then keeps a cloud
 // engine — or just closes Settings — would otherwise be left with a 57 MB-1 GB
-// file and no UI to remove it. Cleared (file kept) the moment the on-device
-// engine is actually applied. Only ever this one path: never a MODELS_DIR sweep,
-// because in a dev launch MODELS_DIR is the repo's own models/ folder.
-let benchDownloadedModel = null;
+// file and no UI to remove it. A SET, not one slot: the Settings dropdown shows
+// each model's measured time, so testing several to compare them is the normal
+// flow, and one slot would silently strand every model but the last. Entries are
+// dropped (file kept) only for the model actually applied as the engine. Only
+// ever these paths: never a MODELS_DIR sweep, because in a dev launch MODELS_DIR
+// is the repo's own models/ folder.
+/** @type {Set<string>} */
+const benchDownloadedModels = new Set();
 let benchmarkInFlight = false;
 
-/** Bin an unused benchmark download. No-op while the test is still running. */
-function dropUnusedBenchModel() {
-  if (!benchDownloadedModel || benchmarkInFlight) return;
-  try { unlinkSync(benchDownloadedModel); } catch {}
-  benchDownloadedModel = null;
+/** Bin every unused benchmark download. No-op while a test is still running. */
+function dropUnusedBenchModels() {
+  if (benchmarkInFlight) return;
+  for (const path of benchDownloadedModels) {
+    try { unlinkSync(path); } catch {}
+  }
+  benchDownloadedModels.clear();
 }
 
 function openSettingsWindow(opts = {}) {
@@ -849,7 +855,7 @@ function openSettingsWindow(opts = {}) {
   });
   // Closing the window without answering "on-device or cloud?" is the other way
   // a downloaded-but-unused model gets stranded on disk.
-  settingsWindow.on("closed", () => { settingsWindow = null; dropUnusedBenchModel(); });
+  settingsWindow.on("closed", () => { settingsWindow = null; dropUnusedBenchModels(); });
   settingsWindow.webContents.once("did-finish-load", () => {
     if (settingsWindow && !settingsWindow.isDestroyed()) {
       settingsWindow.focus();
@@ -1887,7 +1893,7 @@ function setupIpc() {
       send(`Downloading the speech model (${sizeMB} MB)…`);
       // Note whether this test is about to fetch the model, so a "keep cloud"
       // answer can put the disk back the way it found it.
-      if (!existsSync(join(MODELS_DIR, modelName))) benchDownloadedModel = join(MODELS_DIR, modelName);
+      if (!existsSync(join(MODELS_DIR, modelName))) benchDownloadedModels.add(join(MODELS_DIR, modelName));
       const model = await ensureModel(modelName, MODELS_DIR, {
         onProgress: (p) => send(`Downloading the speech model (${sizeMB} MB)…`, p)
       });
@@ -1912,9 +1918,11 @@ function setupIpc() {
     // both to known allow-lists so a stray value can't point the engine elsewhere.
     if (!VALID_PROVIDERS.has(provider)) return { error: "Unknown engine." };
     // Going (or staying) cloud: bin the model the speed test just downloaded.
-    // Going local keeps it — it's about to be the engine.
-    if (provider !== "whisper-local") dropUnusedBenchModel();
-    else benchDownloadedModel = null;
+    // Going local keeps it — it's about to be the engine. The "stop tracking it"
+    // half waits until after the checks below: an apply that bails out (or one
+    // that keeps a hand-edited off-list model) leaves the download unused, and
+    // forgetting it here would strand up to 1 GB with no UI to remove it.
+    if (provider !== "whisper-local") dropUnusedBenchModels();
     /** @type {Record<string,string>} */
     const patch = { STT_PROVIDER: provider };
     if (provider === "whisper-local" && payload && payload.modelName) {
@@ -1947,6 +1955,10 @@ function setupIpc() {
         else if (process.platform === "darwin") return { error: LOCAL_ENGINE_INSTALL_HINT };
       }
     }
+    // Past every check: only the model actually becoming the engine is kept. Any
+    // OTHER model the user speed-tested to compare stays tracked and gets binned
+    // when Settings closes.
+    if (patch.WHISPER_MODEL) benchDownloadedModels.delete(patch.WHISPER_MODEL);
     try {
       writeEnvFile(envPath, patch);
     } catch (err) {
