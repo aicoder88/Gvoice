@@ -78,9 +78,22 @@ voice. The Deepgram path was untouched by this change.
 
 - `/Users/macpro/dev/voice/dist` — 586 MB of build output, including a stale
   `GVoice-previous-2026-07-30.app`. Not models.
-- The installed `/Applications/GVoice.app` is the **previous** build, and is
-  running again now. The fix is committed (`8ce4bbe`, `dbe5412`) but is not in
-  the app used daily until a `pnpm build` + reinstall. Nothing pushed.
+- `/Users/macpro/dev/voice/dist` — build output, now ~890 MB: it holds the
+  `mac-arm64` build plus two parked rollback copies,
+  `GVoice-previous-2026-07-30.app` and `GVoice-previous-2026-07-31.app`. Safe to
+  delete once the new build has a few days of use.
+
+## Rebuild and install
+
+`pnpm build` → `dist/mac-arm64/GVoice.app`, verified to contain the fix
+(`dropUnusedBenchModel` present in the packed `app.asar`). The previous
+`/Applications/GVoice.app` was moved to `dist/GVoice-previous-2026-07-31.app` as
+a rollback, and the new build copied into `/Applications`.
+
+Checked on the installed build: menu-bar icon present, click-to-talk started and
+stopped a dictation (orange mic indicator on then off), app-support `models/`
+folder still empty — nothing downloaded on launch. Commits `8ce4bbe`, `dbe5412`,
+`ce7d78f`. Nothing pushed.
 
 Test residue removed afterwards: the `WHISPER_MODEL` / `WHISPER_BIN` lines the
 apply steps wrote into the repo `.env`, `STT_PROVIDER` back to `deepgram` in both
