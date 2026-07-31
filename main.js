@@ -1791,6 +1791,12 @@ function setupIpc() {
   //             installed once by the user; we only locate it.
   //   Linux   — not wired up.
   let benchmarkInFlight = false;
+  // A model the speed test pulled down that wasn't here before. If the user then
+  // keeps a cloud engine, that file is dead weight (500 MB+) with no UI to remove
+  // it, so engine:apply deletes it. Only ever the one file this run downloaded —
+  // never a directory sweep, because in a dev launch MODELS_DIR is the repo's own
+  // models/ folder.
+  let benchDownloadedModel = null;
   ipcMain.handle("engine:probe", () => {
     const probe = probeCapability();
     const local = localEngineState();
@@ -1847,6 +1853,9 @@ function setupIpc() {
       // 2) The speech model (only downloaded if missing).
       const sizeMB = MODELS[modelName] ? MODELS[modelName].sizeMB : "?";
       send(`Downloading the speech model (${sizeMB} MB)…`);
+      // Note whether this test is about to fetch the model, so a "keep cloud"
+      // answer can put the disk back the way it found it.
+      if (!existsSync(join(MODELS_DIR, modelName))) benchDownloadedModel = join(MODELS_DIR, modelName);
       const model = await ensureModel(modelName, MODELS_DIR, {
         onProgress: (p) => send(`Downloading the speech model (${sizeMB} MB)…`, p)
       });
@@ -1870,6 +1879,12 @@ function setupIpc() {
     // persisted to .env and (for the model) becomes a child-process arg — keep
     // both to known allow-lists so a stray value can't point the engine elsewhere.
     if (!VALID_PROVIDERS.has(provider)) return { error: "Unknown engine." };
+    // Going (or staying) cloud: bin the model the speed test just downloaded.
+    // Going local keeps it — it's about to be the engine.
+    if (provider !== "whisper-local" && benchDownloadedModel) {
+      try { unlinkSync(benchDownloadedModel); } catch {}
+    }
+    benchDownloadedModel = null;
     /** @type {Record<string,string>} */
     const patch = { STT_PROVIDER: provider };
     if (provider === "whisper-local" && payload && payload.modelName) {
