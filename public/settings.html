@@ -415,15 +415,36 @@
       }
 
       // ---- on-device engine panel (ported from prior settings) ----
-      let lastBenchModel = null;
       let knownModels = {};
+      // Speed-test results this session, keyed by model name. Kept so testing a
+      // second model doesn't erase the first one's number — the whole point of
+      // the list is comparing them. Not persisted: the numbers are only true for
+      // this machine in its current state, and a stale one would mislead.
+      const benchResults = {};
       // An off-list model (a hand-edited WHISPER_MODEL) is shown in the dropdown
       // so the user can see what is in use, but must never be SENT: the main
       // process only accepts allow-listed names and would reject the whole
       // apply. Sending nothing keeps the model already configured.
+      // Reads the dropdown, and only the dropdown: whatever the box shows is
+      // what gets applied. Preferring the last-tested model instead meant that
+      // changing the picker after a test silently applied the older choice.
       function chosenModelName() {
-        const name = lastBenchModel || el("localModel").value;
+        const name = el("localModel").value;
         return Object.hasOwn(knownModels, name) ? name : undefined;
+      }
+      // "Base — smallest and fastest (57 MB)", plus this machine's measured time
+      // once the speed test has run on it.
+      function optionLabel(name) {
+        const m = knownModels[name] || {};
+        const v = benchResults[name];
+        return `${m.label || name} (${m.sizeMB} MB)`
+          + (v ? ` — ${(v.elapsedMs / 1000).toFixed(1)}s here` : "");
+      }
+      // Repaint the labels in place, keeping the current selection.
+      function relabelOptions() {
+        for (const opt of el("localModel").options) {
+          if (Object.hasOwn(knownModels, opt.value)) opt.textContent = optionLabel(opt.value);
+        }
       }
       window.settingsBridge.onEngineProgress((p) => {
         el("engineStage").textContent = p.stage || "Working…";
@@ -455,8 +476,8 @@
         knownModels = info.models || {};
         const sel = el("localModel");
         sel.textContent = "";
-        for (const [name, m] of Object.entries(knownModels)) {
-          sel.add(new Option(`${m.label || name} (${m.sizeMB} MB)`, name));
+        for (const name of Object.keys(knownModels)) {
+          sel.add(new Option(optionLabel(name), name));
         }
         if (info.recommendedModel) sel.value = info.recommendedModel;
         // A hand-edited WHISPER_MODEL can point at a file that isn't on the
@@ -470,7 +491,7 @@
         }
       }
       el("benchBtn").addEventListener("click", async () => {
-        const model = el("localModel").value; lastBenchModel = model;
+        const model = el("localModel").value;
         el("benchBtn").disabled = true; el("engineResult").style.display = "none";
         el("engineProgress").style.display = "block"; el("engineStage").textContent = "Getting ready…";
         el("engineBarWrap").style.display = "none";
@@ -481,6 +502,11 @@
         const box = el("engineResult"); box.style.display = "block";
         if (!res.ok) { box.className = "engineBox warn"; el("engineVerdict").textContent = res.error || "The speed test couldn't run."; return; }
         const v = res.verdict;
+        // Hang the number on the model it was measured for (res.modelName, not
+        // the box — the user may already have moved on) so the dropdown becomes
+        // the comparison table.
+        benchResults[res.modelName || model] = v;
+        relabelOptions();
         box.className = "engineBox " + (v.fastEnough ? "ok" : "warn");
         el("engineVerdict").textContent = v.reason;
         el("useLocalBtn").textContent = v.fastEnough ? "Use on-device (recommended)" : "Use on-device anyway";
