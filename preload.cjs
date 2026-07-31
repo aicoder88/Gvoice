@@ -5,7 +5,12 @@ const { contextBridge, ipcRenderer } = require("electron");
 // dictation:start profile and every terminal event echoes it back, so a late
 // error/failure can be told apart from one belonging to the live press. Kept
 // here rather than in dictation.js so no send site can forget it.
-let pressGen = 0;
+// null, not 0: main's generation starts at 1, so 0 would read as a real —
+// and permanently stale — press. This file re-executes whenever the renderer
+// reloads (the escalate-recovery path does exactly that) while main's counter
+// keeps climbing, and dropping the errors on THAT path is the worst time for
+// it. A non-number reads as unstamped and is always delivered.
+let pressGen = null;
 
 contextBridge.exposeInMainWorld("dictationBridge", {
   sendError: (message) => ipcRenderer.send("dictation:error", message, pressGen),

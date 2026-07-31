@@ -101,14 +101,18 @@ export class DictationSession {
    * over — the caller must not end the session or paint the pill on its behalf,
    * because both now belong to a newer press.
    *
-   * An unstamped event (undefined/non-numeric — a background mic warning raised
-   * outside any press) counts as current, so nothing is silently dropped.
+   * An unstamped event counts as current, so nothing is silently dropped: that
+   * covers a background mic warning raised outside any press, and a renderer
+   * that reloaded (escalate-recovery) and lost its stamp while this counter kept
+   * climbing. `generation` starts at 1 and only ever grows, so 0 can never be a
+   * real press either — it's a "never stamped" value, and the one that would
+   * otherwise mute the renderer permanently.
    *
    * @param {unknown} gen
    * @returns {boolean}
    */
   isStale(gen) {
-    return typeof gen === "number" && gen !== this.generation;
+    return typeof gen === "number" && gen > 0 && gen !== this.generation;
   }
 
   // Final transition: re-open the session for the next press. Call once the

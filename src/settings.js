@@ -113,8 +113,10 @@ export function writeEnvFile(path, patch) {
   const next = applyEnv(readEnvFile(path), patch);
   mkdirSync(dirname(path), { recursive: true });
   // Atomic write (tmp + rename): this file holds the API keys, and a truncated
-  // one costs the user every key they ever pasted in.
-  writeFileSync(path + ".tmp", next, "utf8");
+  // one costs the user every key they ever pasted in. The mode is explicit —
+  // writing in place preserves the existing file's permissions, but a fresh
+  // tmp inode would land at 0644 and rename that over the keys.
+  writeFileSync(path + ".tmp", next, { encoding: "utf8", mode: 0o600 });
   renameSync(path + ".tmp", path);
   return next;
 }

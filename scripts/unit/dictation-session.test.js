@@ -119,4 +119,9 @@ test("isStale() tells an overtaken press's terminal event from the live one", as
   assert.equal(s.isStale(firstPress), true, "the old press must not kill the live one");
   assert.equal(s.isStale(s.generation), false, "the live press still owns the session");
   assert.equal(s.isStale(undefined), false, "an unstamped event is never dropped");
+  // The renderer reloads on the escalate-recovery path, resetting its stamp
+  // while this counter keeps climbing. Whatever it sends before the next press
+  // must still get through — that path is when the user most needs the message.
+  assert.equal(s.isStale(null), false, "a renderer that has not seen a press yet must not be muted");
+  assert.equal(s.isStale(0), false, "0 is never a real press — treat it as unstamped, not stale");
 });

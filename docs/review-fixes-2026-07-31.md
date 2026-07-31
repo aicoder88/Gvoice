@@ -26,9 +26,22 @@ from. Fix:
   `reportFailure`. Kept in the preload rather than `public/dictation.js` so no
   send site can forget it.
 - `DictationSession.isStale(gen)` — new, one line — is true when the stamped
-  press is no longer the current one. An unstamped event (non-numeric `gen`, e.g.
-  a background mic warning raised outside any press) counts as current, so
-  nothing is silently dropped.
+  press is no longer the current one. An unstamped event counts as current, so
+  nothing is silently dropped: a background mic warning raised outside any
+  press, or a renderer that reloaded and lost its stamp.
+
+  The first cut of this got it wrong and would have been worse than the bug it
+  fixed. `pressGen` started at `0`, a number, so `isStale(0)` was *true* against
+  any real generation. `escalate-recovery` reloads the renderer, which
+  re-executes `preload.cjs` and resets the stamp to 0 while main's counter keeps
+  climbing — so every error and mic warning after a recovery reload would have
+  been dropped in silence, on exactly the path where the user most needs to see
+  one. Worse for `dictation:failure`: no `fail()` means `busy` sticks for the
+  full 25s backstop *and* the batch rescue is skipped, losing the transcript.
+  Fixed at both ends — `pressGen` is now `null`, and `isStale` requires
+  `gen > 0`, since `generation` starts at 1 and 0 can never name a real press.
+  A plain app restart does not catch this (main's counter is 0 too, so
+  `0 !== 0` is false); only the unit assertion does.
 - The three handlers still log, still save the clip, still fire the system mic
   notification. Only `fail()` and the pill are guarded.
 - `dictation:failure` additionally skips `retranscribeRecording()` when stale —
@@ -58,6 +71,10 @@ flag is enough.
 truncated env, so a crash or full disk during a save silently resets the whole
 dictionary — or costs every API key the user ever pasted in. Both now write
 `path + ".tmp"` and `renameSync`.
+
+The `.env` tmp write passes `mode: 0o600` explicitly. Writing in place preserves
+the existing file's permissions; a fresh tmp inode would be created at `0644`
+and renamed over the keys, quietly loosening them.
 
 ## Dropped — the finding did not hold
 
@@ -93,9 +110,14 @@ Rebuilt (`pnpm build`) and launched `dist/mac-arm64/GVoice.app`.
   `dictation-error {"message":"Offline — …","gen":5,"live":5}` — the stamp round
   trips through the preload correctly and the live error is *not* dropped. The
   next press was accepted as `gen:6`, so `fail()` still re-opened the session.
+- After the `pressGen` fix: rebuilt, relaunched, and redone. A normal press
+  (`gen:1`) returned a real 44-character transcript, and the forced offline error
+  logged `gen:2 live:2` — still delivered, not dropped.
 - No stray `.tmp` files left in the app's support folder.
-- `pnpm test:unit` 153/153. `pnpm test:parity` 3 pass, 3 skipped (no whisper
-  model on disk, no `OPENAI_API_KEY`) — same as before the change.
+- `pnpm test` — 153/153 unit, parity 3 pass and 3 skipped (no whisper model on
+  disk, no `OPENAI_API_KEY`), same as before the change. The
+  `isStale(0)` assertion was confirmed to fail without the fix and pass with it,
+  so it is a real regression guard rather than a passing tautology.
 
 **Not verified on a running page:** the worklet guard. Exercising it needs a
 real browser with microphone permission on the relay's demo page; the guard is a
