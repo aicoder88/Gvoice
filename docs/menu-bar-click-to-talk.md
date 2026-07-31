@@ -90,6 +90,27 @@ hotkey callbacks are one-liners that call them. `startDictation()` gained one
 guard the hotkey path used to get from `setupHotkey`'s early return:
 `if (!dictationWindow || dictationWindow.isDestroyed()) return false`.
 
+### The 90-second cut-off, and why the click path gets its own
+
+`MAX_HOLD_MS = 90000` is the lost-key-up safety net: if a push-to-talk hold
+never reports a release, end it rather than leave the session jammed. It never
+fires in real use because a hold is a few seconds.
+
+A toggle changes that. Click, talk, click — the user is invited to leave the mic
+open, and at 90 seconds it would cut off, transcribe, and paste half a sentence.
+So `startDictation()` now takes the ceiling as an argument. The hotkey keeps
+90s; a tray click gets `CLICK_MAX_HOLD_MS = 600000` (10 minutes). Still capped,
+so a forgotten "on" click can't hold the mic open all day, but well past any
+real dictation.
+
+### A click that can't start the mic opens the menu instead
+
+If `startDictation()` returns false — renderer gone, or the previous dictation
+still transcribing — the click pops the menu. Without this the icon would sit
+there doing nothing, which reads as a dead app. It also matters because the app
+is dockless (`LSUIElement`): with no window and no dock icon, the tray menu is
+the only route to Quit and Settings.
+
 ### Why a separate `trayHolding` flag
 
 `dictation.busy` cannot be the toggle state. It stays true through
@@ -112,6 +133,9 @@ typed {"len":73,"ms":621,"fieldFocused":true,"pasted":true,"verified":true,"targ
 
 and the document contained
 `Testing one two three. The quick brown fox jumps over the lazy dog again.`
+
+Repeated after the rebuild that added the longer click ceiling:
+`typed {"len":56,"ms":615,"fieldFocused":true,"pasted":true,"verified":true,"target":"textedit","readLen":57}`
 
 **Focus is not stolen.** The concern was that clicking a menu-bar item would
 make GVoice frontmost and the text would paste into the wrong place. Measured
@@ -137,8 +161,17 @@ clipboard into whatever is frontmost.
 
 The wiring is the standard Electron pattern (`tray.on("right-click", ...)` plus
 `popUpContextMenu`), and it is only reachable when no context menu is set,
-which is now the case. But it has not been seen working. Needs one human
-right-click on the icon to confirm the menu with **Quit** opens.
+which is now the case. But it has not been seen working.
+
+**This matters more than an unverified nicety.** Before the change, left-click
+opened the menu, so Quit was always one click away. Now left-click dictates, and
+the app is dockless — no window, no dock icon, so `buildAppMenu`'s Cmd+Q is not
+reachable either. If `right-click` turns out not to fire, the only ways out are
+the fallback above (click while the mic can't start) and Force Quit.
+
+Needs one human right-click on the icon to confirm the menu with **Quit** opens.
+If it doesn't, the fix is small — pop the menu on `double-click` as well — but
+it should be added against a real observation, not guessed at now.
 
 ## Other notes
 

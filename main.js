@@ -930,6 +930,11 @@ function updateTrayTooltip() {
 // ignored — the app looks dead while the process is healthy.
 const MAX_HOLD_MS = 90000;
 
+// The click-to-talk toggle has no key-up to lose, and it invites long, hands-off
+// dictations — 90s would cut the user off mid-sentence and paste half a thought.
+// Still capped, so a forgotten "on" click can't hold the mic open all day.
+const CLICK_MAX_HOLD_MS = 600000;
+
 // --- Deaf-hotkey watchdog -----------------------------------------------------
 // The failure this catches: the key hook STARTS cleanly and then delivers
 // nothing. A client hit it by launching GVoice from a terminal — on macOS the
@@ -1001,7 +1006,7 @@ function reportDeafHotkey() {
 // hotkey failed to arm, which is exactly when a clickable fallback matters.
 // Returns false if the press was rejected (previous dictation still in flight,
 // or no renderer to talk to).
-function startDictation() {
+function startDictation(/** @type {number} */ maxHoldMs = MAX_HOLD_MS) {
   if (!dictationWindow || dictationWindow.isDestroyed()) return false;
   if (!dictation.tryStart()) return false;
   // A new dictation supersedes any correction-watch window from the last
@@ -1019,7 +1024,7 @@ function startDictation() {
   // the same way a real release would (commit + transcribe + re-open the
   // session) so a dropped event can't jam dictation until the next quit.
   if (maxHoldTimer) clearTimeout(maxHoldTimer);
-  maxHoldTimer = setTimeout(() => fireRelease("max-hold"), MAX_HOLD_MS);
+  maxHoldTimer = setTimeout(() => fireRelease("max-hold"), maxHoldMs);
   return true;
 }
 
@@ -2106,7 +2111,11 @@ function createTray() {
   tray.on("click", (/** @type {import("electron").KeyboardEvent} */ event) => {
     if (event && event.ctrlKey) { if (trayMenu) tray?.popUpContextMenu(trayMenu); return; }
     if (trayHolding) { fireRelease("tray"); return; }
-    if (startDictation()) trayHolding = true;
+    if (startDictation(CLICK_MAX_HOLD_MS)) { trayHolding = true; return; }
+    // Nothing to record — the renderer is gone, or the last dictation is still
+    // transcribing. A click that does nothing looks like a dead app, and with no
+    // dock icon and no window the menu is the only way to reach Quit or Settings.
+    if (trayMenu) tray?.popUpContextMenu(trayMenu);
   });
   // Read trayMenu at click time, not capture it — rebuildTrayMenu replaces it
   // after every dictation.
