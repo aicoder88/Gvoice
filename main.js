@@ -796,6 +796,22 @@ function openDictionaryWindow() {
 // the user pick the speech engine, default language, cleanup, API keys, and
 // recording privacy without hand-editing the .env file. `firstRun` shows a short
 // welcome line; `reason` (optional) explains what's missing.
+// A speech model the speed test pulled down that wasn't on disk before. The
+// download happens BEFORE the test can run, so a user who then keeps a cloud
+// engine — or just closes Settings — would otherwise be left with a 57 MB-1 GB
+// file and no UI to remove it. Cleared (file kept) the moment the on-device
+// engine is actually applied. Only ever this one path: never a MODELS_DIR sweep,
+// because in a dev launch MODELS_DIR is the repo's own models/ folder.
+let benchDownloadedModel = null;
+let benchmarkInFlight = false;
+
+/** Bin an unused benchmark download. No-op while the test is still running. */
+function dropUnusedBenchModel() {
+  if (!benchDownloadedModel || benchmarkInFlight) return;
+  try { unlinkSync(benchDownloadedModel); } catch {}
+  benchDownloadedModel = null;
+}
+
 function openSettingsWindow(opts = {}) {
   // Accessory app (Dock hidden) — pull the app forward so the text fields accept
   // typing, same as the dictionary window.
@@ -824,7 +840,9 @@ function openSettingsWindow(opts = {}) {
       preload: join(__dirname, "preload-settings.cjs")
     }
   });
-  settingsWindow.on("closed", () => { settingsWindow = null; });
+  // Closing the window without answering "on-device or cloud?" is the other way
+  // a downloaded-but-unused model gets stranded on disk.
+  settingsWindow.on("closed", () => { settingsWindow = null; dropUnusedBenchModel(); });
   settingsWindow.webContents.once("did-finish-load", () => {
     if (settingsWindow && !settingsWindow.isDestroyed()) {
       settingsWindow.focus();
@@ -1790,13 +1808,6 @@ function setupIpc() {
   //   macOS   — Homebrew's whisper-cpp (ships whisper-cli AND whisper-server),
   //             installed once by the user; we only locate it.
   //   Linux   — not wired up.
-  let benchmarkInFlight = false;
-  // A model the speed test pulled down that wasn't here before. If the user then
-  // keeps a cloud engine, that file is dead weight (500 MB+) with no UI to remove
-  // it, so engine:apply deletes it. Only ever the one file this run downloaded —
-  // never a directory sweep, because in a dev launch MODELS_DIR is the repo's own
-  // models/ folder.
-  let benchDownloadedModel = null;
   ipcMain.handle("engine:probe", () => {
     const probe = probeCapability();
     const local = localEngineState();
@@ -1881,10 +1892,8 @@ function setupIpc() {
     if (!VALID_PROVIDERS.has(provider)) return { error: "Unknown engine." };
     // Going (or staying) cloud: bin the model the speed test just downloaded.
     // Going local keeps it — it's about to be the engine.
-    if (provider !== "whisper-local" && benchDownloadedModel) {
-      try { unlinkSync(benchDownloadedModel); } catch {}
-    }
-    benchDownloadedModel = null;
+    if (provider !== "whisper-local") dropUnusedBenchModel();
+    else benchDownloadedModel = null;
     /** @type {Record<string,string>} */
     const patch = { STT_PROVIDER: provider };
     if (provider === "whisper-local" && payload && payload.modelName) {
