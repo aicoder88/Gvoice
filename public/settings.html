@@ -416,6 +416,15 @@
 
       // ---- on-device engine panel (ported from prior settings) ----
       let lastBenchModel = null;
+      let knownModels = {};
+      // An off-list model (a hand-edited WHISPER_MODEL) is shown in the dropdown
+      // so the user can see what is in use, but must never be SENT: the main
+      // process only accepts allow-listed names and would reject the whole
+      // apply. Sending nothing keeps the model already configured.
+      function chosenModelName() {
+        const name = lastBenchModel || el("localModel").value;
+        return Object.hasOwn(knownModels, name) ? name : undefined;
+      }
       window.settingsBridge.onEngineProgress((p) => {
         el("engineStage").textContent = p.stage || "Working…";
         const wrap = el("engineBarWrap");
@@ -443,9 +452,10 @@
         suggest.textContent = (info.suggestion ? info.suggestion.text : "")
           + (info.localEngineHint ? " " + info.localEngineHint : "");
         // Build the list from MODELS so adding a model is a one-place change.
+        knownModels = info.models || {};
         const sel = el("localModel");
         sel.textContent = "";
-        for (const [name, m] of Object.entries(info.models || {})) {
+        for (const [name, m] of Object.entries(knownModels)) {
           sel.add(new Option(`${m.label || name} (${m.sizeMB} MB)`, name));
         }
         if (info.recommendedModel) sel.value = info.recommendedModel;
@@ -453,7 +463,7 @@
         // list (the bundled ggml-small.en, say). Show it rather than silently
         // selecting something else — assigning an unknown value blanks the box.
         if (info.currentModel) {
-          if (!Object.hasOwn(info.models || {}, info.currentModel)) {
+          if (!Object.hasOwn(knownModels, info.currentModel)) {
             sel.add(new Option(info.currentModel, info.currentModel));
           }
           sel.value = info.currentModel;
@@ -481,7 +491,7 @@
         box.className = "engineBox warn"; el("engineVerdict").textContent = message;
       }
       el("useLocalBtn").addEventListener("click", async () => {
-        const res = await window.settingsBridge.engineApply({ provider: "whisper-local", modelName: lastBenchModel || el("localModel").value });
+        const res = await window.settingsBridge.engineApply({ provider: "whisper-local", modelName: chosenModelName() });
         if (res && res.error) { showEngineError(res.error); return; }
         fill(res); setStatus("On-device engine set as your default.", true);
       });
