@@ -1094,7 +1094,7 @@ function openAccessibilitySettings() {
 //
 // @param {string} transcript
 // @param {number | null} [restoreHwnd]
-// @returns {Promise<{ text: string, pasted: boolean, verified: boolean | null, likelyMissed: boolean } | null>}
+// @returns {Promise<{ text: string, pasted: boolean, verified: boolean | null, likelyMissed: boolean, notice: string } | null>}
 async function processTranscript(transcript, restoreHwnd = null) {
   if (!transcript || !transcript.trim()) return null;
   let textToType = stripWhisperNoiseTokens(transcript.trim());
@@ -1135,6 +1135,11 @@ async function processTranscript(transcript, restoreHwnd = null) {
      hasOrdinal ||
      commaCount >= 4 ||
      hasRetraction);
+  // Set when the cleanup pass gave up and the raw transcript went through
+  // instead — most often the free tier's per-minute cap. Carried out to the
+  // success pill so the user SEES which dictations were typed unformatted; the
+  // system notification below still fires only once per run.
+  let cleanupNotice = "";
   if (cleanupEnabled && needsCleanup) {
     const t0 = Date.now();
     try {
@@ -1144,7 +1149,9 @@ async function processTranscript(transcript, restoreHwnd = null) {
       // polishTranscript swallows its own errors and returns the raw text, so a
       // permanently dead cleanup engine looks exactly like a working one with
       // nothing to fix. Say it out loud once instead of only in a console log.
-      showCleanupWarning(takeCleanupError());
+      cleanupNotice = takeCleanupError() || "";
+      if (cleanupNotice) dlog("cleanup-notice", cleanupNotice);
+      showCleanupWarning(cleanupNotice);
     } catch (error) {
       console.error("[main] Cleanup pass failed, using raw:", error.message);
     }
@@ -1261,7 +1268,7 @@ async function processTranscript(transcript, restoreHwnd = null) {
   // its composer), so requiring content separates them. Not enough to show an
   // error, but enough to leave the text on the clipboard so ⌘V rescues it.
   const likelyMissed = pasted && verified === false && (readLen || 0) > 0;
-  return { text: textToType, pasted, verified, likelyMissed };
+  return { text: textToType, pasted, verified, likelyMissed, notice: cleanupNotice };
 }
 
 // How many recent recordings to keep on disk — matched to the history length so
@@ -1500,10 +1507,14 @@ function setupIpc() {
           recordingPath,
           {
             // Only the hard-miss case gets an explanatory reason; a confirmed
-            // success keeps the plain "Success" label.
+            // success keeps the plain "Success" label — unless cleanup gave up
+            // on this one, in which case say so, because the text just went in
+            // exactly as spoken.
             // Action first: the label can ellipsize, so the instruction must
             // survive truncation.
-            reason: result.pasted ? "" : "Click Copy — the paste didn't land."
+            reason: result.pasted ? result.notice : "Click Copy — the paste didn't land.",
+            // A notice needs reading time; a bare "Success" doesn't.
+            holdMs: result.pasted && result.notice ? 6000 : undefined
           }
         );
         // Keep the last 50 dictations on disk and in the tray menu, so a

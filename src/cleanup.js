@@ -194,6 +194,12 @@ let lastCleanupError = null;
 let transientFailures = 0;
 const TRANSIENT_FAILURES_BEFORE_WARNING = 3;
 
+// Shown when the free tier's per-minute cap sends back a 429. Plain words, and
+// short enough to fit the pill: the shipped Groq key allows ~12k tokens/minute
+// and one cleanup costs ~2.2k, so about five dictations a minute. Past that the
+// text is pasted exactly as spoken until the minute rolls over.
+const FREE_LIMIT_MESSAGE = "Hit the free tidy-up limit — typed as you said it. Clears in a minute.";
+
 /**
  * Most recent cleanup failure, consumed (cleared) by the caller so one outage
  * is announced once rather than on every utterance.
@@ -308,14 +314,16 @@ export async function polishTranscript(rawText) {
     if (error instanceof RetryableHttpError || error instanceof HttpError) {
       console.error(`Cleanup HTTP ${error.status} (${providerName}/${model}): ${error.body}`);
       // A 404/401 is the engine actually broken (model retired, key revoked) and
-      // stays broken — report it on the first hit. A 429 is the shared free key's
-      // per-minute limit, which clears on its own; one is noise. But this model's
-      // free tier is only 12k TPM, so a streak of them means a whole session of
-      // silently unformatted text — worth saying once.
+      // stays broken. A 429 is the free key's per-minute cap — it clears on its
+      // own, but the dictation it hit is ALREADY pasted unformatted, and the user
+      // asked to be told each time that happens rather than have it swallowed.
+      // Reported on the first hit (the pill carries it; main.js still limits the
+      // system notification to once per run).
       if (error.status !== 429) {
         lastCleanupError = `The ${providerName} cleanup engine returned ${error.status} for ${model}. Text is being typed unformatted.`;
-      } else if (++transientFailures >= TRANSIENT_FAILURES_BEFORE_WARNING) {
-        lastCleanupError = `${providerName} is rate-limiting cleanup. Text is being typed unformatted.`;
+      } else {
+        transientFailures += 1;
+        lastCleanupError = FREE_LIMIT_MESSAGE;
       }
     } else {
       console.error("Cleanup error:", error && error.message);

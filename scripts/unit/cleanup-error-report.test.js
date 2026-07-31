@@ -58,27 +58,28 @@ test("the report is consumed once, so one outage isn't announced every utterance
   assert.equal(takeCleanupError(), null, "second read is empty until it fails again");
 });
 
-test("a 429 is NOT reported — the free tier's per-minute limit clears itself", async () => {
+// The free tier is ~12k tokens/minute and one cleanup costs ~2.2k, so about
+// five dictations a minute. Every 429 past that is a dictation that went in
+// unformatted — the user asked to be told each time, so it is reported on the
+// FIRST hit. main.js puts it on that dictation's pill; the system notification
+// is still latched to once per run, so this can't turn into a banner storm.
+test("a 429 is reported on the first hit — that dictation went in unformatted", async () => {
   useGroq();
   stubFetch(429, '{"error":{"message":"Rate limit reached"}}');
 
   const out = await polishTranscript(SAMPLE);
-  assert.equal(out, SAMPLE);
-  assert.equal(takeCleanupError(), null, "a self-clearing limit is not worth interrupting anyone");
+  assert.equal(out, SAMPLE, "the dictation still survives");
+  assert.match(String(takeCleanupError()), /free tidy-up limit/i);
 });
 
-// The free tier is 12k tokens/minute. One 429 is noise, but a run of them means
-// a whole session of silently unformatted text — say it once.
-test("a run of 429s IS reported — the limit isn't clearing", async () => {
+test("every later 429 is reported too, one per dictation", async () => {
   useGroq();
   stubFetch(429, '{"error":{"message":"Rate limit reached"}}');
 
   await polishTranscript(SAMPLE);
+  takeCleanupError();
   await polishTranscript(SAMPLE);
-  assert.equal(takeCleanupError(), null);
-
-  await polishTranscript(SAMPLE);
-  assert.match(String(takeCleanupError()), /rate-limiting/i);
+  assert.match(String(takeCleanupError()), /free tidy-up limit/i);
 });
 
 // A single blip must stay quiet. main.js announces the first error it is handed

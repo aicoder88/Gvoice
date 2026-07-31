@@ -748,3 +748,31 @@ keys baked into the repo (`DEEPGRAM_API_KEY` and `GROQ_API_KEY` are empty in the
 user's .env), i.e. shared free-tier quota. Configured but idle: whisper.cpp
 `ggml-small-q5_1.bin` via /opt/homebrew/bin/whisper-cli (on-device fallback),
 and OpenAI `gpt-realtime-2` (no key set).
+
+### Free-tier notice + dictionary cleanup — 31 Jul 2026 (later still)
+
+- Removed the junk term `clodv` from the live dictionary
+  (`~/Library/Application Support/GVoice/custom-vocab.json`) and moved it to
+  `dismissed`, so the correction watcher won't offer it again.
+- A 429 from the cleanup engine is now reported on the FIRST hit instead of
+  after a streak of three. Measured ceiling: the shipped free Groq key allows
+  12,000 tokens/minute and one cleanup costs ~2.2k, so the 6th dictation inside
+  a minute 429s — reproduced on demand (5 calls ok, 6th → 429).
+- The notice rides the SUCCESS pill for that dictation (`reason`, held 6s
+  instead of 3s) rather than a banner: the pill is already on screen and the
+  point is to mark *which* dictation went in unformatted. The once-per-run
+  system notification is unchanged, so a rate-limit spell can't turn into a
+  banner storm.
+- **NOT verified on the running app.** The mic went to pure digital silence
+  (`peak=0.0000` on every input, including the virtual ones) immediately after
+  the rebuild+reinstall at 11:28, so no dictation can complete right now. That
+  signature is a TCC microphone denial, not hardware: it started at the bundle
+  swap, and `tccutil reset Microphone com.purr.gvoice` did not bring it back
+  because a modal dialog from the terminal app ("cmux.app would like to access
+  files on a network volume") is sitting on screen and TCC prompts serialize
+  behind it. The user has to clear that dialog and then allow the microphone.
+  The 429 path itself was verified in node (message text) and by unit test.
+- Note for next time: the FIRST reinstall today (11:10) did NOT break the mic
+  grant — dictations at 11:11/11:15/11:17 worked. So a bundle swap costs the
+  microphone permission only sometimes; budget for a re-grant click after any
+  reinstall of an unsigned build.
