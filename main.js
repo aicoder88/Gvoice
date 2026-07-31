@@ -1356,7 +1356,7 @@ function sttProvider() {
 // @param {string | null} recordingPath
 // @returns {Promise<string | null>} the recovered text, "" if the retry ran and
 //   found none, or null if it never ran at all (caller still owns the pill).
-async function retranscribeRecording(recordingPath) {
+async function retranscribeRecording(recordingPath, { deliver = true } = {}) {
   if (!retryCanRun(recordingPath)) return null;
   retryInFlight = true;
   const t0 = Date.now();
@@ -1376,6 +1376,11 @@ async function retranscribeRecording(recordingPath) {
       return "";
     }
     const cleaned = stripWhisperNoiseTokens(text) || text;
+    // deliver:false — the caller is going to paste this itself (the automatic
+    // rescue of a blank stream). Don't touch the clipboard, the pill, or the
+    // history here, or the user would get two pills and a clipboard they never
+    // asked us to overwrite for text that landed normally.
+    if (!deliver) return cleaned;
     // It WORKED — green dot. (This used to ride the error state purely to buy
     // the 30s linger, so a rescued dictation looked like a failure.) The text is
     // only on the clipboard, so keep the long linger via holdMs.
@@ -1433,7 +1438,9 @@ function setupIpc() {
   ipcMain.on("dictation:transcript", async (_event, payload) => {
     // payload is { text, chunks, sampleRate } on a real transcript, or "" on a
     // server-decided empty (silence gate / hallucination filter).
-    const text = typeof payload === "string" ? payload : (payload && payload.text) || "";
+    // Not const: an empty stream that the batch retry rescues below replaces
+    // this with the recovered text and falls through to the normal delivery.
+    let text = typeof payload === "string" ? payload : (payload && payload.text) || "";
     const chunks = (payload && typeof payload === "object" && payload.chunks) || null;
     const sampleRate = (payload && typeof payload === "object" && payload.sampleRate) || undefined;
     // Captured audio proves the mic worked at least once — unlocks the relaunch
@@ -1443,25 +1450,50 @@ function setupIpc() {
     debug("[main] received transcript (" + sinceRelease + "ms after release):", JSON.stringify(text));
     dlog("transcript", { len: (text || "").trim().length, sinceRelease });
 
+    // Set when the audio was already written to disk by the empty-stream rescue
+    // below, so the normal path doesn't save a second copy of the same clip.
+    let rescuedPath = null;
     // Empty transcript. If the renderer still sent the captured audio, this was
-    // a real attempt that came back blank (mis-recognition, both auto-language
-    // legs silent, a flush race) — save the recording and show an Error pill so
-    // the user knows it failed and can listen to what they said. If there's no
-    // audio (a too-short accidental tap), hide quietly; an Error on every
-    // misfire would just be noise.
+    // a real attempt that came back blank (a slow connect, a flush race, both
+    // auto-language legs silent, or genuine silence) — the clip is on disk, so
+    // ask the batch API before calling it a failure. If there's no audio at all
+    // (a too-short accidental tap), hide quietly; an Error on every misfire
+    // would just be noise.
     if (!text || !text.trim()) {
       // Re-open the session BEFORE the retry below. The batch round trip takes
       // seconds (minutes on a half-open connection), and every hotkey press in
       // that window would otherwise be dropped in silence — no pill, no clue.
+      // done() only clears the busy flag, so the normal path's finally can call
+      // it again harmlessly when a rescue falls through.
       dictation.done();
-      if (chunks && chunks.length) {
-        const failedPath = await saveTempRecording(chunks, sampleRate);
-        // The live stream heard nothing, but the audio is on disk — try the
-        // batch API before calling it a failure. That recovers every dictation
-        // the stream lost to a slow connect or a timeout rather than to real
-        // silence, and it owns the pill from here (it knows whether the retry
-        // found words, found silence, or couldn't reach the engine at all).
-        const recovered = failedPath ? await retranscribeRecording(failedPath) : null;
+      if (!chunks || !chunks.length) {
+        hidePill();
+        return;
+      }
+      const failedPath = await saveTempRecording(chunks, sampleRate);
+      // The live stream heard nothing, but the audio is on disk — try the batch
+      // API before calling it a failure. That recovers every dictation the
+      // stream lost to a slow connect or a timeout rather than to real silence.
+      // deliver:false keeps the recovered text OUT of the clipboard-and-⌘V
+      // treatment: it comes back here and goes through the normal paste, so a
+      // stream that came back blank costs the user a second, not a manual
+      // paste. (It also means the rescued text gets the cleanup pass, which the
+      // clipboard route skipped.)
+      const recovered = failedPath ? await retranscribeRecording(failedPath, { deliver: false }) : null;
+      // A press during the round trip started a NEW dictation (the session was
+      // re-opened above so presses aren't swallowed). Pasting this older text
+      // now would land it in the middle of what the user is saying right now —
+      // and taking the clipboard from them would be worse. Park it in history
+      // and the tray's Recent dictations, where it stays recoverable.
+      if (recovered && !pillFree()) {
+        recordTranscript(recovered, false, failedPath);
+        rebuildTrayMenu();
+        return;
+      }
+      if (recovered) {
+        text = recovered;
+        rescuedPath = failedPath;
+      } else {
         // null = the retry never ran (nothing saved, one already in flight, or
         // a non-Deepgram engine). It never touched the pill, so this path still
         // has to say what happened instead of leaving "Transcribing…" up —
@@ -1471,20 +1503,17 @@ function setupIpc() {
         if (recovered === null && pillFree()) {
           showPillResult("error", null, failedPath, { reason: "No speech detected." });
         }
-        // The retry logs its own history entry when it recovers text; otherwise
-        // record the failed attempt so the clip stays playable from the tray.
-        if (!recovered) {
-          recordTranscript("", false, failedPath);
-          rebuildTrayMenu();
-        }
-      } else {
-        hidePill();
+        // "" = the retry ran and genuinely heard nothing; it owns the pill in
+        // that case. Either way, record the failed attempt so the clip stays
+        // playable from the tray.
+        recordTranscript("", false, failedPath);
+        rebuildTrayMenu();
+        return;
       }
-      return;
     }
 
     // Save the audio first so "Open recording" works even on a clean success.
-    const recordingPath = await saveTempRecording(chunks, sampleRate);
+    const recordingPath = rescuedPath || (await saveTempRecording(chunks, sampleRate));
     try {
       // Restore focus to whichever app the user was dictating into, then type.
       // processTranscript strips Whisper noise tokens, runs the cleanup pass,

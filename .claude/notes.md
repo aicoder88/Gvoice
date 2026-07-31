@@ -776,3 +776,45 @@ and OpenAI `gpt-realtime-2` (no key set).
   grant — dictations at 11:11/11:15/11:17 worked. So a bundle swap costs the
   microphone permission only sometimes; budget for a re-grant click after any
   reinstall of an unsigned build.
+
+### Blank dictations now paste themselves + mic gain — 31 Jul 2026 (evening)
+
+**The "text didn't land" complaint was the empty-stream path, not a paste bug.**
+Two of five presses at 11:47-11:48 came back `ALL EMPTY` from streaming with
+real speech on the clip; the batch retry recovered both (125 and 49 chars) but
+only to the CLIPBOARD, so the pill said "press ⌘V" and nothing landed in the
+text box. Now the automatic rescue runs the recovered text through the normal
+delivery — cleanup pass, paste, success pill — so a blank stream costs about a
+second instead of a manual paste. `retranscribeRecording(path, { deliver:false })`
+returns the text instead of owning the clipboard/pill/history; the tray's
+"Transcribe again" keeps the old clipboard behaviour, which is right for a
+button pressed long after the fact.
+
+Guard kept: if a NEW press started during the round trip (`!pillFree()`), the
+rescued text is parked in history + the tray instead of being pasted into the
+middle of what the user is saying now, and the clipboard is left alone.
+
+**Verified live** (11:55:50): `ALL EMPTY` → `retranscribe len=67` →
+`typed {len:67}` — the rescued text went through the paste path. It reported
+`pasted:false` only because no editable field was focused in that test window.
+
+**Why the streams come back blank — measured across all 53 sessions in the log:**
+empties median connect 0.98s, successes 0.75s, so connect latency is NOT the
+whole story. Of the six connects slower than 2s, three were empty and three were
+fine. Today's two empties had 8.3s and 6.3s connects, and the older ones were
+mostly near-silent clips. So: several causes, one net. The rescue covers all of
+them, which is why it was worth doing before chasing the connect race itself.
+A warm, KeepAlive-held Deepgram socket would remove the connect race properly —
+not attempted, and the rescue makes it much less urgent.
+
+**Mic gain.** macOS input volume was at 27, which put his speech around
+-30 dBFS (rms ~0.029, peaks ~0.30). Raised to 60. Measured with speaker
+playback at 75 it hit peak 0.96 — too close to clipping, hence 60 rather than
+75: his own voice should now sit near -24 dBFS with headroom left. Note this is
+a SYSTEM setting, not app config, so it survives app updates but not a machine
+change. `autoGainControl` was deliberately NOT touched in the same pass, so the
+gain change can be measured on its own.
+
+**Not fixable in code:** "testing" → "Chest" on a 1.16-second single-word press
+(conf 0.809). One short word gives the model no context. Gain may help; nothing
+in the app will make that case reliable.
