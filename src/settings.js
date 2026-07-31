@@ -11,7 +11,7 @@
 // Kept free of any Electron import so it can be unit-tested with plain Node and
 // reused by non-Electron hosts. main.js passes in the resolved .env path.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, chmodSync } from "node:fs";
 import { dirname } from "node:path";
 
 // The settings window reads and writes only the keys handled by settingsView /
@@ -116,8 +116,14 @@ export function writeEnvFile(path, patch) {
   // one costs the user every key they ever pasted in. The mode is explicit —
   // writing in place preserves the existing file's permissions, but a fresh
   // tmp inode would land at 0644 and rename that over the keys.
-  writeFileSync(path + ".tmp", next, { encoding: "utf8", mode: 0o600 });
-  renameSync(path + ".tmp", path);
+  // chmod as well as mode: `mode` only applies when writeFileSync CREATES the
+  // file. A .tmp left behind by an earlier failed write (full disk, crash) is
+  // reused with whatever permissions it already had, and the rename would carry
+  // those onto the keys — which is the one case the mode is here to stop.
+  const tmp = path + ".tmp";
+  writeFileSync(tmp, next, { encoding: "utf8", mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, path);
   return next;
 }
 
