@@ -11,7 +11,7 @@
 // Kept free of any Electron import so it can be unit-tested with plain Node and
 // reused by non-Electron hosts. main.js passes in the resolved .env path.
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 
 // The settings window reads and writes only the keys handled by settingsView /
@@ -112,7 +112,10 @@ export function readEnvFile(path) {
 export function writeEnvFile(path, patch) {
   const next = applyEnv(readEnvFile(path), patch);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, next, "utf8");
+  // Atomic write (tmp + rename): this file holds the API keys, and a truncated
+  // one costs the user every key they ever pasted in.
+  writeFileSync(path + ".tmp", next, "utf8");
+  renameSync(path + ".tmp", path);
   return next;
 }
 

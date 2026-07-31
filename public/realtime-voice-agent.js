@@ -19,6 +19,9 @@ class RealtimeVoiceAgent extends HTMLElement {
     this.attachShadow({ mode: "open" });
     this.socket = null;
     this.audioContext = null;
+    // The AudioContext is created once and never closed, so the worklet module
+    // only ever needs adding once. See startRecording.
+    this.workletLoaded = false;
     this.mediaStream = null;
     this.sourceNode = null;
     this.processorNode = null;
@@ -198,7 +201,14 @@ class RealtimeVoiceAgent extends HTMLElement {
     }
 
     this.sourceNode = this.audioContext.createMediaStreamSource(this.mediaStream);
-    await this.audioContext.audioWorklet.addModule("/audio-capture-worklet.js");
+    // addModule re-runs the module script (and registerProcessor) every call;
+    // a second registration of the same name throws and would kill the second
+    // "Start talking" with the mic stream left open. Same guard as
+    // public/dictation.js.
+    if (!this.workletLoaded) {
+      await this.audioContext.audioWorklet.addModule("/audio-capture-worklet.js");
+      this.workletLoaded = true;
+    }
     this.processorNode = new AudioWorkletNode(this.audioContext, "audio-capture-processor", {
       processorOptions: { outputRate: targetSampleRate }
     });

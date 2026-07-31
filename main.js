@@ -154,6 +154,13 @@ let isQuitting = false;
 // always ends the session sooner; this is only the anti-jam backstop.
 const dictation = new DictationSession({ safetyTimeoutMs: 25000 });
 
+// Terminal events from the renderer carry the generation of the press that
+// produced them (stamped in preload.cjs from the dictation:start profile). A
+// late one belongs to a press that is already over: acting on it would clear
+// `busy` for the LIVE press and paint over its pill. Logging and recording
+// still happen — only the shared session state is protected.
+const isStalePress = (/** @type {unknown} */ gen) => dictation.isStale(gen);
+
 // The diagnostic log MUST live in userData, not next to main.js. When the app
 // is packaged, __dirname is inside the read-only .app/.asar bundle, so the old
 // join(__dirname, "debug.log") made every appendFileSync throw — silently, since
@@ -1029,7 +1036,13 @@ function startDictation(/** @type {number} */ maxHoldMs = MAX_HOLD_MS) {
   correctionWatcher.disarm();
   recentTypedWords = [];
   hideVocab();
-  const profile = { language: DICTATION_LANGUAGE, model: process.env.DEEPGRAM_MODEL || "nova-3" };
+  // `gen` rides along so the renderer can stamp its terminal events with the
+  // press they belong to (see isStalePress).
+  const profile = {
+    language: DICTATION_LANGUAGE,
+    model: process.env.DEEPGRAM_MODEL || "nova-3",
+    gen: dictation.generation
+  };
   savedForegroundHwnd = captureForegroundWindow();
   dlog("press", { profile, hwnd: savedForegroundHwnd });
   debug("[main] dictation:start lang=" + profile.language + " (hwnd=" + savedForegroundHwnd + ")");
@@ -1673,14 +1686,19 @@ function setupIpc() {
 
   // A dictation couldn't be transcribed but audio was captured. Save the clip
   // and show the Error pill so the user can open the recording and try again.
-  ipcMain.on("dictation:failure", async (_event, payload) => {
+  ipcMain.on("dictation:failure", async (_event, payload, pressGen) => {
     // Snapshot before fail() re-opens the session. Saving the clip and the batch
     // retry below take seconds, and a press in that window owns the pill from
     // then on. pillFree() alone can't see that — it reads `busy`, which the new
     // press's own safety timer clears while its dictation is still live.
+    // A failure stamped with an OLDER press was already overtaken before it even
+    // arrived: don't end the live session for it, and don't run the batch rescue
+    // (its text would paste into the middle of the new dictation). The clip is
+    // still saved and logged, so the tray can replay it.
+    const stale = isStalePress(pressGen);
     const gen = dictation.generation;
-    const stillMine = () => dictation.generation === gen;
-    dictation.fail();
+    const stillMine = () => !stale && dictation.generation === gen;
+    if (!stale) dictation.fail();
     const chunks = (payload && payload.chunks) || [];
     const recordingPath = await saveTempRecording(chunks, payload && payload.sampleRate);
     if (recordingPath) console.error("[main] dictation recording saved:", recordingPath);
@@ -1693,7 +1711,7 @@ function setupIpc() {
     // reason first would be replaced within a frame AND would leave its own
     // 45s safety-hide timer armed behind the retry's shorter states.
     const reason = (payload && payload.reason) || "Couldn't transcribe.";
-    const recovered = recordingPath ? await retranscribeRecording(recordingPath) : null;
+    const recovered = recordingPath && !stale ? await retranscribeRecording(recordingPath) : null;
     // null = no retry happened (see retranscribeRecording) — show the
     // renderer's plain-English reason rather than a pill stuck on "Transcribing…",
     // but only if a new press hasn't claimed the pill in the meantime.
@@ -1704,10 +1722,13 @@ function setupIpc() {
     }
   });
 
-  ipcMain.on("dictation:error", (_event, message) => {
-    dictation.fail();
+  ipcMain.on("dictation:error", (_event, message, gen) => {
     console.error("Dictation error:", message);
-    dlog("dictation-error", message);
+    dlog("dictation-error", { message, gen, live: dictation.generation });
+    // A newer press owns the session and the pill — log the old error, but
+    // don't end the live dictation or paint over its "Listening…".
+    if (isStalePress(gen)) return;
+    dictation.fail();
     // No audio, no transcript (mic blocked, relay down, offline). Show the
     // reason on the pill so the user knows WHY, not just that it failed.
     showPillResult("error", null, null, { reason: typeof message === "string" ? message : "" });
@@ -1948,15 +1969,19 @@ function setupIpc() {
   // The renderer lost the microphone (disconnected, muted, seized by another
   // app, or silent for several holds in a row) and rebuilt its capture. Make
   // the failure visible instead of silently typing nothing.
-  ipcMain.on("dictation:mic-warning", (_event, message) => {
-    dictation.fail();
+  ipcMain.on("dictation:mic-warning", (_event, message, gen) => {
     console.error("[main] mic warning:", message);
-    dlog("mic-warning", message);
+    dlog("mic-warning", { message, gen, live: dictation.generation });
+    // The mic really is unhappy either way, so the notification always fires.
+    // The pill and the session belong to whichever press is live: a warning
+    // stamped with an older press must not kill it.
+    showMicWarning(message);
+    if (isStalePress(gen)) return;
+    dictation.fail();
     // Show the reason ON the pill (not just a system notification the user may
     // have muted) so a dead-mic rebuild visibly says "press and try again"
     // instead of a bare red dot. Keep the throttled notification as a backup.
     showPillResult("error", null, null, { reason: message });
-    showMicWarning(message);
   });
 
   // The renderer healed the mic on its own — drop the warning so the user isn't

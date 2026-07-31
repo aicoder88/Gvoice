@@ -107,3 +107,16 @@ test("fail() finalizes and re-opens in one step", async () => {
   await sleep(50);
   assert.equal(s.busy, true, "fail() also killed the old safety timer");
 });
+
+test("isStale() tells an overtaken press's terminal event from the live one", async () => {
+  const s = new DictationSession({ safetyTimeoutMs: 20, log: quiet });
+  s.tryStart();
+  const firstPress = s.generation;
+  assert.equal(s.isStale(firstPress), false, "its own error still ends its own session");
+  s.release();
+  await sleep(50); // safety timer clears busy; the user presses again
+  s.tryStart();
+  assert.equal(s.isStale(firstPress), true, "the old press must not kill the live one");
+  assert.equal(s.isStale(s.generation), false, "the live press still owns the session");
+  assert.equal(s.isStale(undefined), false, "an unstamped event is never dropped");
+});

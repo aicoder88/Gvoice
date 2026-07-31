@@ -12,7 +12,7 @@
 // (the parity harness, `node server.js`) work unchanged; main.js calls init()
 // to point it at the app's userData dir for the packaged app.
 
-import { readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, statSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -79,7 +79,11 @@ function load() {
 function save() {
   try {
     mkdirSync(dirname(storePath), { recursive: true });
-    writeFileSync(storePath, JSON.stringify(store, null, 2) + "\n", "utf8");
+    // Atomic write (tmp + rename), same as src/history.js: a crash or a full
+    // disk mid-write must not leave a truncated file, which parses as invalid
+    // JSON on next load and silently resets the whole dictionary to empty.
+    writeFileSync(storePath + ".tmp", JSON.stringify(store, null, 2) + "\n", "utf8");
+    renameSync(storePath + ".tmp", storePath);
     try { loadedMtimeMs = statSync(storePath).mtimeMs; } catch {}
     loadedFrom = storePath;
   } catch {

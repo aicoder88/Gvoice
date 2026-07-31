@@ -95,6 +95,22 @@ export class DictationSession {
     return { releaseAt, sinceRelease: Date.now() - releaseAt };
   }
 
+  /**
+   * A terminal event from the renderer (error, failure, mic warning) carries the
+   * generation of the press that produced it. True when that press is already
+   * over — the caller must not end the session or paint the pill on its behalf,
+   * because both now belong to a newer press.
+   *
+   * An unstamped event (undefined/non-numeric — a background mic warning raised
+   * outside any press) counts as current, so nothing is silently dropped.
+   *
+   * @param {unknown} gen
+   * @returns {boolean}
+   */
+  isStale(gen) {
+    return typeof gen === "number" && gen !== this.generation;
+  }
+
   // Final transition: re-open the session for the next press. Call once the
   // transcript has been typed (or on error).
   done() {
