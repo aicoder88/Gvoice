@@ -44,9 +44,13 @@ test("a 404 (model retired) is reported, and the raw text still comes back", asy
   const out = await polishTranscript(SAMPLE);
   assert.equal(out, SAMPLE, "dictation must survive a dead cleanup engine");
 
+  // The message goes on the pill and into a system notification, so it is
+  // written for a person: what happened to their text, not the status code and
+  // model name (those stay in the console line).
   const reported = takeCleanupError();
-  assert.match(String(reported), /404/, "the status the user needs to see");
-  assert.match(String(reported), /unformatted/, "says what it means for them");
+  assert.match(String(reported), /tidy-up isn't working/i, "plain words, not a status code");
+  assert.match(String(reported), /exactly as you said it/i, "says what it means for them");
+  assert.doesNotMatch(String(reported), /404|llama|groq/i, "no jargon on a user-facing string");
 });
 
 test("the report is consumed once, so one outage isn't announced every utterance", async () => {
@@ -61,8 +65,8 @@ test("the report is consumed once, so one outage isn't announced every utterance
 // The free tier is ~12k tokens/minute and one cleanup costs ~2.2k, so about
 // five dictations a minute. Every 429 past that is a dictation that went in
 // unformatted — the user asked to be told each time, so it is reported on the
-// FIRST hit. main.js puts it on that dictation's pill; the system notification
-// is still latched to once per run, so this can't turn into a banner storm.
+// FIRST hit. main.js puts it on that dictation's pill and deliberately does NOT
+// raise a system notification for it: the cap clears itself within the minute.
 test("a 429 is reported on the first hit — that dictation went in unformatted", async () => {
   useGroq();
   stubFetch(429, '{"error":{"message":"Rate limit reached"}}');
@@ -82,10 +86,8 @@ test("every later 429 is reported too, one per dictation", async () => {
   assert.match(String(takeCleanupError()), /free tidy-up limit/i);
 });
 
-// A single blip must stay quiet. main.js announces the first error it is handed
-// and then latches for the rest of the run, so spending that one warning on a
-// 2.5s timeout would leave the app silent weeks later when the engine is really
-// down — the exact outage this whole feature exists to catch.
+// A single blip must stay quiet. A 2.5s timeout is not an outage, and the pill
+// it would paint says "tidy-up is broken" about a dictation that was fine.
 test("one network blip is NOT reported; a streak of them is", async () => {
   useGroq();
   globalThis.fetch = async () => {
@@ -100,7 +102,7 @@ test("one network blip is NOT reported; a streak of them is", async () => {
   assert.equal(takeCleanupError(), null, "two is still not an outage");
 
   await polishTranscript(SAMPLE);
-  assert.match(String(takeCleanupError()), /couldn't reach groq/i, "three in a row is");
+  assert.match(String(takeCleanupError()), /can't reach the tidy-up service/i, "three in a row is");
 });
 
 test("a success in between clears the streak, so scattered blips stay quiet", async () => {

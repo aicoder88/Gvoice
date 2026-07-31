@@ -24,6 +24,18 @@ export class DictationSession {
   constructor({ safetyTimeoutMs = 500, log = console.error } = {}) {
     /** @type {boolean} */
     this.busy = false;
+    // Bumped once per ACCEPTED press. A handler that takes seconds (cleanup +
+    // paste, or the batch rescue) snapshots this on entry and compares before it
+    // touches shared state — the pill, the saved foreground window, done(). By
+    // then the press it belongs to may be long gone: release() arms a 500ms
+    // safety timer that clears `busy`, so a new dictation can legally start
+    // while the old one is still finishing.
+    //
+    // A REJECTED press must not bump it. If it did, the in-flight handler would
+    // see a changed generation, skip done(), and leave `busy` stuck true with
+    // the safety timer already cleared by finalize() — permanently deaf app.
+    /** @type {number} */
+    this.generation = 0;
     /** @type {number | null} */
     this.releaseAt = null;
     /** @type {ReturnType<typeof setTimeout> | null} */
@@ -45,6 +57,7 @@ export class DictationSession {
     }
     this._clearSafetyTimer();
     this.busy = true;
+    this.generation += 1;
     // Forget the previous session's release stamp, or finalize() on a session
     // that errors before release would report timings from the LAST dictation.
     this.releaseAt = null;

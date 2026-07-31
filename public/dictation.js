@@ -20,7 +20,10 @@ const MIC_IDLE_MS = (() => {
   // Number(null) is 0, which would silently mean cold mode — a missing param
   // must land on the same default a junk one does.
   const n = micIdleParam == null ? NaN : Number(micIdleParam);
-  return (Number.isFinite(n) && n >= 0 ? n : 5) * 60000;
+  // Keep this number equal to MIC_IDLE_DEFAULT in src/settings.js — main.js
+  // always passes ?micidle=, so this only bites when the param goes missing or
+  // arrives as junk, and landing somewhere else would be a silent disagreement.
+  return (Number.isFinite(n) && n >= 0 ? n : 30) * 60000;
 })();
 // Cold mode: nothing is kept warm between presses, so every press builds a fresh
 // graph (which is also its own recovery).

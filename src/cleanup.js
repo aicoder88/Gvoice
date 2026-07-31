@@ -198,7 +198,13 @@ const TRANSIENT_FAILURES_BEFORE_WARNING = 3;
 // short enough to fit the pill: the shipped Groq key allows ~12k tokens/minute
 // and one cleanup costs ~2.2k, so about five dictations a minute. Past that the
 // text is pasted exactly as spoken until the minute rolls over.
-const FREE_LIMIT_MESSAGE = "Hit the free tidy-up limit — typed as you said it. Clears in a minute.";
+export const FREE_LIMIT_MESSAGE = "Hit the free tidy-up limit — typed as you said it. Clears in a minute.";
+
+// Shown when the engine is actually broken (model retired, key revoked) rather
+// than rate-limited. This string goes on the pill and into a system
+// notification, so it says what happened to the user's text — not the status
+// code and model name, which are already in the console line above it.
+const ENGINE_DOWN_MESSAGE = "Tidy-up isn't working — text typed exactly as you said it.";
 
 /**
  * Most recent cleanup failure, consumed (cleared) by the caller so one outage
@@ -320,7 +326,7 @@ export async function polishTranscript(rawText) {
       // Reported on the first hit (the pill carries it; main.js still limits the
       // system notification to once per run).
       if (error.status !== 429) {
-        lastCleanupError = `The ${providerName} cleanup engine returned ${error.status} for ${model}. Text is being typed unformatted.`;
+        lastCleanupError = ENGINE_DOWN_MESSAGE;
       } else {
         transientFailures += 1;
         lastCleanupError = FREE_LIMIT_MESSAGE;
@@ -329,7 +335,7 @@ export async function polishTranscript(rawText) {
       console.error("Cleanup error:", error && error.message);
       transientFailures += 1;
       if (transientFailures >= TRANSIENT_FAILURES_BEFORE_WARNING) {
-        lastCleanupError = `Cleanup couldn't reach ${providerName}. Text is being typed unformatted.`;
+        lastCleanupError = "Can't reach the tidy-up service — text typed exactly as you said it.";
       }
     }
     return rawText;

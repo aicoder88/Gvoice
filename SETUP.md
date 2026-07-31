@@ -119,7 +119,7 @@ An Electron window opens with status info. A tray icon shows up in the system tr
 | `PORT` | *(free port each launch)* | Local relay port. Auto-picked so it never collides with a dev server on 3000; set it only to pin one, and even a pinned-but-busy port falls back to a free one. |
 | `RECORDINGS_ENABLED` | `true` | Keep dictation audio on disk so a missed paste stays recoverable. Set `false` to keep none. Also a toggle in the Settings window. |
 | `RECORDING_RETENTION_DAYS` | `7` | How long saved clips linger before auto-delete (on top of the last-50 count cap). `0` = keep until the count cap evicts them. |
-| `MIC_IDLE_MINUTES` | `5` | Minutes the mic may sit open with no dictation before GVoice closes it — which is what puts the macOS orange "mic in use" light out. `0` = close after every hold (no pre-roll, so hold the key a beat before speaking). `never` = keep it open all the time. Also a dropdown in the Settings window. |
+| `MIC_IDLE_MINUTES` | `30` | Minutes the mic may sit open with no dictation before GVoice closes it — which is what puts the macOS orange "mic in use" light out. `0` = close after every hold (no pre-roll, so hold the key a beat before speaking). `never` = keep it open all the time. Also a dropdown in the Settings window. |
 | `GVOICE_CORRECTION_WATCH_MS` | `12000` | How long after a dictation GVoice watches for a hand-typed correction (macOS/Linux). Set to `0` to turn manual-edit suggestions off. |
 | `GVOICE_DEBUG` | *(off)* | Set to `1` to echo per-event traces (presses, paste timing, cleanup) to the console. They're always written to the app-data `debug.log` regardless (macOS: `~/Library/Application Support/GVoice/debug.log`). |
 

@@ -496,8 +496,11 @@ const PILL_SIZES = {
   // away the instruction the user needs. Taller too: the longest reason (the
   // "pick your microphone" one) needs three lines beside the buttons, and
   // widening alone left it clipped.
-  success: { width: 760, height: 72 },
-  error: { width: 760, height: 72 }
+  // 84, not 72: three lines at 13px/1.25 plus the pill's 18px of padding is
+  // ~67px, and pill.html's 8px bottom padding eats into the same box — at 72
+  // the top line was being sliced off.
+  success: { width: 760, height: 84 },
+  error: { width: 760, height: 84 }
 };
 
 // Pick the display the pill should appear on: the one holding the window the
@@ -1143,7 +1146,7 @@ async function processTranscript(transcript, restoreHwnd = null) {
   if (cleanupEnabled && needsCleanup) {
     const t0 = Date.now();
     try {
-      const { polishTranscript, takeCleanupError } = await import("./src/cleanup.js");
+      const { polishTranscript, takeCleanupError, FREE_LIMIT_MESSAGE } = await import("./src/cleanup.js");
       textToType = await polishTranscript(textToType);
       debug("[main] cleanup done (" + (Date.now() - t0) + "ms):", JSON.stringify(textToType));
       // polishTranscript swallows its own errors and returns the raw text, so a
@@ -1151,7 +1154,11 @@ async function processTranscript(transcript, restoreHwnd = null) {
       // nothing to fix. Say it out loud once instead of only in a console log.
       cleanupNotice = takeCleanupError() || "";
       if (cleanupNotice) dlog("cleanup-notice", cleanupNotice);
-      showCleanupWarning(cleanupNotice);
+      // The free tier's per-minute cap is routine — it clears itself in under a
+      // minute and the pill already says so on the exact dictation it hit. A
+      // system notification for it would be noise. Notifications are for the
+      // failures that stay broken until someone acts.
+      if (cleanupNotice !== FREE_LIMIT_MESSAGE) showCleanupWarning(cleanupNotice);
     } catch (error) {
       console.error("[main] Cleanup pass failed, using raw:", error.message);
     }
@@ -1446,6 +1453,16 @@ function setupIpc() {
     // Captured audio proves the mic worked at least once — unlocks the relaunch
     // recovery rung for a later wedge.
     if (chunks && chunks.length) everHadLiveMic = true;
+    // Which press this transcript belongs to. Everything below can run for
+    // seconds (cleanup, the batch rescue, the paste) while `busy` has already
+    // been cleared — by the rescue's early done() OR, on an ordinary dictation,
+    // by release()'s 500ms safety timer. A press in that window starts a NEW
+    // dictation, and the shared state below belongs to that one from then on.
+    const gen = dictation.generation;
+    const stillMine = () => dictation.generation === gen;
+    // Grab the window THIS press captured while it's still ours. Read later
+    // (after the rescue round trip) it could already be the next dictation's.
+    const targetHwnd = savedForegroundHwnd;
     const { releaseAt, sinceRelease } = dictation.finalize();
     debug("[main] received transcript (" + sinceRelease + "ms after release):", JSON.stringify(text));
     dlog("transcript", { len: (text || "").trim().length, sinceRelease });
@@ -1485,7 +1502,7 @@ function setupIpc() {
       // now would land it in the middle of what the user is saying right now —
       // and taking the clipboard from them would be worse. Park it in history
       // and the tray's Recent dictations, where it stays recoverable.
-      if (recovered && !pillFree()) {
+      if (recovered && !stillMine()) {
         recordTranscript(recovered, false, failedPath);
         rebuildTrayMenu();
         return;
@@ -1500,7 +1517,7 @@ function setupIpc() {
         // unless a new press has taken the pill since (saving the clip and the
         // retry both take long enough for that), in which case this stale "No
         // speech detected." would paint over a live "Listening…".
-        if (recovered === null && pillFree()) {
+        if (recovered === null && stillMine()) {
           showPillResult("error", null, failedPath, { reason: "No speech detected." });
         }
         // "" = the retry ran and genuinely heard nothing; it owns the pill in
@@ -1518,13 +1535,38 @@ function setupIpc() {
       // Restore focus to whichever app the user was dictating into, then type.
       // processTranscript strips Whisper noise tokens, runs the cleanup pass,
       // and pastes — restoring focus right before the paste lands.
-      const result = await processTranscript(text, savedForegroundHwnd);
-      savedForegroundHwnd = null;
+      const result = await processTranscript(text, targetHwnd);
+      // Only clear the global if this press still owns the session. Comparing
+      // the VALUE instead would be wrong in the commonest case of all: two
+      // dictations into the same app back to back capture the same window, so
+      // the values match, we'd wipe the new press's target, and its paste would
+      // land with nothing to restore focus to — the exact bug this guards.
+      if (stillMine()) savedForegroundHwnd = null;
       debug("[main] total since release: " + (Date.now() - releaseAt) + "ms");
+      // A new dictation owns the pill (and the session) from here on. Writing to
+      // either would paint over a live "Listening…" and — via the finally below —
+      // clear the NEW session's busy flag mid-hold, swallowing the user's key
+      // release. Park the text where it stays recoverable and get out.
+      if (!stillMine()) {
+        console.error("[main] transcript landed after a newer press — parked in history");
+        dlog("transcript-stale", { gen });
+        if (result && result.text) {
+          recordTranscript(result.text, false, recordingPath);
+          rebuildTrayMenu();
+        }
+        return;
+      }
       if (!result || !result.text) {
         // Noise-only after cleanup — nothing landed. Quiet hide.
         console.error("[main] transcript was noise-only, dropped");
         hidePill();
+        // A rescued clip is different: the batch API DID hear words, cleanup
+        // just left nothing. Without this the recovered clip vanishes — no
+        // history entry, nothing playable from the tray.
+        if (rescuedPath) {
+          recordTranscript(text, false, recordingPath);
+          rebuildTrayMenu();
+        }
       } else {
         // Success when the text was pasted somewhere (verified or not — a paste
         // we couldn't read back, e.g. into a terminal or browser, still landed
@@ -1536,14 +1578,22 @@ function setupIpc() {
           recordingPath,
           {
             // Only the hard-miss case gets an explanatory reason; a confirmed
-            // success keeps the plain "Success" label — unless cleanup gave up
-            // on this one, in which case say so, because the text just went in
-            // exactly as spoken.
+            // success keeps the plain "Success" label — unless something happened
+            // the user has to know about. Two of those, in priority order:
+            //   1. likelyMissed — the text probably didn't land AND the code below
+            //      takes their clipboard to make it recoverable. Silently swapping
+            //      what ⌘V does, behind a bare 3s "Success", is the worse surprise,
+            //      so it beats the cleanup notice when both are true.
+            //   2. notice — cleanup gave up, so the text went in exactly as spoken.
             // Action first: the label can ellipsize, so the instruction must
             // survive truncation.
-            reason: result.pasted ? result.notice : "Click Copy — the paste didn't land.",
-            // A notice needs reading time; a bare "Success" doesn't.
-            holdMs: result.pasted && result.notice ? 6000 : undefined
+            reason: !result.pasted
+              ? "Click Copy — the paste didn't land."
+              : result.likelyMissed
+                ? "Press ⌘V if the text didn't land — it's on your clipboard."
+                : result.notice,
+            // A reason needs reading time; a bare "Success" doesn't.
+            holdMs: result.pasted && (result.likelyMissed || result.notice) ? 6000 : undefined
           }
         );
         // Keep the last 50 dictations on disk and in the tray menu, so a
@@ -1566,19 +1616,31 @@ function setupIpc() {
       }
     } catch (error) {
       console.error("[main] Typing failed:", error.stack || error.message);
-      showPillResult("error", text, recordingPath, { reason: "Something went wrong typing it out — click Copy." });
+      // Same rule as above: a newer press owns the pill, so log it to history
+      // only rather than painting an old error over a live "Listening…".
+      if (stillMine()) {
+        showPillResult("error", text, recordingPath, { reason: "Something went wrong typing it out — click Copy." });
+      }
       // Cleanup never ran on this path — at least strip Whisper noise tokens
       // so the history entry matches the others as closely as possible.
       recordTranscript(stripWhisperNoiseTokens(text.trim()) || text, false, recordingPath);
       rebuildTrayMenu();
     } finally {
-      dictation.done();
+      // Never on a stale transcript: `busy` belongs to the newer press, and
+      // clearing it mid-hold makes fireRelease bail out of dictation:stop.
+      if (stillMine()) dictation.done();
     }
   });
 
   // A dictation couldn't be transcribed but audio was captured. Save the clip
   // and show the Error pill so the user can open the recording and try again.
   ipcMain.on("dictation:failure", async (_event, payload) => {
+    // Snapshot before fail() re-opens the session. Saving the clip and the batch
+    // retry below take seconds, and a press in that window owns the pill from
+    // then on. pillFree() alone can't see that — it reads `busy`, which the new
+    // press's own safety timer clears while its dictation is still live.
+    const gen = dictation.generation;
+    const stillMine = () => dictation.generation === gen;
     dictation.fail();
     const chunks = (payload && payload.chunks) || [];
     const recordingPath = await saveTempRecording(chunks, payload && payload.sampleRate);
@@ -1596,7 +1658,7 @@ function setupIpc() {
     // null = no retry happened (see retranscribeRecording) — show the
     // renderer's plain-English reason rather than a pill stuck on "Transcribing…",
     // but only if a new press hasn't claimed the pill in the meantime.
-    if (recovered === null && pillFree()) showPillResult("error", null, recordingPath, { reason });
+    if (recovered === null && stillMine()) showPillResult("error", null, recordingPath, { reason });
     if (!recovered && recordingPath) {
       recordTranscript("", false, recordingPath);
       rebuildTrayMenu();
@@ -1937,15 +1999,18 @@ function handleRecoveryEscalation(reason) {
   app.exit(0);
 }
 
-let cleanupWarned = false;
+const cleanupWarnings = new Set();
 
-// Tell the user their cleanup engine is down. Once per app run, not per
-// utterance: the dictation still lands (raw), so this is information, not an
-// interruption — but a silently dead cleanup engine went unnoticed for weeks,
-// which is worse. Pass null (the no-error case) and this does nothing.
+// Tell the user their cleanup engine is down. Once per DISTINCT message, not
+// once per app run: a single latch meant the first hiccup of the session ate
+// the only notification, so weeks later — engine genuinely dead, every call
+// failing — the user got nothing. Keyed by message, so each kind of failure
+// still says itself once and a repeat can't spam. The dictation lands either
+// way (raw), so this is information, not an interruption.
+// Pass null (the no-error case) and this does nothing.
 function showCleanupWarning(/** @type {string | null} */ message) {
-  if (!message || cleanupWarned) return;
-  cleanupWarned = true;
+  if (!message || cleanupWarnings.has(message)) return;
+  cleanupWarnings.add(message);
   console.error("[main] cleanup warning:", message);
   dlog("cleanup-warning", message);
   try {

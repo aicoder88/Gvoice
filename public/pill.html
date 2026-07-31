@@ -15,10 +15,12 @@
       /* The pill is centered in a transparent window. Every state shares this
          shell; the dot colour, label, and (for results) the action buttons swap
          based on body[data-state]. */
-      /* Bottom-anchored, not centred: the result window is 72px tall but the
-         pill itself is ~40px, and centring parked that spare height under the
-         pill — pushing it further up the screen than the window suggests. The
-         8px padding leaves room for the drop shadow. */
+      /* Bottom-anchored, not centred: the result window is 84px tall but the
+         pill itself is ~40px (67px at three lines), and centring parked that
+         spare height under the pill — pushing it further up the screen than the
+         window suggests. The 8px padding leaves room for the drop shadow, and
+         comes out of the same box, so the window height in main.js has to cover
+         the tallest pill PLUS this. */
       body {
         display: flex;
         align-items: flex-end;

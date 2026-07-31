@@ -68,6 +68,35 @@ test("finalize reports timing from THIS session, not the previous one", async ()
   assert.ok(second.sinceRelease < 25, `expected ~0ms, got ${second.sinceRelease}ms`);
 });
 
+// main.js snapshots `generation` when a transcript arrives and compares before
+// it touches the pill, the saved foreground window, or done(). Those handlers
+// run for seconds — long past the 500ms safety timer — so a press can legally
+// start a new dictation underneath one, and everything shared belongs to the
+// new press from that moment.
+test("an accepted press bumps the generation; a refused one must NOT", () => {
+  const s = new DictationSession({ log: quiet });
+  const start = s.generation;
+  s.tryStart();
+  const mine = s.generation;
+  assert.equal(mine, start + 1, "an accepted press is a new dictation");
+
+  // The refused press is the dangerous case. If it bumped, the in-flight
+  // handler would see a changed generation, skip done(), and leave busy stuck
+  // true with the safety timer already cleared by finalize() — a deaf app.
+  assert.equal(s.tryStart(), false);
+  assert.equal(s.generation, mine, "a press that was ignored is not a dictation");
+});
+
+test("a press underneath an unfinished dictation changes the generation", async () => {
+  const s = new DictationSession({ safetyTimeoutMs: 20, log: quiet });
+  s.tryStart();
+  const mine = s.generation;
+  s.release();
+  await sleep(50); // safety timer clears busy while the transcript is still in flight
+  assert.equal(s.tryStart(), true, "the user can start a new dictation now");
+  assert.notEqual(s.generation, mine, "the late transcript no longer owns the session");
+});
+
 test("fail() finalizes and re-opens in one step", async () => {
   const s = new DictationSession({ safetyTimeoutMs: 20, log: quiet });
   s.tryStart();
