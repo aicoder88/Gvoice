@@ -9,6 +9,9 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { polishTranscript, takeCleanupError, resetCleanupFailureStreak } from "../../src/cleanup.js";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
 
 const realFetch = globalThis.fetch;
 const realEnv = { ...process.env };
@@ -122,4 +125,34 @@ test("a successful pass reports nothing", async () => {
   const out = await polishTranscript(SAMPLE);
   assert.equal(out, "So I think we should ship this tomorrow.");
   assert.equal(takeCleanupError(), null);
+});
+
+test("the custom dictionary rides on the system prompt, never the user message", async () => {
+  // Measured 2026-07-31: with the dictionary hint sitting in the user message
+  // between the instruction and the transcript, llama-3.3-70b stopped building
+  // numbered lists and started dropping the speaker's lead-in — a dictionary of
+  // one junk term was enough. Rules belong with the rules.
+  useGroq();
+  const { init: initVocab, addTerm } = await import("../../src/vocab.js");
+  const store = join(tmpdir(), `gvoice-vocab-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  initVocab(store);
+  addTerm("Debezium");
+
+  let sent = null;
+  globalThis.fetch = async (_url, init) => {
+    sent = JSON.parse(String(init.body));
+    return new Response(JSON.stringify({ choices: [{ message: { content: "cleaned" } }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  await polishTranscript(SAMPLE);
+  rmSync(store, { force: true });
+
+  const [system, user] = sent.messages;
+  assert.equal(system.role, "system");
+  assert.match(system.content, /Debezium/, "the dictionary belongs in the system prompt");
+  assert.doesNotMatch(user.content, /Debezium/, "and nowhere near the transcript");
+  assert.match(user.content, /<<<TRANSCRIPT>>>/);
 });

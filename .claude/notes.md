@@ -699,3 +699,52 @@ proved by temporarily setting it to 1 minute and watching "Mic released
 watcher on 31 Jul 10:30, now shipped as a Deepgram keyterm on every request.
 Harmless-ish, and it postdates the empties. Also: Wispr Flow is running
 alongside GVoice, a second app holding the same mic.
+
+### Groq cleanup pass — checked 31 Jul 2026 (same day, later)
+
+**Bug found and fixed: the custom dictionary was breaking the formatting.**
+`polishTranscript` put the dictionary hint in the USER message, between the
+"clean this up" instruction and the transcript. Measured against
+llama-3.3-70b with a dictionary of exactly ONE junk term (`clodv`):
+
+- hint in the user message: 4/4 runs produced flat prose AND dropped the
+  speaker's lead-in ("Here is what I need" — a PRESERVE violation).
+- same text, no hint: 4/4 runs produced the numbered list with the lead-in kept.
+
+Moved it onto the system prompt, where the rest of the rules live, with an
+explicit "spelling fix only — never overrides the layout rules" clause. Re-ran
+with the dictionary loaded: lists came back. Unit test added
+(`cleanup-error-report.test.js`) asserting the dictionary lands in
+`messages[0]` (system) and NOT in the user message.
+
+**Verified on the installed app**, not just in node: with GVOICE_DEBUG on for
+one dictation, `[main] cleanup done (582ms)` logged the numbered list, and the
+same text landed in history.json. Verbose logging was turned back off afterwards
+(it writes the dictated text into debug.log).
+
+**What is NOT a bug — measured, so we stop re-chasing it:**
+
+- *Inline enumeration with no lead-in stays prose.* "First the orders second the
+  invoices third the shipping labels..." → 0/5 runs made a list, both through
+  the app and through direct calls. Identical behaviour either side, so there is
+  no app-vs-library difference to hunt. The prompt DOES demand a list here; the
+  70b model half-follows it when there's no lead-in clause to hang a colon on.
+  Fixing it means restructuring an 8.3k-char system prompt — not attempted.
+- *Bursts degrade to raw text, silently.* The shipped free Groq key is capped at
+  12,000 tokens/minute and the system prompt alone is ~2,100 tokens, so a call
+  costs ~2.2-2.5k: roughly **5 dictations per minute** before 429s start. Past
+  that, and whenever Groq queues the request past the 2.5s `TIMEOUT_MS`, the raw
+  unformatted transcript is pasted. Observed live: 2 of 5 back-to-back calls
+  aborted at the timeout. Normal single calls run 400-860ms. A user-supplied
+  GROQ_API_KEY (free, no card) gets its own quota and would remove the ceiling.
+- The timeout was NOT raised: the evidence for slowness came from a synthetic
+  burst that was already near the TPM limit, and cleanup blocks the paste, so a
+  longer ceiling is latency the user feels on every dictation.
+
+**Models actually in use** (from the live `.env` + `debug.log`):
+speech→text Deepgram **nova-3** streaming, plus nova-3 prerecorded for the
+retry-from-clip path; cleanup Groq **llama-3.3-70b-versatile**. BOTH run on the
+keys baked into the repo (`DEEPGRAM_API_KEY` and `GROQ_API_KEY` are empty in the
+user's .env), i.e. shared free-tier quota. Configured but idle: whisper.cpp
+`ggml-small-q5_1.bin` via /opt/homebrew/bin/whisper-cli (on-device fallback),
+and OpenAI `gpt-realtime-2` (no key set).
