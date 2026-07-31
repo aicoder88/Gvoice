@@ -99,7 +99,12 @@ function seedSet() {
         if (w.length >= 3) seedWords.add(w.toLowerCase());
       }
     }
-  } catch {}
+  } catch (err) {
+    // Missing seed = silently worse correction (ordinary English words become
+    // rewritable, known words get offered as "learn this?"). It shipped that way
+    // once because models/vocab.txt wasn't in the packaged build — say so.
+    console.error("[vocab] seed file unreadable:", SEED_FILE, err && err.message);
+  }
   return seedWords;
 }
 

@@ -249,15 +249,8 @@
           <div class="row"><div class="lbl">Delete after<small>0 = keep until there are 50</small></div>
             <div class="inline"><input type="number" id="retentionDays" min="0" max="365" /> <span>days</span></div></div>
           <div class="row"><div class="lbl">Wipe everything now</div><button class="btn danger" id="clearBtn" type="button">Delete all recordings</button></div>
-          <div class="row top"><div class="lbl">Close the mic when idle<small>the orange mic light goes out when it closes; the first press after that takes a moment longer</small></div>
-            <select id="micIdleMinutes">
-              <option value="0">Only while I hold the key</option>
-              <option value="1">After 1 minute</option>
-              <option value="5">After 5 minutes</option>
-              <option value="15">After 15 minutes</option>
-              <option value="30">After 30 minutes (default)</option>
-              <option value="never">Never</option>
-            </select></div>
+          <div class="row top"><div class="lbl">Microphone use<small>opens while you dictate, stays open one extra second, then closes</small></div>
+            <span style="color:#8497a8">Only during dictation</span></div>
         </div>
         <div class="savebar"><button class="btn primary saveBtn" type="button">Save</button><span class="status statusEl"></span></div>
       </section>
@@ -300,14 +293,6 @@
         el("deepgramKey").value = view.deepgramKey || "";
         el("recordingsEnabled").checked = !!view.recordingsEnabled;
         el("retentionDays").value = view.retentionDays;
-        // MIC_IDLE_MINUTES takes any number of minutes, but the dropdown only
-        // lists the useful few — show a hand-edited value rather than blank.
-        const micIdle = el("micIdleMinutes");
-        const chosen = String(view.micIdleMinutes);
-        if (![...micIdle.options].some((o) => o.value === chosen)) {
-          micIdle.add(new Option(`After ${chosen} minutes`, chosen));
-        }
-        micIdle.value = chosen;
       }
       function collect() {
         return {
@@ -318,8 +303,7 @@
           openaiKey: el("openaiKey").value,
           deepgramKey: el("deepgramKey").value,
           recordingsEnabled: el("recordingsEnabled").checked,
-          retentionDays: Number(el("retentionDays").value),
-          micIdleMinutes: el("micIdleMinutes").value
+          retentionDays: Number(el("retentionDays").value)
         };
       }
       function setStatus(text, ok) {

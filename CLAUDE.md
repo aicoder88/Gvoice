@@ -21,6 +21,13 @@ optional cleanup pass tidies it, and API keys stay on a local relay.
   device handling: `public/dictation.js`, `public/mic-health.js`,
   `public/realtime-voice-agent.js`.
 
+## Hard-coded provider keys are intentional
+
+The fallback Deepgram, Groq, and any other provider keys embedded in the local
+relay are deliberate product configuration. Do not remove, redact, rotate, or
+replace them unless the user explicitly asks for that exact key change. User
+supplied environment keys may still override the shipped fallbacks.
+
 ## Hard rule: a fix is not done until you SEE it work on the running app
 
 Bugs here have been re-reported after "fixes" that never actually stuck. Reading

@@ -11,8 +11,7 @@ import {
   readEnvFile,
   writeEnvFile,
   settingsView,
-  patchFromView,
-  micIdleMinutes
+  patchFromView
 } from "../../src/settings.js";
 
 function tmpEnv(contents) {
@@ -112,31 +111,6 @@ test("settingsView: defaults when env is empty", () => {
   assert.equal(v.retentionDays, 7);
 });
 
-test("micIdleMinutes: defaults to 30, clamps junk, keeps 'never'", () => {
-  assert.equal(micIdleMinutes({}), 30);
-  assert.equal(micIdleMinutes({ MIC_IDLE_MINUTES: "" }), 30);
-  assert.equal(micIdleMinutes({ MIC_IDLE_MINUTES: "15" }), 15);
-  assert.equal(micIdleMinutes({ MIC_IDLE_MINUTES: "0" }), 0);
-  assert.equal(micIdleMinutes({ MIC_IDLE_MINUTES: " NEVER " }), "never");
-  // Junk and negatives fall back rather than corrupting the timer.
-  assert.equal(micIdleMinutes({ MIC_IDLE_MINUTES: "banana" }), 30);
-  assert.equal(micIdleMinutes({ MIC_IDLE_MINUTES: "-3" }), 30);
-  // Clamped at a day so a fat-fingered value can't become an effectively
-  // infinite timer that silently means "never".
-  assert.equal(micIdleMinutes({ MIC_IDLE_MINUTES: "99999" }), 1440);
-});
-
-test("micIdleMinutes: an existing MIC_ALWAYS_ON keeps its old meaning", () => {
-  // Nobody's .env changes behavior on upgrade: always-on was "never close",
-  // and the off switch was "close after every hold".
-  assert.equal(micIdleMinutes({ MIC_ALWAYS_ON: "true" }), "never");
-  assert.equal(micIdleMinutes({ MIC_ALWAYS_ON: "false" }), 0);
-  assert.equal(micIdleMinutes({ MIC_ALWAYS_ON: " OFF " }), 0);
-  assert.equal(micIdleMinutes({ MIC_ALWAYS_ON: "0" }), 0);
-  // The new key wins once it's written.
-  assert.equal(micIdleMinutes({ MIC_ALWAYS_ON: "false", MIC_IDLE_MINUTES: "5" }), 5);
-});
-
 test("settingsView: reads + coerces values, falls back on invalid enums", () => {
   const v = settingsView({
     STT_PROVIDER: "deepgram",
@@ -171,16 +145,11 @@ test("patchFromView: maps fields to env keys and drops unknowns/invalids", () =>
   assert.equal("bogus" in patch, false);
 });
 
-test("micIdleMinutes: round-trips through the settings window", () => {
-  // The dropdown hands back strings, including the non-numeric "never".
-  for (const chosen of ["0", "1", "5", "15", "30", "never"]) {
-    const patch = patchFromView({ micIdleMinutes: chosen });
-    assert.equal(patch.MIC_IDLE_MINUTES, chosen);
-    assert.equal(String(settingsView(patch).micIdleMinutes), chosen);
-  }
-  // Nothing selected yet must not write a value (which would clobber the .env).
-  assert.equal("MIC_IDLE_MINUTES" in patchFromView({ micIdleMinutes: "" }), false);
-  assert.equal(patchFromView({ micIdleMinutes: "banana" }).MIC_IDLE_MINUTES, "30");
+test("legacy microphone idle settings are ignored", () => {
+  const view = settingsView({ MIC_IDLE_MINUTES: "30", MIC_ALWAYS_ON: "true" });
+  assert.equal("micIdleMinutes" in view, false);
+  const patch = patchFromView({ micIdleMinutes: "never" });
+  assert.equal("MIC_IDLE_MINUTES" in patch, false);
 });
 
 test("patchFromView: invalid provider is omitted (not corrupted)", () => {

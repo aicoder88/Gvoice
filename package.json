@@ -43,6 +43,7 @@
       "realtime-relay.js",
       "src/**/*",
       "public/**/*",
+      "models/vocab.txt",
       "package.json"
     ],
     "extraResources": [

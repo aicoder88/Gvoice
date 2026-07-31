@@ -50,7 +50,7 @@ import { initHistory, getHistory, getHistoryPath, recordTranscript } from "./src
 import { computeStats } from "./src/stats.js";
 import { ensureWhisperServer, stopWhisperServer } from "./src/providers/whisper-local.js";
 import { ENV_FILE, MODELS_DIR, BIN_DIR } from "./src/bootstrap-env.js";
-import { writeEnvFile, settingsView, patchFromView, micIdleMinutes, VALID_PROVIDERS } from "./src/settings.js";
+import { writeEnvFile, settingsView, patchFromView, VALID_PROVIDERS } from "./src/settings.js";
 import { probeCapability, recommendedAssets } from "./src/hardware.js";
 import { suggestBeforeBenchmark } from "./src/benchmark.js";
 import { runLocalBenchmark } from "./src/benchmark-run.js";
@@ -885,15 +885,12 @@ function createDictationWindow() {
   dictationWindow.loadURL(dictationUrl());
 }
 
-// The renderer reads both of these once at load, so a Settings change to either
-// takes effect via reloadDictationWindow(). micidle is how many minutes the mic
-// may sit open with no dictation before the renderer closes it (putting the
-// macOS orange mic dot out): 0 = release after every hold, "never" = keep it
-// open all day.
+// The renderer reads the provider once at load, so a Settings change takes
+// effect via reloadDictationWindow(). The mic lifecycle is fixed in the
+// renderer: one second of post-release capture, then the device closes.
 function dictationUrl() {
   const provider = encodeURIComponent((process.env.STT_PROVIDER || "openai").toLowerCase());
-  const micidle = encodeURIComponent(String(micIdleMinutes(process.env)));
-  return `http://127.0.0.1:${serverPort}/dictation.html?provider=${provider}&micidle=${micidle}`;
+  return `http://127.0.0.1:${serverPort}/dictation.html?provider=${provider}`;
 }
 
 // Dictation is English-only: the bundled local model is ggml-small.en (English),

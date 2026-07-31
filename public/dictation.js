@@ -4,30 +4,10 @@ const targetSampleRate = 24000;
 const statusEl = document.getElementById("status");
 const logEl = document.getElementById("log");
 
-// How long the capture graph may sit open with no dictation before we close it
-// (?micidle=, minutes, from MIC_IDLE_MINUTES). A warm graph means the first word
-// of a press is never lost (pre-roll) and the pipeline is always ready — but
-// macOS lights the orange "mic in use" dot for as long as ANY stream is open, so
-// leaving it warm forever lights the dot all day. Dropping it after an idle
-// stretch keeps every press inside a working session instant and still puts the
-// dot out when the user walks away.
-//   "never" → never close it (the old MIC_ALWAYS_ON=true behavior)
-//   0       → close after every hold (the old MIC_ALWAYS_ON=false cold mode:
-//             no pre-roll, so hold the key a beat before speaking)
-const micIdleParam = new URLSearchParams(window.location.search).get("micidle");
-const MIC_IDLE_MS = (() => {
-  if (micIdleParam === "never") return Infinity;
-  // Number(null) is 0, which would silently mean cold mode — a missing param
-  // must land on the same default a junk one does.
-  const n = micIdleParam == null ? NaN : Number(micIdleParam);
-  // Keep this number equal to MIC_IDLE_DEFAULT in src/settings.js — main.js
-  // always passes ?micidle=, so this only bites when the param goes missing or
-  // arrives as junk, and landing somewhere else would be a silent disagreement.
-  return (Number.isFinite(n) && n >= 0 ? n : 30) * 60000;
-})();
-// Cold mode: nothing is kept warm between presses, so every press builds a fresh
-// graph (which is also its own recovery).
-const COLD_MIC = MIC_IDLE_MS === 0;
+// Nothing is kept warm between dictations. Each press builds a fresh capture
+// graph; release captures one final second, then closes the stream and clears
+// the operating system's microphone-in-use indicator.
+const COLD_MIC = true;
 
 let socket = null;
 let audioContext = null;
@@ -79,9 +59,9 @@ const FAILURE_MS = Number(window.DICTATION_FAILURE_MS || 20000);
 // have been streamed yet — releasing mid-word would otherwise clip the final
 // word or two. On release we keep streaming for this long, THEN commit, so the
 // tail reaches the engine. Tunable via window.DICTATION_TAIL_MS.
-// 250 still clipped the final word for speakers who release mid-word; 450
-// covers the worklet's buffered burst plus ~200ms of trailing speech.
-const TAIL_MS = Number(window.DICTATION_TAIL_MS || 450);
+// Keep the device live for one second after key-up. This catches a released-
+// mid-word ending, then cold mode closes the stream and clears the OS mic light.
+const TAIL_MS = Number(window.DICTATION_TAIL_MS || 1000);
 let draining = false;
 let drainTimer = null;
 // Partial-transcript fallback armed by finishUtterance. Tracked so a new press
@@ -592,11 +572,16 @@ function teardownCapture(full = false) {
   }
 }
 
-// --- Idle mic drop ------------------------------------------------------------
-// Close the mic after MIC_IDLE_MS with no dictation so the macOS orange mic dot
-// goes out when the user walks away. Partial teardown + suspend — exactly what
-// cold mode does after every hold — so the next press rebuilds through the
-// normal initCapture path and pays the open cost once, not every press.
+// --- Capture teardown ---------------------------------------------------------
+// Cold mode closes the mic after every dictation so the macOS orange mic dot
+// goes out.
+//
+// COLD_MIC is now a hard-coded true, so everything below — the idle timer, and
+// every branch of recoverMic past its cold-mode early return — is UNREACHABLE.
+// It is kept, not deleted, because it is the whole warm-mic + liveness-probe
+// implementation and reviving it is a one-constant change. Do not "fix" a bug in
+// here without first flipping COLD_MIC: you cannot run this code.
+// ponytail: dead-but-preserved. Delete it outright if warm mode is ruled out.
 let idleTimer = null;
 // The idle timer fired: there is deliberately no warm graph until the next
 // press. Background recovery must NOT relight the mic (and the dot) on a
@@ -622,9 +607,14 @@ function dropCapture(why) {
   log("Mic released (" + why + ")");
 }
 
-function armIdleTimer(ms = MIC_IDLE_MS) {
+// The default was MIC_IDLE_MS until that setting was removed; the diff left it
+// at 0, which would drop the mic instantly on the first arm. IDLE_RECHECK_MS is
+// a recheck interval (5s), NOT a real idle period — it is merely not absurd.
+// Reviving warm mode means passing a real interval here, not trusting this
+// default. Unreachable today (COLD_MIC).
+function armIdleTimer(ms = IDLE_RECHECK_MS) {
   clearIdleTimer();
-  if (COLD_MIC || !Number.isFinite(MIC_IDLE_MS)) return; // per-hold teardown, or "never"
+  if (COLD_MIC) return;
   idleTimer = setTimeout(() => {
     idleTimer = null;
     // Never tear a graph down under a live hold or an in-flight rebuild —
@@ -635,7 +625,7 @@ function armIdleTimer(ms = MIC_IDLE_MS) {
     }
     if (!captureReady) return;
     idleDropped = true;
-    dropCapture("idle " + Math.round(MIC_IDLE_MS / 60000) + " min");
+    dropCapture("idle");
   }, ms);
 }
 
@@ -970,6 +960,10 @@ async function startRecording(profile) {
   try {
     await socketReady;
   } catch {
+    // No utterance started, so the normal finishUtterance cold-mic cleanup will
+    // never run. Release the stream acquired above or a relay/cloud outage
+    // leaves the operating system's microphone-in-use indicator on forever.
+    dropCapture("socket startup failed");
     setStatus("WS failed");
     startInFlight = false;
     window.dictationBridge.sendError("Dictation couldn't start — quit GVoice and reopen it, then try again.");
