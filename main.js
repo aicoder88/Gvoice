@@ -114,6 +114,15 @@ let currentTranscript = null;
 let currentRecordingPath = null;
 /** @type {import("electron").Tray | null} */
 let tray = null;
+// The menu is popped up by hand on right-click instead of being handed to
+// setContextMenu — otherwise macOS shows it on left-click too and the "click"
+// event never fires, which would kill the click-to-talk toggle.
+/** @type {import("electron").Menu | null} */
+let trayMenu = null;
+// True while a LEFT-CLICK on the tray is holding the mic open. Can't be derived
+// from dictation.busy: that stays true through transcription (up to 25s), so
+// the next click would read as "stop" when nothing is recording.
+let trayHolding = false;
 /** @type {number | null} */
 let serverPort = null;
 /** @type {string | null} */
@@ -909,7 +918,7 @@ function updateTrayTooltip() {
     return;
   }
   const keyLabel = process.platform === "darwin" ? "right Option" : "Ctrl+Shift";
-  tray.setToolTip(`GVoice\nHold ${keyLabel} to dictate.`);
+  tray.setToolTip(`GVoice\nHold ${keyLabel} to dictate, or click this icon to start and stop.`);
   try { tray.setImage(makeTrayIcon()); } catch {}
 }
 
@@ -987,54 +996,64 @@ function reportDeafHotkey() {
   } catch {}
 }
 
+// Begin a dictation. Module-level (not a setupHotkey closure) so the tray's
+// left-click toggle can start one too — including on a run where the global
+// hotkey failed to arm, which is exactly when a clickable fallback matters.
+// Returns false if the press was rejected (previous dictation still in flight,
+// or no renderer to talk to).
+function startDictation() {
+  if (!dictationWindow || dictationWindow.isDestroyed()) return false;
+  if (!dictation.tryStart()) return false;
+  // A new dictation supersedes any correction-watch window from the last
+  // one, and clears a pop-up the user never answered.
+  correctionWatcher.disarm();
+  recentTypedWords = [];
+  hideVocab();
+  const profile = { language: DICTATION_LANGUAGE, model: process.env.DEEPGRAM_MODEL || "nova-3" };
+  savedForegroundHwnd = captureForegroundWindow();
+  dlog("press", { profile, hwnd: savedForegroundHwnd });
+  debug("[main] dictation:start lang=" + profile.language + " (hwnd=" + savedForegroundHwnd + ")");
+  showPillForWindow(savedForegroundHwnd);
+  dictationWindow.webContents.send("dictation:start", profile);
+  // Self-heal a lost key-up: if the hold never reports a release, end it
+  // the same way a real release would (commit + transcribe + re-open the
+  // session) so a dropped event can't jam dictation until the next quit.
+  if (maxHoldTimer) clearTimeout(maxHoldTimer);
+  maxHoldTimer = setTimeout(() => fireRelease("max-hold"), MAX_HOLD_MS);
+  return true;
+}
+
+function fireRelease(/** @type {string} */ source) {
+  // Whatever ends the dictation — key-up, max-hold, or a tray click — the tray
+  // toggle is no longer holding the mic open.
+  trayHolding = false;
+  if (maxHoldTimer) { clearTimeout(maxHoldTimer); maxHoldTimer = null; }
+  if (!dictation.release()) return;
+  dlog("release", { source });
+  debug("[main] dictation:stop (" + source + ")");
+  // Guard like every other webContents.send in this file: a max-hold timer
+  // (or a late real release) can fire during teardown, after the window is
+  // gone, and an unguarded send throws "Object has been destroyed".
+  if (!dictationWindow || dictationWindow.isDestroyed()) return;
+  dictationWindow.webContents.send("dictation:stop");
+  // Keep the pill visible but switch it to the pulsing-blue "Transcribing…"
+  // state so the user can see work is still happening. A terminal event
+  // (transcript / failure / error) flips it to success/error; the safety
+  // timer covers a renderer that never reports back.
+  setPillState("transcribing");
+  // Must outlive the renderer's 20s FAILURE_MS watchdog, or the
+  // transcribing pill vanishes mid-work and the result pops up later
+  // with no context.
+  armPillSafetyHide(25000);
+}
+
 async function setupHotkey() {
   if (!serverPort || !dictationWindow) return false;
   try {
-    const fireRelease = (/** @type {string} */ source) => {
-      if (maxHoldTimer) { clearTimeout(maxHoldTimer); maxHoldTimer = null; }
-      if (!dictation.release()) return;
-      dlog("release", { source });
-      debug("[main] dictation:stop (" + source + ")");
-      // Guard like every other webContents.send in this file: a max-hold timer
-      // (or a late real release) can fire during teardown, after the window is
-      // gone, and an unguarded send throws "Object has been destroyed".
-      if (!dictationWindow || dictationWindow.isDestroyed()) return;
-      dictationWindow.webContents.send("dictation:stop");
-      // Keep the pill visible but switch it to the pulsing-blue "Transcribing…"
-      // state so the user can see work is still happening. A terminal event
-      // (transcript / failure / error) flips it to success/error; the safety
-      // timer covers a renderer that never reports back.
-      setPillState("transcribing");
-      // Must outlive the renderer's 20s FAILURE_MS watchdog, or the
-      // transcribing pill vanishes mid-work and the result pops up later
-      // with no context.
-      armPillSafetyHide(25000);
-    };
-
     const mod = await import("./src/hotkey.js");
     hotkeyEngine = mod.startHotkey({
-      onPress: () => {
-        if (!dictation.tryStart()) return;
-        // A new dictation supersedes any correction-watch window from the last
-        // one, and clears a pop-up the user never answered.
-        correctionWatcher.disarm();
-        recentTypedWords = [];
-        hideVocab();
-        const profile = { language: DICTATION_LANGUAGE, model: process.env.DEEPGRAM_MODEL || "nova-3" };
-        savedForegroundHwnd = captureForegroundWindow();
-        dlog("press", { profile, hwnd: savedForegroundHwnd });
-        debug("[main] dictation:start lang=" + profile.language + " (hwnd=" + savedForegroundHwnd + ")");
-        showPillForWindow(savedForegroundHwnd);
-        dictationWindow.webContents.send("dictation:start", profile);
-        // Self-heal a lost key-up: if the hold never reports a release, end it
-        // the same way a real release would (commit + transcribe + re-open the
-        // session) so a dropped event can't jam dictation until the next quit.
-        if (maxHoldTimer) clearTimeout(maxHoldTimer);
-        maxHoldTimer = setTimeout(() => fireRelease("max-hold"), MAX_HOLD_MS);
-      },
-      onRelease: () => {
-        fireRelease("hotkey");
-      }
+      onPress: () => { startDictation(); },
+      onRelease: () => { fireRelease("hotkey"); }
     });
     updateTrayTooltip();
     startHookWatchdog(hotkeyEngine.sawEvent);
@@ -2081,6 +2100,17 @@ function setupPowerMonitor() {
 
 function createTray() {
   tray = new Tray(makeTrayIcon());
+  // Left-click starts the mic, left-click again stops it and pastes — the
+  // no-keyboard way to dictate. Right-click (or control-click, which macOS
+  // reports as a left click with ctrlKey set) opens the menu with Quit in it.
+  tray.on("click", (/** @type {import("electron").KeyboardEvent} */ event) => {
+    if (event && event.ctrlKey) { if (trayMenu) tray?.popUpContextMenu(trayMenu); return; }
+    if (trayHolding) { fireRelease("tray"); return; }
+    if (startDictation()) trayHolding = true;
+  });
+  // Read trayMenu at click time, not capture it — rebuildTrayMenu replaces it
+  // after every dictation.
+  tray.on("right-click", () => { if (trayMenu) tray?.popUpContextMenu(trayMenu); });
   updateTrayTooltip();
   rebuildTrayMenu();
 }
@@ -2248,7 +2278,7 @@ function rebuildTrayMenu() {
     }
   ]);
 
-  tray.setContextMenu(menu);
+  trayMenu = menu;
 }
 
 function buildAppMenu() {
