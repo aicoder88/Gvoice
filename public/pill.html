@@ -15,11 +15,17 @@
       /* The pill is centered in a transparent window. Every state shares this
          shell; the dot colour, label, and (for results) the action buttons swap
          based on body[data-state]. */
+      /* Bottom-anchored, not centred: the result window is 72px tall but the
+         pill itself is ~40px, and centring parked that spare height under the
+         pill — pushing it further up the screen than the window suggests. The
+         8px padding leaves room for the drop shadow. */
       body {
         display: flex;
-        align-items: center;
+        align-items: flex-end;
         justify-content: center;
         height: 100vh;
+        padding-bottom: 8px;
+        box-sizing: border-box;
       }
       .pill {
         display: flex;
@@ -157,7 +163,7 @@
       // quickly (it worked, get out of the way); an error lingers a long time so
       // the user can read it, copy the text, or open the recording without it
       // vanishing mid-reach. Backstopped by main's safety timer (holdMs + 15s).
-      const HIDE_BY_STATE = { success: 6000, error: 30000 };
+      const HIDE_BY_STATE = { success: 3000, error: 30000 };
       let currentHideMs = 30000;
       let hideTimer = null;
       function clearHide() { if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; } }

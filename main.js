@@ -484,7 +484,10 @@ function createPillWindow() {
 // The window is sized per state: small for listening/transcribing, wider for
 // the success/error states that carry Copy / Open-recording buttons. It sits
 // at the bottom-middle of whichever screen the user is working on.
-const PILL_BOTTOM_MARGIN = 28; // gap above the dock / taskbar
+// ponytail: 8px, not 28 — at 28 the pill floated a visible gap above the dock
+// and read as "halfway up the screen". The pill itself is bottom-anchored
+// inside its window (pill.html), so this is the real on-screen gap.
+const PILL_BOTTOM_MARGIN = 8; // gap above the dock / taskbar
 const PILL_SIZES = {
   listening: { width: 200, height: 56 },
   transcribing: { width: 220, height: 56 },
@@ -581,7 +584,7 @@ function showPillResult(
   /** @type {"success" | "error"} */ state,
   /** @type {string | null} */ transcript,
   /** @type {string | null} */ recordingPath,
-  /** @type {{ reason?: string, uncertain?: boolean, holdMs?: number }} */ opts = {}
+  /** @type {{ reason?: string, holdMs?: number }} */ opts = {}
 ) {
   currentTranscript = transcript;
   currentRecordingPath = recordingPath;
@@ -592,14 +595,14 @@ function showPillResult(
   //  - A confirmed-landed success (read back and verified) — or a paste into a
   //    terminal, which we trust — clears fast (3s, just long enough to register)
   //    and gets out of the way.
-  //  - An UNCERTAIN success — pasted but we couldn't read it back to confirm and
-  //    it wasn't a terminal (browsers / Slack / secure fields) — almost always
-  //    landed, but lingers a bit longer (8s) so a rare silent miss is still
-  //    catchable before the pill clears. The text is in Recent dictations and
-  //    the ✕ clears it instantly either way.
+  //  - An UNCERTAIN success (pasted, but not read back and not a terminal) used
+  //    to linger 8s to make a rare silent miss catchable. In practice almost
+  //    every paste is unverifiable, so 8s was the normal case and the pill
+  //    overstayed on every dictation. The text is in Recent dictations either
+  //    way, so a success is a success: 3s.
   //  - `opts.holdMs` overrides all of it, for a success whose text only landed
   //    on the clipboard (the retry recovery) and so needs reading time.
-  const holdMs = opts.holdMs ?? (state === "error" ? 30000 : opts.uncertain ? 8000 : 3000);
+  const holdMs = opts.holdMs ?? (state === "error" ? 30000 : 3000);
   setPillState(state, { canCopy: !!transcript, canOpen: !!recordingPath, holdMs, reason: opts.reason });
   pillWindow?.showInactive();
   // Crash backstop only — must outlive the renderer's own timer so it never
@@ -1091,7 +1094,7 @@ function openAccessibilitySettings() {
 //
 // @param {string} transcript
 // @param {number | null} [restoreHwnd]
-// @returns {Promise<{ text: string, pasted: boolean, verified: boolean | null, uncertain: boolean, likelyMissed: boolean } | null>}
+// @returns {Promise<{ text: string, pasted: boolean, verified: boolean | null, likelyMissed: boolean } | null>}
 async function processTranscript(transcript, restoreHwnd = null) {
   if (!transcript || !transcript.trim()) return null;
   let textToType = stripWhisperNoiseTokens(transcript.trim());
@@ -1209,13 +1212,11 @@ async function processTranscript(transcript, restoreHwnd = null) {
   // The terminal check and the read-back are one AX snapshot (readbackPasteTarget)
   // so a focus change can't make them disagree about which app is focused.
   let verified = null;
-  let isTerminalTarget = false;
   let readTarget = "";
   let readLen = /** @type {number | null} */ (null);
   if (pasted) {
     await new Promise((resolve) => setTimeout(resolve, 150)); // let the paste settle
     const { isTerminal, value: fieldValue, app } = readbackPasteTarget();
-    isTerminalTarget = isTerminal;
     readTarget = app;
     readLen = typeof fieldValue === "string" ? fieldValue.length : null;
     if (!isTerminal && typeof fieldValue === "string") {
@@ -1232,9 +1233,9 @@ async function processTranscript(transcript, restoreHwnd = null) {
       // Copy for text already sitting in front of them. An app that doesn't
       // expose its composer's text faithfully (web areas, Electron editors,
       // rich-text composers) is indistinguishable from a real miss here, so this
-      // signal can only ever mean "unconfirmed" — it feeds `uncertain` below,
-      // which keeps the pill up a little longer with the text still copyable.
-      // The signals that CAN prove a miss (typeText threw, no editable field,
+      // signal can only ever mean "unconfirmed", so on its own it never shows an
+      // error — only `likelyMissed` below acts on it, by leaving the text on the
+      // clipboard. The signals that CAN prove a miss (typeText threw, no editable field,
       // Windows focus lost) still set pasted = false above.
     }
   }
@@ -1253,11 +1254,6 @@ async function processTranscript(transcript, restoreHwnd = null) {
   });
   // verified: true = read back and confirmed, false = read back and missing
   // (already downgraded pasted), null = couldn't read the field to check.
-  // uncertain: pasted, but we could neither read it back to confirm NOR trust
-  // it as a terminal (browser web areas, Slack, secure fields). Almost always
-  // landed, but worth lingering a little longer on the pill so a rare silent
-  // miss is still catchable. Terminals are trusted, so they are NOT uncertain.
-  const uncertain = pasted && verified !== true && !isTerminalTarget;
   // The strongest miss signal we have that still isn't strong enough to call a
   // failure: we read the field back, it had real content in it, and our text
   // wasn't there. The seven false "paste failed" pills that got the downgrade
@@ -1265,7 +1261,7 @@ async function processTranscript(transcript, restoreHwnd = null) {
   // its composer), so requiring content separates them. Not enough to show an
   // error, but enough to leave the text on the clipboard so ⌘V rescues it.
   const likelyMissed = pasted && verified === false && (readLen || 0) > 0;
-  return { text: textToType, pasted, verified, uncertain, likelyMissed };
+  return { text: textToType, pasted, verified, likelyMissed };
 }
 
 // How many recent recordings to keep on disk — matched to the history length so
@@ -1507,9 +1503,7 @@ function setupIpc() {
             // success keeps the plain "Success" label.
             // Action first: the label can ellipsize, so the instruction must
             // survive truncation.
-            reason: result.pasted ? "" : "Click Copy — the paste didn't land.",
-            // Pasted-but-unconfirmed (not a terminal): linger a little longer.
-            uncertain: result.uncertain
+            reason: result.pasted ? "" : "Click Copy — the paste didn't land."
           }
         );
         // Keep the last 50 dictations on disk and in the tray menu, so a

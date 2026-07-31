@@ -157,7 +157,7 @@ export function settingsView(env = {}) {
  * How long the mic may sit open with no dictation before it closes itself.
  * Returns a number of minutes, or the string "never".
  *
- *   5       default — warm all through a working session, dark when you walk
+ *   30      default — warm all through a working session, dark when you walk
  *           away. macOS lights the orange "mic in use" dot for as long as ANY
  *           stream is open, so a permanently warm mic lights it all day.
  *   0       open on press, release after every hold (no pre-roll: the user must
@@ -181,7 +181,11 @@ export function micIdleMinutes(env = {}) {
   return clampIdleMinutes(raw, MIC_IDLE_DEFAULT);
 }
 
-const MIC_IDLE_DEFAULT = 5;
+// 30, not 5: at 5 the mic was cold for most first presses of the day, and a cold
+// mic eats the first ~1s of the hold (debug.log 2026-07-31 — several clips came
+// back near-silent, one empty on 5s of speech). 30 keeps the light behaviour the
+// user asked for — it goes out when they walk away — without that cost.
+const MIC_IDLE_DEFAULT = 30;
 
 /** @returns {number | "never"} */
 function clampIdleMinutes(value, fallback) {

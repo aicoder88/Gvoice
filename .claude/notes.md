@@ -634,3 +634,68 @@ the sibling-caller angle. No new code read this round — this is a state check.
   wrote an absolute `WHISPER_BIN`; the env was restored to Deepgram afterward.
 - **Not observed live:** the "needs installing" message — it needs a Mac without
   Homebrew's whisper-cpp. Covered by unit tests on the locator instead.
+
+## "Quality fell off" + success pill — 31 Jul 2026
+
+**What the evidence actually said.** Word accuracy did NOT drop. Every Deepgram
+completion in `debug.log` (30 Jul 17:26 → 31 Jul 10:32) came back at
+conf 0.98–1.00. What changed is how often a press comes back with *nothing*:
+10 of ~30 sessions ended `deepgram ALL EMPTY`.
+
+Cross-tabbing every press (preroll size × hold length × outcome × clip level,
+measured straight off the saved WAVs) splits those empties into two groups:
+
+- **Near-silent clips** (peak 0.02–0.13, rms ≤0.006) — the mic genuinely
+  delivered nothing. The cold-mic ones fit `MIC_ALWAYS_ON=false` +
+  `MIC_IDLE_MINUTES=5`: on a cold open the device needs ~1s to produce real
+  samples, so a short press records the warm-up, not the user. Matches the
+  user's own earlier dictation in history.json ("now I have to hold the key for
+  several seconds before I start talking") and the truncated fragments
+  ("Today I told", "Much.", "Dropping.").
+- **Three real streaming failures on good audio** (17:39:06, 18:38:23,
+  10:28:48). All three completed with `reason=safety_timeout` — Deepgram never
+  answered the Finalize at all — and 10:28's identical WAV batch-transcribed to
+  49 chars on the retry path. So the audio was fine and the stream went deaf.
+  ~10% of sessions. NOT fixed here; the existing auto-batch-retry recovers them,
+  but slowly (one took 63s after a 30s timeout + a second attempt).
+
+**Rejected: turning on `autoGainControl`.** Levels are low (rms ~0.015–0.03,
+about -34 dBFS on the built-in MacBook Air mic) and AGC would lift them — but
+`git log -S` puts `autoGainControl: false` in the very first commit (f29d2e1,
+22 May), so it cannot explain a recent regression, and the 10:28 failure had
+identical bytes succeed via batch. Shipping it as "the fix" would have been a
+guess dressed as a root cause. Still the biggest untapped accuracy lever if the
+empties continue — as a tuning knob, not a regression fix.
+
+**Idle default 5 → 30 min** (`MIC_IDLE_DEFAULT`, plus a 30-minute option in the
+Settings dropdown, plus the user's own `.env`). Keeps the orange-light behaviour
+he asked for on 30 Jul while making a cold press rare. His call between that,
+"never close" (light on all day), and leaving it at 5.
+
+**Pill.** Two separate causes for "too high up": the 28px bottom margin AND the
+result window being 72px tall with the ~40px pill centred in it, so ~16px of
+dead space sat under the pill. Fixed both (margin 8, `align-items: flex-end`
+with 8px padding for the drop shadow).
+
+**Linger.** The 8s `uncertain` branch was the normal case, not the exception —
+almost every paste is unverifiable (read-back returns nothing for terminals,
+web areas, Electron editors), so success pills sat 8s on nearly every dictation.
+Collapsed to a flat 3s; `uncertain` and `isTerminalTarget` are now dead and
+removed. `likelyMissed` still carries the clipboard-rescue behaviour.
+
+**Verified on the running app, not in dev.** `pnpm start` can't run at all while
+the installed app holds the single-instance lock, and dev reads the repo `.env`
+(no `MIC_IDLE_MINUTES`), so it could not have reproduced any of this. Instead:
+built, quit the installed app, ran the new bundle, then installed it over
+`/Applications/GVoice.app` (previous bundle kept as a rollback in the session
+scratchpad). Dictations were driven end-to-end with a synthetic right-Option
+hold (`CGEvent`, keycode 61) plus `say` over the speakers — real mic, real
+Deepgram, real paste. Observed: success pill sitting on the Dock edge at +1.5s,
+gone by +3s; error pill at the same height. Idle-close honouring the `.env` was
+proved by temporarily setting it to 1 minute and watching "Mic released
+(idle 1 min)", then restoring 30.
+
+**Left alone:** `clodv` in custom-vocab.json — junk term added by the correction
+watcher on 31 Jul 10:30, now shipped as a Deepgram keyterm on every request.
+Harmless-ish, and it postdates the empties. Also: Wispr Flow is running
+alongside GVoice, a second app holding the same mic.
