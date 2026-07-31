@@ -21,9 +21,24 @@ export const WHISPER_VERSION = "v1.8.4";
 
 // GGML models on HuggingFace. Sizes are approximate, shown to the user up front
 // so a metered/slow connection isn't surprised by the download.
+// `label` is the wording the Settings dropdown shows — kept here so the model
+// list has one source of truth instead of a hand-synced copy in the HTML.
 export const MODELS = {
-  "ggml-base-q5_1.bin": { sizeMB: 57, multilingual: true },
-  "ggml-small-q5_1.bin": { sizeMB: 182, multilingual: true }
+  "ggml-base-q5_1.bin": { sizeMB: 57, multilingual: true, label: "Base — smallest and fastest" },
+  "ggml-small-q5_1.bin": { sizeMB: 182, multilingual: true, label: "Small — more accurate" },
+  "ggml-medium-q5_0.bin": { sizeMB: 514, multilingual: true, label: "Medium — more accurate again" },
+  // Turbo is the large-v3 encoder with a shrunken decoder: near-large accuracy
+  // at roughly small-model speed, and half the download of plain large.
+  "ggml-large-v3-turbo-q5_0.bin": {
+    sizeMB: 547,
+    multilingual: true,
+    label: "Large turbo — near-best accuracy, still quick"
+  },
+  "ggml-large-v3-q5_0.bin": {
+    sizeMB: 1031,
+    multilingual: true,
+    label: "Large — the most accurate, the slowest"
+  }
 };
 
 // Windows whisper.cpp release archives, by hardware variant.

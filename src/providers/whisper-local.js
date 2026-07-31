@@ -396,7 +396,9 @@ export function ensureWhisperServer(bin, modelPath) {
       });
     }
 
-    await waitForServer(baseUrl, 10000, () => spawnError || (whisperServerProc === null ? new Error("whisper-server died before ready") : null));
+    // 60s, not 10: a 1 GB large-v3 model has to be read off disk and uploaded to
+    // the GPU before the server answers, which 10s does not cover cold.
+    await waitForServer(baseUrl, 60000,() => spawnError || (whisperServerProc === null ? new Error("whisper-server died before ready") : null));
     // Superseded while we were booting: don't publish our URL (it would clobber
     // the newer start's, last-writer-wins) and kill our own process so it can't
     // linger as an orphan on its port.
