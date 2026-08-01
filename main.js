@@ -1433,11 +1433,23 @@ async function retranscribeRecording(recordingPath, { deliver = true } = {}) {
     pillWindow?.showInactive();
   }
   try {
-    const text = await transcribeWavFile(recordingPath, {
+    const attempt = () => transcribeWavFile(recordingPath, {
       apiKey: resolveDeepgramKey(),
       model: process.env.DEEPGRAM_MODEL || "nova-3",
       language: DICTATION_LANGUAGE
     });
+    let text = await attempt();
+    // Deepgram sometimes answers a perfectly good clip with nothing at all —
+    // measured 2026-08-01: a 4.3s clip with normal speech level came back empty
+    // (13.5s), and the identical file transcribed correctly two minutes later.
+    // withRetry can't see this: it's a 200 with an empty transcript, not an
+    // error. This is the LAST chance before the user is told their recording had
+    // no speech in it, so spend one more call rather than lose the words.
+    if (!text) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      text = await attempt();
+      if (text) dlog("retranscribe-second-try", { path: recordingPath, len: text.length });
+    }
     dlog("retranscribe", { path: recordingPath, len: text.length, ms: Date.now() - t0 });
     if (!text) {
       if (pillFree()) showPillResult("error", null, recordingPath, { reason: "Retried — no speech in the recording." });
