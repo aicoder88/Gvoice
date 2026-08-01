@@ -326,6 +326,19 @@ async function bootRelayServer() {
   try {
     const result = await startServer({ recordingsDir });
     serverPort = result.port;
+    // Open the Deepgram connection the first press will use, now, while nobody
+    // is waiting on it. The relay parks one after every dictation; this covers
+    // the first words after launch. Costs nothing — Deepgram bills audio, not
+    // an open socket — and never blocks boot.
+    if (provider === "deepgram") {
+      import("./src/providers/deepgram.js")
+        .then((dg) => dg.prewarm({
+          apiKey: resolveDeepgramKey(),
+          model: process.env.DEEPGRAM_MODEL || "nova-3",
+          language: DICTATION_LANGUAGE
+        }))
+        .catch(() => {});
+    }
     return result;
   } catch (error) {
     serverError = error.message || String(error);

@@ -62,14 +62,155 @@ function addKeyterms(/** @type {URLSearchParams} */ params, /** @type {string} *
 }
 
 /**
+ * The streaming URL for one language. Everything that changes what Deepgram
+ * hears rides in here — model, language, and the user's dictionary — which is
+ * what makes the URL a safe cache key for a parked connection.
+ *
+ * @param {string} model
+ * @param {string} legLang
+ */
+function streamUrl(model, legLang) {
+  const params = new URLSearchParams({
+    model,
+    language: legLang,
+    encoding: "linear16",
+    sample_rate: "24000",
+    channels: "1",
+    punctuate: "true",
+    interim_results: "true",
+    endpointing: "false",
+    vad_events: "false"
+  });
+  // smart_format and keyterm prompting used to be English-only; Deepgram now
+  // accepts both for nova-3 monolingual languages including hr (handshake
+  // verified 2026-06-05 — no HTTP 400).
+  params.set("smart_format", "true");
+  // Bias toward the user's custom dictionary. nova-3 uses keyterm prompting;
+  // older Deepgram models use the keywords param. Each term is appended as a
+  // repeated query param. Re-read per connection so freshly-added words apply
+  // to the very next dictation.
+  addKeyterms(params, model);
+  return `wss://api.deepgram.com/v1/listen?${params.toString()}`;
+}
+
+/** The languages one dictation runs, given the requested language. */
+function legLanguages(/** @type {string | undefined | null} */ language) {
+  const lang = (language || process.env.WHISPER_LANGUAGE || "auto").toLowerCase();
+  return lang === "auto" || lang === "multi" ? AUTO_LANGUAGES : [lang];
+}
+
+// --- Warm standby connections -------------------------------------------------
+// The Deepgram handshake used to sit in the middle of every press. Measured on
+// 2026-08-01 from the app's own log: 0.6-1.0s on a good press, 2.4-5.6s on a bad
+// one — and a late connect is also what triggers the backlog hold below, which
+// then adds seconds more (one press waited 9.9s after key-up). The same
+// handshake from a plain node process on the same machine is a steady 0.5-0.8s,
+// so the wait is not the network.
+//
+// So the relay opens the NEXT press's connection as soon as the current
+// dictation ends and holds it on KeepAlives. A press that finds a matching one
+// starts streaming into an already-open socket: no handshake, no backlog, no
+// hold. Deepgram bills the audio you send, not the time a socket is open, and
+// closes an idle socket after 10s without a KeepAlive.
+//
+// Verified 2026-08-01: after 30s and 90s parked on KeepAlives, a socket still
+// transcribes, and its Results frames stamp `start` from the first audio byte
+// (start=0), not from connect — so the catch-up math in unheardMs is unaffected
+// by however long the socket idled. End-to-end check:
+// scripts/verify-warm-standby.mjs.
+const STANDBY_IDLE_MS = 10 * 60 * 1000;
+// Deepgram closes at 10s of silence (NET-0001). Its docs say every 3-5s.
+const KEEPALIVE_MS = 4000;
+/** @type {Map<string, { socket: WebSocket, keepAlive: any, expiry: any }>} */
+const standbys = new Map();
+
+/** The parked sockets. Exists so scripts/verify-warm-standby.mjs can kill one. */
+export function standbySockets() {
+  return [...standbys.values()].map((parked) => parked.socket);
+}
+
+/**
+ * Hand over the parked socket for `url`, or null if there isn't a usable one.
+ * A socket still handshaking counts: its connect is already in flight, which
+ * beats starting a second one (a press seconds after the last one lands here).
+ */
+function takeStandby(/** @type {string} */ url) {
+  const parked = standbys.get(url);
+  if (!parked) return null;
+  standbys.delete(url);
+  clearInterval(parked.keepAlive);
+  clearTimeout(parked.expiry);
+  // The parking listeners (keepalive bookkeeping) must not fire on a live
+  // dictation — makeLeg wires its own.
+  parked.socket.removeAllListeners();
+  const usable = parked.socket.readyState === WebSocket.OPEN || parked.socket.readyState === WebSocket.CONNECTING;
+  if (!usable) {
+    try { parked.socket.close(); } catch {}
+    return null;
+  }
+  return parked.socket;
+}
+
+function dropStandby(/** @type {string} */ url) {
+  const parked = standbys.get(url);
+  if (!parked) return;
+  standbys.delete(url);
+  clearInterval(parked.keepAlive);
+  clearTimeout(parked.expiry);
+  try { parked.socket.close(); } catch {}
+}
+
+/**
+ * Open (or keep) a connection for each of `urls` ready for the next press, and
+ * drop any parked connection that no longer matches — a language toggle, a model
+ * change or a new dictionary word rewrites the URL, and a stale one would never
+ * be used.
+ */
+function parkStandbys(/** @type {string[]} */ urls, /** @type {string} */ apiKey) {
+  for (const url of standbys.keys()) if (!urls.includes(url)) dropStandby(url);
+  for (const url of urls) {
+    if (standbys.has(url)) continue;
+    const socket = new WebSocket(url, { headers: { Authorization: `Token ${apiKey}` } });
+    const parked = { socket, keepAlive: null, expiry: null };
+    standbys.set(url, parked);
+    socket.on("open", () => {
+      // Still ours? (A press between the connect and now already took it.)
+      if (standbys.get(url) !== parked) return;
+      parked.keepAlive = setInterval(() => {
+        try { socket.send(JSON.stringify({ type: "KeepAlive" })); } catch {}
+      }, KEEPALIVE_MS);
+      parked.expiry = setTimeout(() => dropStandby(url), STANDBY_IDLE_MS);
+    });
+    // A parked socket that dies (network drop, sleep/wake, Deepgram closing it)
+    // just disappears — the next press connects fresh and parks a new one. No
+    // reconnect loop: a failing key or a dead network would spin forever.
+    const forget = () => { if (standbys.get(url) === parked) dropStandby(url); };
+    socket.on("close", forget);
+    socket.on("error", forget);
+    socket.on("message", () => {}); // nothing to transcribe while parked
+  }
+}
+
+/**
+ * Open the connection the FIRST press will use. Same standby as the one the
+ * relay parks after every dictation — this just covers app launch, where there
+ * is no previous dictation to have parked one and the user otherwise pays the
+ * full handshake on their first words of the day.
+ *
+ * @param {{ apiKey: string, model: string, language?: string }} opts
+ */
+export function prewarm({ apiKey, model, language }) {
+  parkStandbys(legLanguages(language).map((lang) => streamUrl(model, lang)), apiKey);
+}
+
+/**
  * @param {WebSocket} clientSocket
  * @param {{ apiKey: string, model: string, language?: string }} opts
  */
 export function attach(clientSocket, { apiKey, model, language }) {
   // Re-read env on every connection so a runtime toggle (Right-Ctrl tap in
   // main.js) takes effect on the next dictation without a server restart.
-  const lang = (language || process.env.WHISPER_LANGUAGE || "auto").toLowerCase();
-  const langs = lang === "auto" || lang === "multi" ? AUTO_LANGUAGES : [lang];
+  const langs = legLanguages(language);
   const multiLeg = langs.length > 1;
 
   let completedSent = false;
@@ -82,35 +223,16 @@ export function attach(clientSocket, { apiKey, model, language }) {
   // flushed result with from_finalize: true on a normal Results frame.
   let finalizeSent = false;
 
-  function legUrl(/** @type {string} */ legLang) {
-    const params = new URLSearchParams({
-      model,
-      language: legLang,
-      encoding: "linear16",
-      sample_rate: "24000",
-      channels: "1",
-      punctuate: "true",
-      interim_results: "true",
-      endpointing: "false",
-      vad_events: "false"
-    });
-    // smart_format and keyterm prompting used to be English-only; Deepgram now
-    // accepts both for nova-3 monolingual languages including hr (handshake
-    // verified 2026-06-05 — no HTTP 400).
-    params.set("smart_format", "true");
-    // Bias toward the user's custom dictionary. nova-3 uses keyterm prompting;
-    // older Deepgram models use the keywords param. Each term is appended as a
-    // repeated query param. Re-read per connection so freshly-added words apply
-    // to the very next dictation.
-    addKeyterms(params, model);
-    return `wss://api.deepgram.com/v1/listen?${params.toString()}`;
-  }
+  const legUrl = (/** @type {string} */ legLang) => streamUrl(model, legLang);
 
   // One leg = one Deepgram connection transcribing in one language.
   function makeLeg(/** @type {string} */ legLang) {
-    const dgSocket = new WebSocket(legUrl(legLang), {
-      headers: { Authorization: `Token ${apiKey}` }
-    });
+    const url = legUrl(legLang);
+    // Warm connection from the last dictation, if it matches this press exactly
+    // (model, language and dictionary all ride in the URL). Saves the handshake.
+    const warm = takeStandby(url);
+    const dgSocket = warm || new WebSocket(url, { headers: { Authorization: `Token ${apiKey}` } });
+    const alreadyOpen = dgSocket.readyState === WebSocket.OPEN;
     const leg = {
       lang: legLang,
       dgSocket,
@@ -128,8 +250,8 @@ export function attach(clientSocket, { apiKey, model, language }) {
       flushed: false
     };
 
-    dgSocket.on("open", () => {
-      console.error("[relay] deepgram connected model=" + model + " lang=" + legLang);
+    function onOpen() {
+      console.error("[relay] deepgram connected model=" + model + " lang=" + legLang + (alreadyOpen ? " (warm)" : warm ? " (warming)" : ""));
       if (!connectedSent) {
         connectedSent = true;
         sendToClient(clientSocket, { type: "local.status", status: "connected", provider: "deepgram", model });
@@ -142,7 +264,12 @@ export function attach(clientSocket, { apiKey, model, language }) {
       // heard yet, and a Finalize on top of it flushes one word (see
       // scheduleFlush).
       if (finalizeSent && !leg.flushed) scheduleFlush();
-    });
+    }
+    // An already-open socket will never fire 'open'. Run the same handler on the
+    // next tick — after attach() has finished wiring the legs, and before any
+    // audio frame from the client can arrive.
+    if (alreadyOpen) setImmediate(onOpen);
+    else dgSocket.on("open", onOpen);
 
     dgSocket.on("message", (raw) => {
       let msg;
@@ -439,6 +566,10 @@ export function attach(clientSocket, { apiKey, model, language }) {
       } catch {}
       setTimeout(() => { try { leg.dgSocket.close(); } catch {} }, 200);
     }
+    // Open the next press's connection now, while nobody is waiting on it. Not
+    // these sockets: they have already heard an utterance, and Deepgram's
+    // stream position and context carry over.
+    parkStandbys(legs.map((leg) => legUrl(leg.lang)), apiKey);
   });
 }
 
