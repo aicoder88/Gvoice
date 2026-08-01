@@ -36,6 +36,20 @@ test("silent hold: engine stops reporting, wall clock keeps the wait honest", ()
   assert.equal(unheardMs({ audioMs: 9000, streamStartedAt: 1000, processedMs: 0, now: 10000 }), 0);
 });
 
+test("auto-language: the slow leg is the one that decides the wait", () => {
+  // Two legs on the same audio (hr + en). One opened at once and is caught up;
+  // the other opened 8s late and is still holding the whole hold. The relay
+  // takes the max — Finalizing on the fast leg's reading would flush the slow
+  // leg right on top of its backlog, which is the bug this file is about.
+  const now = 10000;
+  const audioMs = 9500;
+  const fast = unheardMs({ audioMs, streamStartedAt: 1000, processedMs: 9000, now });
+  const slow = unheardMs({ audioMs, streamStartedAt: 9000, processedMs: 0, now });
+  assert.equal(fast, 500);
+  assert.equal(slow, 8500);
+  assert.equal(Math.max(fast, slow), 8500);
+});
+
 test("never negative", () => {
   assert.equal(unheardMs({ audioMs: 1000, streamStartedAt: 1000, processedMs: 5000, now: 9000 }), 0);
 });

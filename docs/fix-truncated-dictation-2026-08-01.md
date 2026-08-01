@@ -36,8 +36,16 @@ No timeout could have fixed this — the audio was already discarded upstream.
 actually heard what we sent. The wait is the smaller of two readings — wall
 clock (bytes in ÷ 48 = ms of audio) and Deepgram's own progress stamp
 (`start + duration` on every Results frame, which it sends even for empty ones).
-Capped at 10s. On a healthy press the wait is ~0.4–0.8s and the transcript is
-now the complete one; before, that half-second of tail was quietly dropped.
+Capped at 10s, and tracked **per leg**: auto-language mode runs two connections
+that open at different moments, and a fast leg must not make a slow one look
+caught up, so the slowest leg decides.
+
+Under `FLUSH_NOW_UNDER_MS` (1200ms) of lag it flushes immediately, so the
+healthy press pays nothing. That threshold is not a guess: 1200ms is inside the
+1000ms tail the renderer already streams after key-up (`TAIL_MS`) plus the
+flush's own latency, which is why healthy presses came back complete before this
+change and still do — measured 3/3 full transcripts on the installed app with
+zero added wait.
 
 The safety timeout was rebuilt around the same idea: it now measures engine
 SILENCE (3s), re-arms on every Results frame that arrives after the flush, and
@@ -69,28 +77,53 @@ what it is:
 The fallback is a last resort for a relay that answers with nothing, not a race
 the engine is supposed to lose. The healthy path still pastes in ~0.5s.
 
-## Pill moved (`main.js`)
+### 3. A second press was binning the first one's words (found while fixing 1+2)
+
+Holding a flush for seconds opens a window the old 1.2s fallback never left
+open. `ensureSocket()` closes the previous client socket on every press, which
+CloseStreams the relay's legs, and `startRecording` clears the previous press's
+watchdogs — so a press landing mid-hold destroyed that dictation with nothing
+pasted, nothing saved, and no error. The log shows presses 2–4s apart routinely,
+and the trigger is self-reinforcing: nothing pastes, so the user presses again.
+
+**Fix**: the renderer now hands the unanswered audio to main
+(`dictation:superseded`) before the new press tears the socket down. Main saves
+the clip and logs it to history — deliberately no pill and no batch retry, since
+the live press owns the screen and a rescued transcript pasted right then would
+land in the middle of it. The words are recoverable from the tray's "Transcribe
+again". The new IPC is intentionally NOT stamped with `pressGen`: by the time it
+fires, `pressGen` already belongs to the new press, and main must never read it
+as the live dictation failing.
+
+## Pill moved (`main.js`, `public/pill.html`)
 
 It was bottom-**centre** — directly over the input line of whatever the user was
 dictating into, and the result pill is 760px wide. Now bottom-right, 12px from
-the edge (`PILL_SIDE_MARGIN`). Alternative if that is still in the way: top-
-right under the menu bar, same one-line change to `positionPill`.
+the edge (`PILL_SIDE_MARGIN`). `pill.html` had to move too: it centred the pill
+inside its own transparent window, so a narrow pill would still have floated
+mid-screen inside a 760px box. Now right-anchored to match.
+
+Alternative if that is still in the way: top-right under the menu bar, same
+one-line change to `positionPill`.
 
 ## What was verified
 
 On the installed `/Applications/GVoice.app`, rebuilt and relaunched:
 
 - The exact clip that lost words, replayed through the running app's relay with
-  a 6s simulated slow connect: **full 58-character transcript**, 1.2s after
-  commit. Same clip on a healthy connect: full transcript, 0.4s wait.
+  a 6s simulated slow connect: **full 58-character transcript**. Before the fix
+  the same replay returned one word.
+- Same clip on a healthy connect, 3 runs in a row: full transcript every time,
+  no added wait (the flush went out at commit).
 - Menu-bar icon present after the relaunch (screenshot).
-- `pnpm test` — 157 unit tests pass, parity 3 pass / 3 skipped (no OpenAI key,
+- `pnpm test` — 164 unit tests pass, parity 3 pass / 3 skipped (no OpenAI key,
   no local whisper model). New: `scripts/unit/deepgram-flush.test.js` covers the
-  wait math, including the two field cases that were wrong.
+  wait math, including the two field cases that were wrong and the slow-leg case.
 
-**Not verified on the running app:** the pill's new position, and the renderer's
-raised fallback. Both need a real key press, which needs a person to speak. One
-dictation will show both.
+**Not verified on the running app:** the pill's new position, the renderer's
+raised fallback, and the superseded-press rescue. All three need a real key
+press, which needs a person to speak. One dictation shows the first two; two
+quick presses in a row show the third.
 
 ## Separate problem, not fixed here
 

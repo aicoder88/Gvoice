@@ -24,6 +24,10 @@ contextBridge.exposeInMainWorld("dictationBridge", {
   // server-decided empty (silence / hallucination filter).
   sendTranscript: (payload) => ipcRenderer.send("dictation:transcript", payload),
   reportFailure: (payload) => ipcRenderer.send("dictation:failure", payload, pressGen),
+  // A new press arrived before the previous dictation was answered. Deliberately
+  // NOT stamped with pressGen: by the time this fires, pressGen already belongs
+  // to the new press, and main must never read this as the live one failing.
+  reportSuperseded: (payload) => ipcRenderer.send("dictation:superseded", payload),
   onStart: (callback) => {
     ipcRenderer.on("dictation:start", (_event, profile) => {
       if (profile && typeof profile.gen === "number") pressGen = profile.gen;

@@ -872,6 +872,19 @@ async function startRecording(profile) {
   clearIdleTimer();
   idleDropped = false;
   holdStartedAt = Date.now();
+  // A press landing while the LAST utterance is still waiting on its transcript
+  // would throw that dictation away without a trace: ensureSocket closes its
+  // socket, and the resets below clear the very watchdogs that would have saved
+  // it. Rare before (the delta fallback answered in ~1.2s), reachable now that
+  // the relay may hold a flush for seconds on a slow engine. Hand the audio to
+  // main first — no pill, no auto-retry (the new press owns the screen, and a
+  // rescued transcript pasted now would land mid-dictation), but the clip is on
+  // disk and the tray's "Transcribe again" gets the words back.
+  if (failureTimer && !alreadyFinalized && !failureHandled && recordedBytes >= MIN_FAILURE_BYTES) {
+    log("Superseded by a new press — saving the unanswered dictation (" + recordedBytes + "B)");
+    window.dictationBridge.reportSuperseded({ chunks: drainChunks(), sampleRate: targetSampleRate });
+  }
+  clearFailureTimer();
   // If recovery is mid-rebuild, wait it out — it sees startInFlight and stops
   // after this build, so we won't race it into a second (stacked) graph.
   if (captureBusy) { try { await captureBusy; } catch {} }

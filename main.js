@@ -1731,6 +1731,19 @@ function setupIpc() {
     }
   });
 
+  // A press started before the previous dictation came back. Its answer is gone
+  // (the renderer is closing that socket), so keep the audio: save the clip and
+  // log it so the tray can replay or re-transcribe it. Deliberately silent —
+  // the live press owns the pill, and ending its session here would be wrong.
+  ipcMain.on("dictation:superseded", async (_event, payload) => {
+    const chunks = (payload && payload.chunks) || [];
+    const recordingPath = await saveTempRecording(chunks, payload && payload.sampleRate);
+    dlog("superseded", { saved: !!recordingPath, path: recordingPath || null });
+    if (!recordingPath) return;
+    recordTranscript("", false, recordingPath);
+    rebuildTrayMenu();
+  });
+
   ipcMain.on("dictation:error", (_event, message, gen) => {
     console.error("Dictation error:", message);
     dlog("dictation-error", { message, gen, live: dictation.generation });

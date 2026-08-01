@@ -117,6 +117,11 @@ export function attach(clientSocket, { apiKey, model, language }) {
       finalParts: /** @type {string[]} */ ([]),
       lastInterim: "",
       queuedBinaries: /** @type {(Buffer | string)[]} */ ([]),
+      // Catch-up tracking, per leg: legs open at different moments (and in
+      // auto-language mode there are two), so a fast leg must not make a slow
+      // one look caught up. See unheardMs / scheduleFlush.
+      streamStartedAt: 0, // when this leg first got audio
+      processedMs: 0,     // how far in this leg says it has listened
       // Confidence-weighted word counts for the winner pick: Σ(conf·words)/Σwords.
       confWeighted: 0,
       confWords: 0,
@@ -129,7 +134,7 @@ export function attach(clientSocket, { apiKey, model, language }) {
         connectedSent = true;
         sendToClient(clientSocket, { type: "local.status", status: "connected", provider: "deepgram", model });
       }
-      if (leg.queuedBinaries.length > 0 && !streamStartedAt) streamStartedAt = Date.now();
+      if (leg.queuedBinaries.length > 0 && !leg.streamStartedAt) leg.streamStartedAt = Date.now();
       while (leg.queuedBinaries.length > 0) dgSocket.send(leg.queuedBinaries.shift());
       // The hold committed while this leg was still connecting — it owes a
       // Finalize. Schedule it the same way the commit path does rather than
@@ -148,7 +153,7 @@ export function attach(clientSocket, { apiKey, model, language }) {
         // into the stream it has listened — start + duration, in seconds. That
         // is the exact catch-up signal scheduleFlush needs.
         if (typeof msg.start === "number" && typeof msg.duration === "number") {
-          processedMs = Math.max(processedMs, (msg.start + msg.duration) * 1000);
+          leg.processedMs = Math.max(leg.processedMs, (msg.start + msg.duration) * 1000);
         }
         const alt = msg.channel?.alternatives?.[0];
         const text = alt?.transcript || "";
@@ -288,15 +293,21 @@ export function attach(clientSocket, { apiKey, model, language }) {
   // sent. Wall clock is the estimate (bytes in ÷ 48 = ms of audio); Deepgram
   // chews a backlog slightly FASTER than real time, so this errs long by a beat.
   let audioMs = 0;
-  let streamStartedAt = 0; // when the first byte actually reached a live leg
-  let processedMs = 0;     // how far in Deepgram says it has listened
   let flushTimer = null;
   // Ceiling on the wait. A hold longer than this that also hit a slow connect
   // gives up some tail rather than blowing the renderer's watchdog.
   const BACKLOG_WAIT_CAP_MS = 10000;
+  // Under this much lag, flush now. The engine is inside the tail the renderer
+  // already streams after key-up (DICTATION_TAIL_MS, 1s of mostly trailing
+  // silence), which is why healthy presses always came back complete — so a
+  // wait here would be pure added latency on every single dictation.
+  const FLUSH_NOW_UNDER_MS = 1200;
 
+  // The slowest leg decides: a leg that opened late is the one holding unheard
+  // audio, and Finalizing on its backlog is exactly the bug being fixed here.
   function backlogMs() {
-    return unheardMs({ audioMs, streamStartedAt, processedMs, now: Date.now() });
+    const now = Date.now();
+    return Math.max(0, ...legs.map((leg) => unheardMs({ audioMs, ...leg, now })));
   }
 
   // Send the Finalize to every live leg and start the answer clock.
@@ -339,9 +350,7 @@ export function attach(clientSocket, { apiKey, model, language }) {
     if (completedSent) return;
     clearTimeout(flushTimer);
     const wait = Math.round(Math.min(backlogMs(), BACKLOG_WAIT_CAP_MS));
-    // Under a quarter second of lag is inside the flush's own latency — the
-    // healthy press (engine keeping up) takes this branch and is unchanged.
-    if (wait <= 250) { flushLegs(); return; }
+    if (wait <= FLUSH_NOW_UNDER_MS) { flushLegs(); return; }
     console.error(`[relay] deepgram is ${wait}ms behind — holding the flush so the backlog is heard`);
     flushTimer = setTimeout(flushLegs, wait);
   }
@@ -415,7 +424,7 @@ export function attach(clientSocket, { apiKey, model, language }) {
     if (Buffer.isBuffer(buf)) audioMs += buf.length / 48;
     for (const leg of legs) {
       if (leg.dgSocket.readyState === WebSocket.OPEN) {
-        if (!streamStartedAt) streamStartedAt = Date.now();
+        if (!leg.streamStartedAt) leg.streamStartedAt = Date.now();
         leg.dgSocket.send(buf);
       } else {
         leg.queuedBinaries.push(buf);

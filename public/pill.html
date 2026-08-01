@@ -24,9 +24,14 @@
       body {
         display: flex;
         align-items: flex-end;
-        justify-content: center;
+        /* Right-anchored to match the window, which main.js parks in the
+           bottom-right corner. Centred left a narrow pill floating in the
+           middle of its 760px window — still over the text field it was moved
+           out of. */
+        justify-content: flex-end;
         height: 100vh;
         padding-bottom: 8px;
+        padding-right: 8px;
         box-sizing: border-box;
       }
       .pill {
