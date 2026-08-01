@@ -653,7 +653,7 @@ function handleMicLost(reason, immediate = false) {
   draining = false;
   // Same reason for the partial-transcript fallback: it's gated only by
   // alreadyFinalized (not failureHandled), so leaving it armed would paste a
-  // partial ~1.2s after this mic warning — exactly the double-report above.
+  // partial after this mic warning — exactly the double-report above.
   clearTimeout(fallbackTimer);
   fallbackTimer = null;
   teardownCapture(true); // full rebuild — a partial one can keep a wedged context
@@ -1096,7 +1096,15 @@ function finishUtterance() {
     return;
   }
 
-  const FALLBACK_MS = Number(window.DICTATION_FALLBACK_MS || 1200);
+  // Last-resort flush of the streamed deltas, for a relay that answers with
+  // NOTHING. It is not a race the engine is supposed to lose: at 1200ms it beat
+  // the relay's own 3s safety net, so any dictation Deepgram took longer than
+  // 1.2s to finalize pasted the half-built delta text instead of the real
+  // transcript — measured 2026-08-01, a 165-character final pasted as 108.
+  // Must sit ABOVE the relay's whole budget (BACKLOG_WAIT_CAP_MS 10s +
+  // SAFETY_CEILING_MS 5s, src/providers/deepgram.js) and below
+  // DICTATION_FAILURE_MS (20s).
+  const FALLBACK_MS = Number(window.DICTATION_FALLBACK_MS || 17000);
   const startedAt = Date.now();
   clearTimeout(fallbackTimer);
   fallbackTimer = setTimeout(() => {

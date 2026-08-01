@@ -30,6 +30,28 @@ const KEY_REJECTED = "Deepgram rejected the key. Add your own DEEPGRAM_API_KEY i
 // WebSocket.readyState numbers, for log lines a human has to read at 2am.
 const READY_STATE_NAMES = ["connecting", "open", "closing", "closed"];
 
+/**
+ * How much of the audio we've sent Deepgram has NOT heard yet, in ms.
+ *
+ * Two readings, and the smaller one wins so neither can stall a good press:
+ * Deepgram's own progress stamp (start + duration on every Results frame) is
+ * exact but goes stale when it stops sending frames (a silent hold), and wall
+ * clock always ticks but assumes the engine is no faster than real time, which
+ * it usually beats.
+ *
+ * Exported for the unit test — the flush timing is the whole fix, and it is the
+ * one piece that can be checked without a socket.
+ *
+ * @param {{ audioMs: number, streamStartedAt: number, processedMs: number, now: number }} state
+ * @returns {number}
+ */
+export function unheardMs({ audioMs, streamStartedAt, processedMs, now }) {
+  if (!streamStartedAt) return 0; // nothing has reached the engine yet
+  const byClock = audioMs - (now - streamStartedAt);
+  const byEngine = audioMs - processedMs;
+  return Math.max(0, Math.min(byClock, byEngine));
+}
+
 /** Append the user's dictionary as keyterm/keywords params, same as the legs do. */
 function addKeyterms(/** @type {URLSearchParams} */ params, /** @type {string} */ model) {
   try {
@@ -107,20 +129,14 @@ export function attach(clientSocket, { apiKey, model, language }) {
         connectedSent = true;
         sendToClient(clientSocket, { type: "local.status", status: "connected", provider: "deepgram", model });
       }
+      if (leg.queuedBinaries.length > 0 && !streamStartedAt) streamStartedAt = Date.now();
       while (leg.queuedBinaries.length > 0) dgSocket.send(leg.queuedBinaries.shift());
-      // A short tap can commit while this leg was still connecting — deliver
-      // the Finalize it missed, right after the queued audio, so its flush
-      // completes the utterance instead of the 3s safety timeout (which could
-      // truncate the transcript).
-      if (finalizeSent && !leg.flushed) {
-        try { dgSocket.send(JSON.stringify({ type: "Finalize" })); } catch {}
-        // The safety timeout armed at commit was counting down while this leg
-        // was still handshaking — on a slow connect it fires BEFORE the leg has
-        // said a word, latches completedSent, and the real transcript arriving
-        // moments later is discarded (an empty paste on perfectly good audio).
-        // Restart the clock now that the engine can actually answer.
-        armSafetyTimeout();
-      }
+      // The hold committed while this leg was still connecting — it owes a
+      // Finalize. Schedule it the same way the commit path does rather than
+      // sending it here: everything we just dumped is backlog Deepgram has not
+      // heard yet, and a Finalize on top of it flushes one word (see
+      // scheduleFlush).
+      if (finalizeSent && !leg.flushed) scheduleFlush();
     });
 
     dgSocket.on("message", (raw) => {
@@ -128,6 +144,12 @@ export function attach(clientSocket, { apiKey, model, language }) {
       try { msg = JSON.parse(raw.toString()); } catch { return; }
 
       if (msg.type === "Results") {
+        // Deepgram stamps every Results frame (even empty ones) with how far
+        // into the stream it has listened — start + duration, in seconds. That
+        // is the exact catch-up signal scheduleFlush needs.
+        if (typeof msg.start === "number" && typeof msg.duration === "number") {
+          processedMs = Math.max(processedMs, (msg.start + msg.duration) * 1000);
+        }
         const alt = msg.channel?.alternatives?.[0];
         const text = alt?.transcript || "";
         if (text) {
@@ -155,10 +177,21 @@ export function attach(clientSocket, { apiKey, model, language }) {
         // from_finalize: true (possibly with an empty transcript). That is the
         // real "everything is transcribed" signal — complete as soon as every
         // leg has flushed instead of letting a blind timeout fire.
-        if (finalizeSent && (msg.from_finalize === true || msg.speech_final === true)) {
+        // finalizeAt, not finalizeSent: while the flush is being held back for a
+        // backlog, nothing here may complete the utterance — the engine is still
+        // mid-catch-up and its words are still coming.
+        if (finalizeAt && (msg.from_finalize === true || msg.speech_final === true)) {
           leg.flushed = true;
           if (legs.every((l) => l.flushed)) emitCompleted("from_finalize");
+          return;
         }
+        // Still delivering. A slow upstream connect makes the relay dump the
+        // whole queued hold at once, and Deepgram chews through that backlog at
+        // roughly real time — on 2026-08-01 a 6s connect left it ~3s behind, the
+        // fixed 3s timeout fired mid-backlog, and the user got the first five
+        // words of a nine-second dictation. Any frame is proof it is still
+        // working, so restart the give-up clock (bounded by the ceiling below).
+        if (finalizeAt && !completedSent) armSafetyTimeout();
         return;
       }
       if (msg.type === "UtteranceEnd") return;
@@ -216,20 +249,108 @@ export function attach(clientSocket, { apiKey, model, language }) {
   const legs = langs.map(makeLeg);
 
   let safetyTimer = null;
+  // When the Finalize actually went out, so the ceiling below measures the time
+  // the engine had to ANSWER — never time it spent connecting or catching up.
+  let finalizeAt = 0;
+  // Quiet-time budget: how long the engine may say NOTHING before we give up.
+  const SAFETY_QUIET_MS = 3000;
+  // Hard ceiling from the Finalize, whatever the engine is doing. The whole
+  // relay budget (backlog wait + this) must stay under the renderer's
+  // DICTATION_FALLBACK_MS or the renderer pastes its half-built delta text
+  // before the real transcript lands. Ordering: BACKLOG_WAIT_CAP_MS +
+  // SAFETY_CEILING_MS < FALLBACK_MS < DICTATION_FAILURE_MS.
+  const SAFETY_CEILING_MS = 5000;
   // Safety net only — the from_finalize Results frames are the normal
   // completion path. Long enough that it can't beat a healthy flush. If THIS is
   // what completes the utterance, the flush never came back — worth seeing in
-  // the log (reason=safety_timeout). Armed at commit and re-armed by any leg
-  // that opens afterwards, so the clock always measures time the engine had to
-  // answer, never time it spent connecting.
+  // the log (reason=safety_timeout). Armed at commit, re-armed by any leg that
+  // opens afterwards and by every Results frame that arrives after the commit,
+  // so the clock measures engine SILENCE, never time it spent connecting or
+  // working through a backlog.
   function armSafetyTimeout() {
     clearTimeout(safetyTimer);
-    safetyTimer = setTimeout(() => emitCompleted("safety_timeout"), 3000);
+    const untilCeiling = finalizeAt ? finalizeAt + SAFETY_CEILING_MS - Date.now() : SAFETY_QUIET_MS;
+    const ms = Math.max(0, Math.min(SAFETY_QUIET_MS, untilCeiling));
+    safetyTimer = setTimeout(() => emitCompleted("safety_timeout"), ms);
+  }
+
+  // --- Backlog-aware flush ----------------------------------------------------
+  // We hand audio to Deepgram as fast as the browser produces it, but Deepgram
+  // transcribes a live stream at roughly real time. After a slow upstream
+  // connect the queued hold goes out in one burst, so at key-up the engine can
+  // still be seconds behind — and Finalize means "flush what you have NOW", not
+  // "finish the backlog first". Measured 2026-08-01 by replaying a real 9.5s
+  // clip as one burst: Finalize immediately came back with ONE word; the same
+  // clip with the Finalize held back came back complete. That is the words-go-
+  // missing bug, and no timeout can fix it — the audio is discarded upstream.
+  //
+  // So: hold the Finalize until the engine has had real time to hear what we
+  // sent. Wall clock is the estimate (bytes in ÷ 48 = ms of audio); Deepgram
+  // chews a backlog slightly FASTER than real time, so this errs long by a beat.
+  let audioMs = 0;
+  let streamStartedAt = 0; // when the first byte actually reached a live leg
+  let processedMs = 0;     // how far in Deepgram says it has listened
+  let flushTimer = null;
+  // Ceiling on the wait. A hold longer than this that also hit a slow connect
+  // gives up some tail rather than blowing the renderer's watchdog.
+  const BACKLOG_WAIT_CAP_MS = 10000;
+
+  function backlogMs() {
+    return unheardMs({ audioMs, streamStartedAt, processedMs, now: Date.now() });
+  }
+
+  // Send the Finalize to every live leg and start the answer clock.
+  function flushLegs() {
+    flushTimer = null;
+    // What each leg's socket was doing the instant we flushed. The loop below
+    // marks a closing/closed leg `flushed` SILENTLY, which is how a dictation
+    // can complete as `commit_no_live_legs` with nothing in the log to explain
+    // it — on 2026-07-30 one did, and the matching `deepgram closed` line only
+    // arrived 22s later. This is the missing evidence.
+    const stateSummary = legs
+      .map((l) => `${l.lang}:${READY_STATE_NAMES[l.dgSocket.readyState] || l.dgSocket.readyState}`)
+      .join(" ");
+    console.error(`[relay] deepgram finalize ${stateSummary}`);
+    let sent = 0;
+    for (const leg of legs) {
+      if (leg.dgSocket.readyState === WebSocket.OPEN) {
+        leg.dgSocket.send(JSON.stringify({ type: "Finalize" }));
+        sent += 1;
+      } else if (leg.dgSocket.readyState === WebSocket.CONNECTING) {
+        // Still handshaking — its queued audio flushes on 'open', which then
+        // schedules the Finalize this commit owes it (see the open handler).
+      } else {
+        leg.flushed = true; // closing/closed — don't wait on it
+      }
+    }
+    // Every leg already dead: complete now with whatever was heard instead of
+    // making the user wait out the safety timeout.
+    if (legs.every((l) => l.flushed)) { emitCompleted("commit_no_live_legs"); return; }
+    // Nothing live to flush yet (a tap that beat the handshake). Do NOT start
+    // the answer clock — there is no engine listening to answer it, and arming
+    // it here is what completed a whole dictation as an empty paste. The leg's
+    // open handler schedules this again once it can actually take the Finalize.
+    if (!sent) return;
+    finalizeAt = Date.now();
+    armSafetyTimeout();
+  }
+
+  function scheduleFlush() {
+    if (completedSent) return;
+    clearTimeout(flushTimer);
+    const wait = Math.round(Math.min(backlogMs(), BACKLOG_WAIT_CAP_MS));
+    // Under a quarter second of lag is inside the flush's own latency — the
+    // healthy press (engine keeping up) takes this branch and is unchanged.
+    if (wait <= 250) { flushLegs(); return; }
+    console.error(`[relay] deepgram is ${wait}ms behind — holding the flush so the backlog is heard`);
+    flushTimer = setTimeout(flushLegs, wait);
   }
 
   function emitCompleted(/** @type {string} */ reason = "unknown") {
     if (completedSent) return;
     completedSent = true;
+    clearTimeout(flushTimer);
+    clearTimeout(safetyTimer);
     // Winner: the leg with the highest confidence that actually heard words.
     let best = legs[0];
     for (const leg of legs) {
@@ -282,36 +403,19 @@ export function attach(clientSocket, { apiKey, model, language }) {
 
     if (parsed.type === "input_audio_buffer.commit") {
       finalizeSent = true;
-      // What each leg's socket was doing the instant the key came up. The loop
-      // below marks a closing/closed leg `flushed` SILENTLY, which is how a
-      // dictation can complete as `commit_no_live_legs` with nothing in the log
-      // to explain it — on 2026-07-30 one did, and the matching `deepgram
-      // closed` line only arrived 22s later. This is the missing evidence.
-      const stateSummary = legs
-        .map((l) => `${l.lang}:${READY_STATE_NAMES[l.dgSocket.readyState] || l.dgSocket.readyState}`)
-        .join(" ");
-      console.error(`[relay] deepgram commit ${stateSummary}`);
-      for (const leg of legs) {
-        if (leg.dgSocket.readyState === WebSocket.OPEN) {
-          leg.dgSocket.send(JSON.stringify({ type: "Finalize" }));
-        } else if (leg.dgSocket.readyState === WebSocket.CONNECTING) {
-          // Still handshaking — its queued audio flushes on 'open', which also
-          // sends the Finalize this commit owes it (see the open handler).
-        } else {
-          leg.flushed = true; // closing/closed — don't wait on it
-        }
-      }
-      // Every leg already dead at commit time: complete now with whatever was
-      // heard instead of making the user wait out the 3s safety timeout.
-      if (legs.every((l) => l.flushed)) emitCompleted("commit_no_live_legs");
-      armSafetyTimeout();
+      console.error(`[relay] deepgram commit (audio=${Math.round(audioMs)}ms, engine ${Math.round(backlogMs())}ms behind)`);
+      scheduleFlush();
       return;
     }
   });
 
   function forwardBinary(/** @type {Buffer | string} */ buf) {
+    // 24kHz, 16-bit, mono = 48 bytes per millisecond of speech. Counted once per
+    // frame, not once per leg — the legs all carry the same audio.
+    if (Buffer.isBuffer(buf)) audioMs += buf.length / 48;
     for (const leg of legs) {
       if (leg.dgSocket.readyState === WebSocket.OPEN) {
+        if (!streamStartedAt) streamStartedAt = Date.now();
         leg.dgSocket.send(buf);
       } else {
         leg.queuedBinaries.push(buf);

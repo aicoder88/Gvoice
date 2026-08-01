@@ -504,6 +504,7 @@ function createPillWindow() {
 // and read as "halfway up the screen". The pill itself is bottom-anchored
 // inside its window (pill.html), so this is the real on-screen gap.
 const PILL_BOTTOM_MARGIN = 8; // gap above the dock / taskbar
+const PILL_SIDE_MARGIN = 12; // gap from the right edge of the screen
 const PILL_SIZES = {
   listening: { width: 200, height: 56 },
   transcribing: { width: 220, height: 56 },
@@ -532,12 +533,14 @@ function pillDisplay() {
   return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
 }
 
-// Center the pill window horizontally and sit it just above the bottom of the
-// work area (which already excludes the dock / menu bar / taskbar).
+// Sit the pill in the bottom-RIGHT of the work area (which already excludes the
+// dock / menu bar / taskbar). Bottom-centre put a 760px-wide result pill
+// directly over the input line of whatever the user was dictating into — the
+// one place on screen guaranteed to be in the way.
 function positionPill(/** @type {number} */ width, /** @type {number} */ height) {
   if (!pillWindow) return;
   const wa = pillDisplay().workArea;
-  const x = Math.round(wa.x + (wa.width - width) / 2);
+  const x = Math.round(wa.x + wa.width - width - PILL_SIDE_MARGIN);
   const y = Math.round(wa.y + wa.height - height - PILL_BOTTOM_MARGIN);
   pillWindow.setBounds({ x, y, width, height });
 }
