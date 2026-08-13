@@ -83,6 +83,9 @@
 
       /* --- Per-state dot colour + animation ------------------------------- */
       body[data-state="listening"]    .dot { background: #ff5a5a; animation: pulse 1s ease-in-out infinite; }
+      /* The listening pill is a stop button: clicking it ends the dictation. */
+      body[data-state="listening"] .pill { cursor: pointer; }
+      body[data-state="listening"] .pill:hover { background: rgba(38, 44, 52, 0.97); }
       body[data-state="transcribing"] .dot { background: #4aa3ff; animation: pulse 1s ease-in-out infinite; }
       body[data-state="success"]      .dot { background: #34d399; box-shadow: 0 0 10px rgba(52, 211, 153, 0.7); }
       body[data-state="error"]        .dot { background: #ff5a5a; box-shadow: 0 0 10px rgba(255, 90, 90, 0.7); }
@@ -153,7 +156,9 @@
 
     <script>
       const LABELS = {
-        listening: "Listening…",
+        // Says so on the pill: a hold that gets stuck is exactly when nobody
+        // thinks to try clicking, so the way out has to be visible.
+        listening: "Listening… (click to stop)",
         transcribing: "Transcribing…",
         success: "Success",
         error: "Error"
@@ -255,9 +260,18 @@
         overPill = over;
         const s = document.body.getAttribute("data-state");
         const isResult = s === "success" || s === "error";
-        if (isResult) window.pillBridge.setInteractive(over);
+        // Listening is clickable too (the whole pill is a stop button), so it
+        // needs the same real-clicks-on-hover treatment as a result pill.
+        if (isResult || s === "listening") window.pillBridge.setInteractive(over);
         if (over) clearHide();
         else if (isResult) armHide(currentHideMs);
+      });
+
+      // Clicking the listening pill stops the recording. Anywhere on the pill
+      // counts — someone whose dictation is stuck should not have to aim.
+      pillEl.addEventListener("click", () => {
+        if (document.body.getAttribute("data-state") !== "listening") return;
+        window.pillBridge.stopListening();
       });
 
       window.pillBridge.onState(applyState);

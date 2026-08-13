@@ -252,11 +252,30 @@ function startHotkeyUiohook({ onPress, onRelease }) {
     }
   };
 
+  // uiohook-napi's macOS layer reports LETTING GO of buttons 4 and 5 as another
+  // press: its kCGEventOtherMouseUp branch calls process_button_pressed where
+  // every other button calls process_button_released. So the "mouseup" below
+  // never arrives for the back button, the hold never ends, and dictation runs
+  // until the 90-second cutoff in main.js. Treat each report as a toggle — the
+  // first starts talking, the next stops — and keep the real mouseup handler
+  // for platforms and versions that get it right.
+  let mouseBackHeld = false;
+
   const handleMouseDown = (/** @type {any} */ event) => {
-    if (event && event.button === MOUSE_BACK_BUTTON) pressSource("mouseBack");
+    if (!event || event.button !== MOUSE_BACK_BUTTON) return;
+    if (mouseBackHeld) {
+      mouseBackHeld = false;
+      releaseSource("mouseBack");
+    } else {
+      mouseBackHeld = true;
+      pressSource("mouseBack");
+    }
   };
   const handleMouseUp = (/** @type {any} */ event) => {
-    if (event && event.button === MOUSE_BACK_BUTTON) releaseSource("mouseBack");
+    if (!event || event.button !== MOUSE_BACK_BUTTON) return;
+    if (!mouseBackHeld) return;
+    mouseBackHeld = false;
+    releaseSource("mouseBack");
   };
 
   uIOhook.on("input", markSeen);

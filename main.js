@@ -519,7 +519,10 @@ function createPillWindow() {
 const PILL_BOTTOM_MARGIN = 8; // gap above the dock / taskbar
 const PILL_SIDE_MARGIN = 12; // gap from the right edge of the screen
 const PILL_SIZES = {
-  listening: { width: 200, height: 56 },
+  // 300, not 200: the listening label carries the "(click to stop)" hint now,
+  // and at 200 the window clipped it away — the one state where the text has to
+  // be readable is the one someone is stuck in.
+  listening: { width: 300, height: 56 },
   transcribing: { width: 220, height: 56 },
   // Wide enough for the full action row (Copy · Play recording · Transcribe
   // again · Add word · ✕) plus a readable reason — at 560 the label ellipsized
@@ -576,7 +579,9 @@ function setPillState(
   if (!pillWindow || pillWindow.isDestroyed()) return;
   const size = PILL_SIZES[state] || PILL_SIZES.listening;
   positionPill(size.width, size.height);
-  const interactive = state === "success" || state === "error";
+  // "listening" joins the result states: the pill is clickable there so a stuck
+  // hold can be ended by hand.
+  const interactive = state === "success" || state === "error" || state === "listening";
   // Result states stay click-through but FORWARD mouse moves to the renderer,
   // which flips real interactivity on only while the pointer is over the
   // visible pill (pill:set-interactive). Without forwarding, the invisible
@@ -1801,6 +1806,10 @@ function setupIpc() {
     if (currentRecordingPath) retranscribeOnDemand(currentRecordingPath);
   });
   ipcMain.on("pill:hide", () => hidePill());
+  // Clicking the "Listening…" pill stops the recording. The escape hatch for a
+  // hold whose key-up or button-up went missing: without it the only way out is
+  // waiting MAX_HOLD_MS, and the app looks frozen the whole time.
+  ipcMain.on("pill:stop", () => fireRelease("pill"));
   ipcMain.on("pill:add-word", () => openDictionaryWindow());
   // Pointer entered/left the visible pill (renderer detects it from the
   // forwarded mouse moves). On=real clicks land; off=back to forward-only.
