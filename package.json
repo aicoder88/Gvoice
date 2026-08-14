@@ -13,7 +13,8 @@
     "test": "pnpm run test:unit && pnpm run test:parity",
     "test:parity": "node --test --test-force-exit scripts/parity/dictation-flow.test.js",
     "test:cleanup": "node scripts/cleanup-test.js",
-    "test:unit": "node --test scripts/unit/*.test.js"
+    "test:unit": "node --test scripts/unit/*.test.js",
+    "test:pipeline-smoke": "node --experimental-test-module-mocks --test scripts/smoke/pipeline-smoke.test.js"
   },
   "dependencies": {
     "@nut-tree-fork/nut-js": "^4.2.6",
