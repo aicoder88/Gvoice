@@ -2,11 +2,16 @@
   "name": "gvoice",
   "version": "1.0.0",
   "private": true,
-  "description": "GVoice — hold-to-talk voice dictation that types out what you say.",
+  "description": "GVoice \u2014 hold-to-talk voice dictation that types out what you say.",
   "author": "Drago",
   "type": "module",
   "main": "main.js",
+  "engines": {
+    "node": "24.x"
+  },
+  "packageManager": "pnpm@10.33.0",
   "scripts": {
+    "preinstall": "npx only-allow pnpm",
     "dev": "node server.js",
     "start": "electron .",
     "build": "node scripts/copy-native.cjs && electron-builder",
