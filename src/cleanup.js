@@ -8,6 +8,7 @@ import { withRetry, httpError, RetryableHttpError, HttpError, isRetryableError }
  * @property {"openai" | "anthropic" | "google"} kind
  * @property {string} url
  * @property {string} model
+ * @property {string[]} [fallbackModels]  Vetted same-provider defaults tried only when the default model is unavailable.
  * @property {string} keyEnv
  * @property {string} [fallbackKey]  Shipped default key, used only when keyEnv is unset.
  */
@@ -25,14 +26,14 @@ const GROQ_FALLBACK_KEY = [
 
 /** @type {Record<string, ProviderConfig>} */
 const PROVIDER_DEFAULTS = {
-  // Was llama-4-scout-17b until Groq retired it (2026) — every cleanup call
-  // started 404ing and dictation silently pasted raw text for weeks. Re-picked
-  // 2026-07-27 by running scripts/cleanup-test.js against every model the
-  // shipped key can reach: 70b-versatile scored highest, and at 12k TPM it has
-  // the highest free-tier token limit of the usable candidates (8k for the
-  // gpt-oss/qwen tier, 6k for 8b-instant, which also botches list formatting).
-  // If this 404s again, rerun that harness rather than guessing a successor.
-  groq: { kind: "openai", url: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile", keyEnv: "GROQ_API_KEY", fallbackKey: GROQ_FALLBACK_KEY },
+  // Groq retired two successive defaults in 2026 (Llama 4 Scout, then Llama
+  // 3.3 70B). Keep an ordered pair of production models that both pass the
+  // representative cleanup checks. If the primary disappears (404), one failed
+  // request tries the backup and remembers the winner for the rest of this app
+  // session; a rate-limited (429) failover is NOT remembered, so a busy minute
+  // never pins the weaker model. An explicit CLEANUP_MODEL remains exact and
+  // never silently falls back.
+  groq: { kind: "openai", url: "https://api.groq.com/openai/v1/chat/completions", model: "openai/gpt-oss-120b", fallbackModels: ["openai/gpt-oss-20b"], keyEnv: "GROQ_API_KEY", fallbackKey: GROQ_FALLBACK_KEY },
   openai: { kind: "openai", url: "https://api.openai.com/v1/chat/completions", model: "gpt-4.1-mini", keyEnv: "OPENAI_API_KEY" },
   anthropic: { kind: "anthropic", url: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4-5", keyEnv: "ANTHROPIC_API_KEY" },
   google: { kind: "google", url: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-flash-lite", keyEnv: "GOOGLE_AI_KEY" }
@@ -41,10 +42,18 @@ const PROVIDER_DEFAULTS = {
 // Resolve provider/model from the CURRENT env on each call (not at module load),
 // so changing the cleanup engine in Settings applies to the next dictation
 // instead of needing a restart. Defaults to groq (we ship a working free key).
+const workingDefaultModel = new Map();
+
 function resolveProvider() {
   const name = (process.env.CLEANUP_PROVIDER || "groq").toLowerCase();
   const provider = PROVIDER_DEFAULTS[name] || PROVIDER_DEFAULTS.openai;
-  return { name, provider, model: process.env.CLEANUP_MODEL || provider.model };
+  const explicitModel = process.env.CLEANUP_MODEL?.trim();
+  const defaults = [provider.model, ...(provider.fallbackModels || [])];
+  const cached = workingDefaultModel.get(name);
+  const models = explicitModel
+    ? [explicitModel]
+    : [...new Set([...(cached && defaults.includes(cached) ? [cached] : []), ...defaults])];
+  return { name, provider, models, usesExplicitModel: Boolean(explicitModel) };
 }
 
 // 2.5s ceiling: cleanup is a fast formatting pass, not a long generation. A call
@@ -195,9 +204,12 @@ let transientFailures = 0;
 const TRANSIENT_FAILURES_BEFORE_WARNING = 3;
 
 // Shown when the free tier's per-minute cap sends back a 429. Plain words, and
-// short enough to fit the pill: the shipped Groq key allows ~12k tokens/minute
-// and one cleanup costs ~2.2k, so about five dictations a minute. Past that the
-// text is pasted exactly as spoken until the minute rolls over.
+// short enough to fit the pill: the shipped Groq key allows 8k tokens/minute
+// PER MODEL (measured 2026-08-30 from x-ratelimit-limit-tokens on both gpt-oss
+// models) and one cleanup costs ~2.2k, so about three or four dictations a
+// minute on the primary before the backup model's own bucket takes over. Once
+// both are capped the text is pasted exactly as spoken until the minute rolls
+// over.
 export const FREE_LIMIT_MESSAGE = "Hit the free tidy-up limit — typed as you said it. Clears in a minute.";
 
 // Shown when the engine is actually broken (model retired, key revoked) rather
@@ -226,6 +238,36 @@ export function resetCleanupFailureStreak() {
   transientFailures = 0;
 }
 
+/** Test-only: clear the remembered working default model. */
+export function resetCleanupModelCache() {
+  workingDefaultModel.clear();
+}
+
+/**
+ * A 404 means the requested model is gone; a 429 means that model's token
+ * bucket is temporarily full. Both are safe reasons to try the next vetted
+ * model on the same provider. Auth, network, and timeout errors keep their
+ * existing behavior so failover cannot multiply latency or cross providers.
+ * @param {unknown} error
+ */
+function isModelFailoverError(error) {
+  return isRetiredModelError(error) ||
+    (error instanceof RetryableHttpError && error.status === 429);
+}
+
+/**
+ * Is this the PERMANENT kind of failover — the model itself is gone (404)?
+ * Only that may be remembered for the session. A 429 is this minute's token
+ * bucket and clears on its own; caching the backup after one would pin the
+ * weaker model for every later dictation until the app restarts.
+ * httpError() builds a plain HttpError for 404 and a RetryableHttpError for
+ * 429, so the two classes never overlap here.
+ * @param {unknown} error
+ */
+function isRetiredModelError(error) {
+  return error instanceof HttpError && error.status === 404;
+}
+
 /**
  * Send `rawText` to the configured cleanup provider with the system prompt.
  * Returns the cleaned text on success, the original on any failure (missing
@@ -235,7 +277,7 @@ export function resetCleanupFailureStreak() {
  * @returns {Promise<string>}
  */
 export async function polishTranscript(rawText) {
-  const { name: providerName, provider, model } = resolveProvider();
+  const { name: providerName, provider, models, usesExplicitModel } = resolveProvider();
   const apiKey = process.env[provider.keyEnv] || provider.fallbackKey;
   if (!apiKey) return rawText;
   if (!rawText || rawText.length < 2) return rawText;
@@ -274,51 +316,70 @@ export async function polishTranscript(rawText) {
     rawText +
     "\n<<<END>>>";
 
-  const req = buildRequest(provider, apiKey, model, systemPrompt + vocabHint, userContent);
-
   // One quick retry on a transient hiccup (5xx, dropped connection) so a single
   // bad moment doesn't silently fall back to the raw, unformatted transcript.
-  // A 429 is the exception: the shared free key's rate limit resets per MINUTE,
-  // so an immediate retry just 429s again — pure wasted latency the user feels.
-  // Fail fast on 429 (fall back to raw); still retry 5xx/408/network errors.
+  // A 429 is the exception: retrying the same model immediately just 429s
+  // again, so withRetry fails fast and the model loop can use a backup model's
+  // separate token bucket. Still retry 5xx/408/network errors on the same model.
   // Each attempt gets its own timeout budget; an abort (the request genuinely ran
   // out of time) is NOT retried — retrying would only double the wait.
+  let activeModel = models[0];
+  // Every failover that got us to the model in hand was a 404 (the model is
+  // retired). Flipped by the first rate-limit failover, which must not be
+  // remembered — see isRetiredModelError.
+  let reachedByRetirement = true;
   try {
-    const data = await withRetry(
-      async () => {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-        try {
-          const response = await fetch(req.url, {
-            method: "POST",
-            headers: req.headers,
-            body: req.body,
-            signal: controller.signal
-          });
-          if (!response.ok) {
-            const body = await response.text().catch(() => "");
-            throw httpError(response.status, body.slice(0, 200));
+    for (const [index, model] of models.entries()) {
+      activeModel = model;
+      const req = buildRequest(provider, apiKey, model, systemPrompt + vocabHint, userContent);
+      try {
+        const data = await withRetry(
+          async () => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+            try {
+              const response = await fetch(req.url, {
+                method: "POST",
+                headers: req.headers,
+                body: req.body,
+                signal: controller.signal
+              });
+              if (!response.ok) {
+                const body = await response.text().catch(() => "");
+                throw httpError(response.status, body.slice(0, 200));
+              }
+              return await response.json();
+            } finally {
+              clearTimeout(timer);
+            }
+          },
+          {
+            retries: 1,
+            // Retry transient errors, but never a 429 — its limit won't clear in 300ms.
+            isRetryable: (err) =>
+              isRetryableError(err) && !(err instanceof RetryableHttpError && err.status === 429),
+            onRetry: (err) =>
+              console.error(`Cleanup transient failure, retrying once (${providerName}/${model}):`, err && err.message)
           }
-          return await response.json();
-        } finally {
-          clearTimeout(timer);
+        );
+        const cleaned = parseResponse(provider, data);
+        transientFailures = 0;
+        if (!usesExplicitModel && reachedByRetirement) workingDefaultModel.set(providerName, model);
+        return (cleaned && cleaned.trim()) || rawText;
+      } catch (error) {
+        const hasFallback = index < models.length - 1;
+        if (!usesExplicitModel && hasFallback && isModelFailoverError(error)) {
+          console.error(`Cleanup model unavailable or busy (${providerName}/${model}); trying ${models[index + 1]}`);
+          if (!isRetiredModelError(error)) reachedByRetirement = false;
+          continue;
         }
-      },
-      {
-        retries: 1,
-        // Retry transient errors, but never a 429 — its limit won't clear in 300ms.
-        isRetryable: (err) =>
-          isRetryableError(err) && !(err instanceof RetryableHttpError && err.status === 429),
-        onRetry: (err) =>
-          console.error(`Cleanup transient failure, retrying once (${providerName}/${model}):`, err && err.message)
+        throw error;
       }
-    );
-    const cleaned = parseResponse(provider, data);
-    transientFailures = 0;
-    return (cleaned && cleaned.trim()) || rawText;
+    }
+    return rawText;
   } catch (error) {
     if (error instanceof RetryableHttpError || error instanceof HttpError) {
-      console.error(`Cleanup HTTP ${error.status} (${providerName}/${model}): ${error.body}`);
+      console.error(`Cleanup HTTP ${error.status} (${providerName}/${activeModel}): ${error.body}`);
       // A 404/401 is the engine actually broken (model retired, key revoked) and
       // stays broken. A 429 is the free key's per-minute cap — it clears on its
       // own, but the dictation it hit is ALREADY pasted unformatted, and the user

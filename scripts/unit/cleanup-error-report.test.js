@@ -8,7 +8,12 @@
 // so nothing here touches the network.
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { polishTranscript, takeCleanupError, resetCleanupFailureStreak } from "../../src/cleanup.js";
+import {
+  polishTranscript,
+  takeCleanupError,
+  resetCleanupFailureStreak,
+  resetCleanupModelCache
+} from "../../src/cleanup.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { rmSync } from "node:fs";
@@ -35,6 +40,87 @@ afterEach(() => {
   process.env = { ...realEnv };
   takeCleanupError(); // drain, so one test can't leak state into the next
   resetCleanupFailureStreak();
+  resetCleanupModelCache();
+});
+
+test("a retired default model falls back once and remembers the working model", async () => {
+  useGroq();
+  const requestedModels = [];
+  const responses = [
+    new Response('{"error":{"message":"model_not_found"}}', { status: 404 }),
+    new Response('{"choices":[{"message":{"content":"Cleaned once."}}]}', { status: 200 }),
+    new Response('{"choices":[{"message":{"content":"Cleaned twice."}}]}', { status: 200 })
+  ];
+  globalThis.fetch = async (_url, init) => {
+    requestedModels.push(JSON.parse(String(init.body)).model);
+    return responses.shift();
+  };
+
+  assert.equal(await polishTranscript(SAMPLE), "Cleaned once.");
+  assert.equal(await polishTranscript(SAMPLE), "Cleaned twice.");
+  assert.deepEqual(requestedModels, [
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-20b"
+  ]);
+  assert.equal(takeCleanupError(), null, "successful fallback is invisible to the user");
+});
+
+// The other half of the rule above: a 429 is this minute's token bucket, not a
+// retirement. Remembering the backup after one would leave every later
+// dictation on the weaker model until the app restarts, for a blip that clears
+// itself inside a minute.
+test("a rate-limited fallback is NOT remembered — the next dictation retries the primary", async () => {
+  useGroq();
+  const requestedModels = [];
+  const responses = [
+    new Response('{"error":{"message":"Rate limit reached"}}', { status: 429 }),
+    new Response('{"choices":[{"message":{"content":"Cleaned once."}}]}', { status: 200 }),
+    new Response('{"choices":[{"message":{"content":"Cleaned twice."}}]}', { status: 200 })
+  ];
+  globalThis.fetch = async (_url, init) => {
+    requestedModels.push(JSON.parse(String(init.body)).model);
+    return responses.shift();
+  };
+
+  assert.equal(await polishTranscript(SAMPLE), "Cleaned once.");
+  assert.equal(await polishTranscript(SAMPLE), "Cleaned twice.");
+  assert.deepEqual(requestedModels, [
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b"
+  ]);
+});
+
+test("an explicit cleanup model never silently falls back", async () => {
+  useGroq();
+  process.env.CLEANUP_MODEL = "my-pinned-model";
+  const requestedModels = [];
+  globalThis.fetch = async (_url, init) => {
+    requestedModels.push(JSON.parse(String(init.body)).model);
+    return new Response('{"error":{"message":"model_not_found"}}', { status: 404 });
+  };
+
+  assert.equal(await polishTranscript(SAMPLE), SAMPLE);
+  assert.deepEqual(requestedModels, ["my-pinned-model"]);
+  assert.match(String(takeCleanupError()), /tidy-up isn't working/i);
+});
+
+test("a rate-limited default model uses the backup model's separate quota", async () => {
+  useGroq();
+  const requestedModels = [];
+  const responses = [
+    new Response('{"error":{"message":"rate limit"}}', { status: 429 }),
+    new Response('{"choices":[{"message":{"content":"Cleaned by backup."}}]}', { status: 200 })
+  ];
+  globalThis.fetch = async (_url, init) => {
+    requestedModels.push(JSON.parse(String(init.body)).model);
+    return responses.shift();
+  };
+
+  assert.equal(await polishTranscript(SAMPLE), "Cleaned by backup.");
+  assert.deepEqual(requestedModels, ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
+  assert.equal(takeCleanupError(), null);
 });
 
 test("a 404 (model retired) is reported, and the raw text still comes back", async () => {
@@ -62,8 +148,9 @@ test("the report is consumed once, so one outage isn't announced every utterance
   assert.equal(takeCleanupError(), null, "second read is empty until it fails again");
 });
 
-// The free tier is ~12k tokens/minute and one cleanup costs ~2.2k, so about
-// five dictations a minute. Every 429 past that is a dictation that went in
+// The free tier is 8k tokens/minute per model and one cleanup costs ~2.2k, so
+// three or four dictations a minute on the primary before the backup model's
+// own bucket takes over. Every 429 past that is a dictation that went in
 // unformatted — the user asked to be told each time, so it is reported on the
 // FIRST hit. main.js puts it on that dictation's pill and deliberately does NOT
 // raise a system notification for it: the cap clears itself within the minute.

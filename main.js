@@ -46,6 +46,7 @@ import * as vocab from "./src/vocab.js";
 import { createCorrectionWatcher } from "./src/correction-watch.js";
 import { looksLikeRetraction } from "./src/cleanup.js";
 import { captureForegroundWindow, restoreForegroundWindow, getWindowRect, isEditableFieldFocused, isForegroundWindow, readbackPasteTarget } from "./src/foreground.js";
+import { assessPasteOutcome } from "./src/paste-confidence.js";
 import { initHistory, getHistory, getHistoryPath, recordTranscript } from "./src/history.js";
 import { computeStats } from "./src/stats.js";
 import { ensureWhisperServer, stopWhisperServer } from "./src/providers/whisper-local.js";
@@ -1266,9 +1267,9 @@ async function processTranscript(transcript, restoreHwnd = null) {
   }
   // Best-effort confidence that the text actually landed in a text field.
   // Clipboard paste is fire-and-forget, so we can't truly confirm — but these
-  // signals tell us it did NOT: typeText threw; (Windows) we had a foreground
-  // window to restore and the restore failed; or (macOS) no editable element
-  // was focused, so ⌘V went nowhere.
+  // signals tell us it did NOT: typeText threw, or (Windows) we had a foreground
+  // window to restore and the restore failed. macOS's editor-role probe is only
+  // one signal: terminal-style editors can accept ⌘V while reporting false.
   let typed = true;
   try {
     await typeText(textToType);
@@ -1276,62 +1277,55 @@ async function processTranscript(transcript, restoreHwnd = null) {
     typed = false;
     console.error("[main] typeText failed:", error && (error.stack || error.message));
   }
-  let pasted =
-    typed &&
-    !(restoreHwnd != null && restored === false) &&
-    fieldFocused !== false;
+  const transportSucceeded = typed && !(restoreHwnd != null && restored === false);
   // Windows paste verification: confirm focus is STILL the window we restored to
   // right after sending Ctrl+V. If another app grabbed the foreground mid-paste,
   // the keystroke went somewhere else — downgrade so the text stays recoverable
   // from the pill instead of a false "Success". isForegroundWindow returns null
   // off Windows (and when koffi is unavailable), which we never hold against a
   // paste. This is the Windows counterpart to macOS's AX focus/read-back check.
-  if (pasted && process.platform === "win32" && restoreHwnd != null) {
+  let windowsFocusLost = false;
+  if (transportSucceeded && process.platform === "win32" && restoreHwnd != null) {
     const stillForeground = isForegroundWindow(restoreHwnd);
     if (stillForeground === false) {
-      pasted = false;
+      windowsFocusLost = true;
       dlog("paste-foreground-lost", { hwnd: restoreHwnd });
     }
   }
-  // Post-paste verification (macOS, best-effort): re-read the focused field and
-  // check our text actually appeared in it. Only DOWNGRADE on a readable string
-  // that's missing the text — null means "couldn't verify" (web areas, secure
-  // fields), which must never turn a good paste into a false error.
+  // Post-paste verification (macOS, best-effort): re-read the target even when
+  // the pre-paste role probe said "not editable". A terminal identity or an
+  // exact readable match can explain that false negative. An unknown/no-target
+  // result cannot downgrade a successful ⌘V: custom Electron editors (including
+  // Codex in cmux) accept the paste while exposing no usable AX target at all.
   // Terminals draw TUIs (tmux, vim, editors, Claude Code) whose on-screen text
   // is full of box borders and line wraps, so reading it back and looking for
-  // our pasted string gives false negatives. fieldFocused already confirmed an
-  // editable area, so skip the read-back for terminals and trust the paste —
+  // our pasted string gives false negatives. Skip the value check for terminals
+  // and trust the paste —
   // the alternative was a sticky false "paste failed" error on every terminal.
   // The terminal check and the read-back are one AX snapshot (readbackPasteTarget)
   // so a focus change can't make them disagree about which app is focused.
-  let verified = null;
   let readTarget = "";
   let readLen = /** @type {number | null} */ (null);
-  if (pasted) {
+  let isTerminal = false;
+  let fieldValue = /** @type {string | null} */ (null);
+  if (transportSucceeded && !windowsFocusLost) {
     await new Promise((resolve) => setTimeout(resolve, 150)); // let the paste settle
-    const { isTerminal, value: fieldValue, app } = readbackPasteTarget();
+    const snapshot = readbackPasteTarget();
+    isTerminal = snapshot.isTerminal;
+    fieldValue = snapshot.value;
+    const app = snapshot.app;
     readTarget = app;
     readLen = typeof fieldValue === "string" ? fieldValue.length : null;
-    if (!isTerminal && typeof fieldValue === "string") {
-      // Normalize what apps auto-substitute (smart quotes, em-dashes, NBSP,
-      // collapsed whitespace) so autocorrect can't turn a good paste into a
-      // false error.
-      const norm = (/** @type {string} */ s) =>
-        s.replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
-         .replace(/[–—]/g, "-").replace(/\s+/g, " ").trim();
-      verified = norm(fieldValue).includes(norm(textToType));
-      // A read-back that can't find the text used to mean "the paste failed".
-      // It doesn't: 2026-07-30, seven pastes in a row that visibly LANDED were
-      // all called failures, each one a 30s error pill telling the user to click
-      // Copy for text already sitting in front of them. An app that doesn't
-      // expose its composer's text faithfully (web areas, Electron editors,
-      // rich-text composers) is indistinguishable from a real miss here, so this
-      // signal can only ever mean "unconfirmed", so on its own it never shows an
-      // error — only `likelyMissed` below acts on it, by leaving the text on the
-      // clipboard. The signals that CAN prove a miss (typeText threw, no editable field,
-      // Windows focus lost) still set pasted = false above.
-    }
   }
+  const { pasted, verified, likelyMissed } = assessPasteOutcome({
+    typed: typed && !windowsFocusLost,
+    restoreRequired: restoreHwnd != null,
+    restored,
+    fieldFocused,
+    isTerminal,
+    fieldValue,
+    text: textToType
+  });
   debug("[main] paste done (" + (Date.now() - tType) + "ms paste, restored=" + restored + ", fieldFocused=" + fieldFocused + ", verified=" + verified + ", pasted=" + pasted + ")");
   // target/readLen say WHY a paste came back unverified — which app owned the
   // field and whether anything was readable in it — without ever logging what
@@ -1345,15 +1339,16 @@ async function processTranscript(transcript, restoreHwnd = null) {
     target: readTarget,
     readLen
   });
-  // verified: true = read back and confirmed, false = read back and missing
-  // (already downgraded pasted), null = couldn't read the field to check.
-  // The strongest miss signal we have that still isn't strong enough to call a
-  // failure: we read the field back, it had real content in it, and our text
-  // wasn't there. The seven false "paste failed" pills that got the downgrade
-  // removed all read back EMPTY (readLen 0 — an app that just doesn't expose
-  // its composer), so requiring content separates them. Not enough to show an
-  // error, but enough to leave the text on the clipboard so ⌘V rescues it.
-  const likelyMissed = pasted && verified === false && (readLen || 0) > 0;
+  // verified: true = read back and confirmed, false = read back and missing,
+  // null = couldn't read the field to check. Only the OS paste transport (or
+  // Windows focus restoration) determines hard success/failure; AX is advisory.
+  // likelyMissed is the middle ground — never an error pill, but enough to keep
+  // the text on the clipboard so ⌘V rescues it. Two shapes qualify (both in
+  // assessPasteOutcome): a field we read back that held other text but not
+  // ours, and "no editable field before the paste, nothing readable after it"
+  // — ⌘V into the desktop. The seven false "paste failed" pills that got the
+  // hard downgrade removed all read back EMPTY (readLen 0 — an app that just
+  // doesn't expose its composer) and stay clear of both.
   return { text: textToType, pasted, verified, likelyMissed, notice: cleanupNotice };
 }
 
