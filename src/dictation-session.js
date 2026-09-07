@@ -42,6 +42,7 @@ export class DictationSession {
     this._safetyTimer = null;
     this._safetyTimeoutMs = safetyTimeoutMs;
     this._log = log;
+    this._terminalGenerations = new Set();
   }
 
   /**
@@ -71,7 +72,7 @@ export class DictationSession {
    * @returns {boolean} false if no dictation was active to release
    */
   release() {
-    if (!this.busy) return false;
+    if (!this.busy || this.releaseAt !== null) return false;
     this.releaseAt = Date.now();
     this._clearSafetyTimer();
     this._safetyTimer = setTimeout(() => {
@@ -113,6 +114,18 @@ export class DictationSession {
    */
   isStale(gen) {
     return typeof gen === "number" && gen > 0 && gen !== this.generation;
+  }
+
+  // Claim before any await. Success, empty completion and failure are all
+  // terminal events; a duplicate must never paste or save the clip twice.
+  claimTerminal(gen = this.generation) {
+    if (!Number.isInteger(gen) || gen < 1 || gen > this.generation) return false;
+    if (this._terminalGenerations.has(gen)) return false;
+    this._terminalGenerations.add(gen);
+    for (const old of this._terminalGenerations) {
+      if (old < this.generation - 128) this._terminalGenerations.delete(old);
+    }
+    return gen >= this.generation - 128;
   }
 
   // Final transition: re-open the session for the next press. Call once the

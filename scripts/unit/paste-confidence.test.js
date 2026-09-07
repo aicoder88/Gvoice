@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { assessPasteOutcome, isTerminalApp } from "../../src/paste-confidence.js";
+import { assessPasteOutcome, isTerminalApp, decidePasteOwnership } from "../../src/paste-confidence.js";
 
 const BASE = {
   typed: true,
@@ -84,4 +84,25 @@ test("existing non-terminal uncertainty leaves the text recoverable", () => {
     assessPasteOutcome({ ...BASE, fieldValue: "Existing draft" }),
     { pasted: true, verified: false, likelyMissed: true }
   );
+});
+
+// The paste must never land in an app the user has moved to. The three arms
+// below are the whole guard; the middle one is the one that matters.
+test("a paste into the app that started the dictation is allowed", () => {
+  assert.equal(decidePasteOwnership(1234, 1234), "same");
+});
+test("no app recorded at press time means the guard has no opinion", () => {
+  assert.equal(decidePasteOwnership(null, 4321), "same");
+  assert.equal(decidePasteOwnership(undefined, null), "same");
+});
+test("a different app is refused", () => {
+  assert.equal(decidePasteOwnership(1234, 4321), "different");
+});
+test("an unreadable foreground is refused, not waved through", () => {
+  // Chrome answers a system-wide focused-element read with nothing, so "we
+  // couldn't tell" and "another app is in front" are the same situation far
+  // more often than they are different. Pasting on unknown put a test sentence
+  // into a browser window on 2026-09-07.
+  assert.equal(decidePasteOwnership(1234, null), "unknown");
+  assert.equal(decidePasteOwnership(1234, undefined), "unknown");
 });

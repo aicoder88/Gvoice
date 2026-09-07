@@ -13,8 +13,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 let pressGen = null;
 
 contextBridge.exposeInMainWorld("dictationBridge", {
-  sendError: (message) => ipcRenderer.send("dictation:error", message, pressGen),
-  sendMicWarning: (message) => ipcRenderer.send("dictation:mic-warning", message, pressGen),
+  sendError: (message, gen = pressGen) => ipcRenderer.send("dictation:error", message, gen),
+  sendMicWarning: (message, gen = pressGen) => ipcRenderer.send("dictation:mic-warning", message, gen),
   // The mic healed itself in the background — clear any warning shown to the user.
   sendMicRecovered: () => ipcRenderer.send("dictation:mic-recovered"),
   // Background recovery couldn't find a live mic — ask main to escalate
@@ -22,8 +22,9 @@ contextBridge.exposeInMainWorld("dictationBridge", {
   requestEscalation: (reason) => ipcRenderer.send("dictation:escalate-recovery", reason),
   // payload is { text, chunks, sampleRate } on a real transcript, or "" for a
   // server-decided empty (silence / hallucination filter).
-  sendTranscript: (payload) => ipcRenderer.send("dictation:transcript", payload),
-  reportFailure: (payload) => ipcRenderer.send("dictation:failure", payload, pressGen),
+  sendTranscript: (payload, gen = pressGen) => ipcRenderer.send("dictation:transcript", payload, gen),
+  reportFailure: (payload, gen = pressGen) => ipcRenderer.send("dictation:failure", payload, gen),
+  sendTiming: (stage, metadata = {}, gen = pressGen) => ipcRenderer.send("dictation:timing", stage, metadata, gen),
   // A new press arrived before the previous dictation was answered. Deliberately
   // NOT stamped with pressGen: by the time this fires, pressGen already belongs
   // to the new press, and main must never read this as the live one failing.

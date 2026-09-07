@@ -127,6 +127,7 @@
       <nav class="nav">
         <button class="active" data-sec="speech"><span class="ic">🎙</span> Speech engine</button>
         <button data-sec="ai"><span class="ic">✨</span> AI cleanup</button>
+        <button data-sec="output"><span class="ic">✍</span> Output profiles</button>
         <button data-sec="dict"><span class="ic">📖</span> Dictionary</button>
         <button data-sec="activity"><span class="ic">📊</span> Activity</button>
         <button data-sec="privacy"><span class="ic">🔒</span> History &amp; privacy</button>
@@ -226,10 +227,20 @@
       <section class="sec" id="activity">
         <h2>Activity</h2>
         <p class="subtitle">From your recent dictations.</p>
+        <div class="card">
+          <h3>Personal speech benchmark</h3>
+          <p class="desc">Choose recordings, approve what you actually said, and compare recognition accuracy and speed. No recordings are added automatically.</p>
+          <button class="btn" id="openPersonalBenchmark" onclick="window.settingsBridge.openBenchmark()">Open benchmark</button>
+        </div>
         <div class="stats">
           <div class="stat"><div class="n" id="stWords">—</div><div class="k">words dictated</div></div>
           <div class="stat"><div class="n" id="stSaved">—</div><div class="k">typing time saved</div></div>
           <div class="stat"><div class="n" id="stStreak">—</div><div class="k">day streak</div></div>
+        </div>
+        <div class="card">
+          <h3>Dictation speed</h3>
+          <p class="desc">This launch, last 500 attempts. Median and slowest 5% from key release to paste. Failed attempts are counted separately. Small samples are preliminary.</p>
+          <div id="latencyStats" class="hint">No timing samples yet.</div>
         </div>
         <div class="card">
           <h3>Recent dictations</h3>
@@ -263,6 +274,27 @@
         </div>
         <div class="hint">Hold the key, speak, release — the words paste into whatever you're typing in.</div>
       </section>
+      <section class="sec" id="output">
+        <h2>Output profiles</h2>
+        <p class="sub">Choose how your dictation is laid out. Facts, names, numbers, language, and meaning stay the same.</p>
+        <div class="card">
+          <div class="row"><label for="outputMode">Profile selection</label><select id="outputMode"><option value="manual">Use one profile everywhere</option><option value="per-app">Use saved app profiles</option></select></div>
+          <div class="row"><label for="outputDefault">Default profile</label><select id="outputDefault"></select></div>
+          <p id="outputDescription" class="hint"></p>
+          <p id="outputCleanupNote" class="hint"></p>
+          <p class="hint">App rules use application identity only. Browser tabs share one app rule; choose a profile manually when needed. No page text, selected text, or window titles are collected.</p>
+        </div>
+        <div class="card">
+          <h3>Saved app profiles</h3>
+          <div id="outputMappings"></div>
+          <p class="hint" id="outputDestination">No destination selected yet.</p>
+          <button class="btn" id="detectOutputApp">Detect app in 5 seconds</button>
+          <p class="hint">Click Detect, then switch to the app you want to configure. Detection does not save a rule.</p>
+          <div class="row"><label for="outputAppProfile">Profile for detected app</label><select id="outputAppProfile"></select><button class="btn" id="addOutputApp">Add rule</button></div>
+        </div>
+        <button class="btn primary" id="saveOutputProfiles">Save profiles</button>
+        <p id="outputStatus" role="status" class="hint"></p>
+      </section>
     </main>
 
     <script>
@@ -278,6 +310,7 @@
           el(b.dataset.sec).classList.add("active");
           if (b.dataset.sec === "activity") loadStats();
           if (b.dataset.sec === "dict") loadDict();
+          if (b.dataset.sec === "output") window.loadOutputProfiles?.();
         });
       });
 
@@ -402,6 +435,15 @@
         el("stWords").textContent = (s.words || 0).toLocaleString();
         el("stSaved").textContent = fmtSaved(s.timeSavedMin || 0);
         el("stStreak").textContent = (s.streakDays || 0) + (s.streakDays === 1 ? " day" : " days");
+        const timing = el("latencyStats");
+        timing.replaceChildren();
+        const ms = value => value == null ? "n/a" : value + " ms";
+        for (const row of s.latency || []) {
+          const item = document.createElement("p");
+          item.textContent = `${row.provider} / ${row.capture}: ${row.delivered}/${row.attempts} pasted. Median ${ms(row.releaseToPasteMs.median)}, p95 ${ms(row.releaseToPasteMs.p95)}. Stage medians: tail ${ms(row.tailMs.median)}, transcription ${ms(row.transcriptionMs.median)}, cleanup ${ms(row.cleanupMs.median)}, paste ${ms(row.pasteMs.median)}.`;
+          timing.append(item);
+        }
+        if (!timing.children.length) timing.textContent = "No timing samples yet.";
         const list = el("histList");
         if (!s.recent || !s.recent.length) { list.innerHTML = '<div class="empty">No dictations yet.</div>'; return; }
         list.innerHTML = "";
@@ -532,5 +574,6 @@
       window.settingsBridge.get().then(fill);
       initEnginePanel();
     </script>
+    <script src="destination-profiles-ui.js" defer></script>
   </body>
 </html>

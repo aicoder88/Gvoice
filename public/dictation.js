@@ -86,6 +86,12 @@ let fallbackTimer = null;
 // recording (and streaming) until the next press. Track the in-flight start
 // and the deferred stop so a tap commits normally.
 let startInFlight = false;
+let activeStart = null;
+const STARTUP_MS = Number(window.DICTATION_STARTUP_MS) || 10000;
+const SOCKET_OPEN_MS = Number(window.DICTATION_SOCKET_OPEN_MS) || 8000;
+function sendTiming(stage, metadata = {}, gen = activeProfile?.gen) {
+  window.dictationBridge.sendTiming?.(stage, metadata, gen);
+}
 let stopRequested = false;
 // When the hold started (key-down), for the dead-pipeline check: a long hold
 // that produced ~no bytes means no frames arrived at all.
@@ -189,14 +195,15 @@ function clearPendingMicWarning() {
 // otherwise it's deferred by the grace window so a self-healing blip never
 // alarms — recovery clears it first. Either way, only one warning is pending.
 function sendMicWarningDeferred(reason, immediate) {
+  const gen = activeProfile?.gen;
   clearPendingMicWarning();
   if (immediate) {
-    window.dictationBridge.sendMicWarning(reason);
+    window.dictationBridge.sendMicWarning(reason, gen);
     return;
   }
   micWarningTimer = setTimeout(() => {
     micWarningTimer = null;
-    window.dictationBridge.sendMicWarning(reason);
+    window.dictationBridge.sendMicWarning(reason, gen);
   }, MIC_WARNING_GRACE_MS);
 }
 
@@ -220,6 +227,7 @@ function setStatus(text) {
 }
 
 async function ensureSocket() {
+  const gen = activeProfile?.gen;
   if (socket) {
     try { socket.close(); } catch {}
     socket = null;
@@ -245,18 +253,31 @@ async function ensureSocket() {
     } else {
       url = `ws://${window.location.host}/realtime?model=gpt-realtime-whisper`;
     }
+    let settled = false;
+    const settle = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(openTimer);
+      error ? reject(error) : resolve(thisSocket);
+    };
     const thisSocket = new WebSocket(url);
+    const openTimer = setTimeout(() => {
+      settle(new Error("Socket connection timed out"));
+      if (socket === thisSocket) socket = null;
+      try { thisSocket.close(); } catch {}
+    }, SOCKET_OPEN_MS);
     socket = thisSocket;
     thisSocket.addEventListener("open", () => {
       log("WS open (" + provider + ")");
-      resolve(socket);
+      settle();
     });
     thisSocket.addEventListener("error", (e) => {
       log("WS error");
-      reject(e);
+      settle(e);
     });
     thisSocket.addEventListener("close", () => {
       log("WS closed");
+      settle(new Error("Socket closed before connecting"));
       if (socket === thisSocket) socket = null;
     });
     thisSocket.addEventListener("message", (event) => {
@@ -265,13 +286,13 @@ async function ensureSocket() {
       if (socket !== thisSocket) return;
       try {
         const msg = JSON.parse(event.data);
-        handleRealtimeEvent(msg);
+        handleRealtimeEvent(msg, gen);
       } catch {}
     });
   });
 }
 
-function handleRealtimeEvent(msg) {
+function handleRealtimeEvent(msg, gen = activeProfile?.gen) {
   const t = msg.type || "";
 
   if (
@@ -302,7 +323,7 @@ function handleRealtimeEvent(msg) {
       transcriptParts.join("");
     if (finalText && finalText.trim()) {
       lastFinalAt = Date.now();
-      finalizeAndSend(finalText.trim());
+      finalizeAndSend(finalText.trim(), gen);
     } else if (!alreadyFinalized && !failureHandled) {
       // Terminal frame with no text. Two cases:
       //  - We captured real audio: a genuine attempt that came back empty
@@ -312,10 +333,11 @@ function handleRealtimeEvent(msg) {
       //  - Little/no audio (a too-short tap): nothing worth keeping — send a
       //    bare "" so main drops the pill quietly.
       alreadyFinalized = true;
+      sendTiming("terminal", { outcome: "empty" }, gen);
       if (recordedBytes >= MIN_FAILURE_BYTES) {
-        window.dictationBridge.sendTranscript({ text: "", chunks: drainChunks(), sampleRate: targetSampleRate });
+        window.dictationBridge.sendTranscript({ text: "", chunks: drainChunks(), sampleRate: targetSampleRate }, gen);
       } else {
-        window.dictationBridge.sendTranscript("");
+        window.dictationBridge.sendTranscript("", gen);
         drainChunks(); // tiny misfire — nothing to keep, just clear the buffer
       }
     }
@@ -333,7 +355,7 @@ function handleRealtimeEvent(msg) {
     // closes as failures here.)
     if (activeProvider === "openai" && !alreadyFinalized && !gotTerminalEvent && !failureHandled) {
       const why = msg.reason || (msg.code ? "closed " + msg.code : "");
-      reportFailure("Lost the connection to OpenAI before it answered — if this keeps happening, check that your API key is valid." + (why ? " (" + why + ")" : ""));
+      reportFailure("Lost the connection to OpenAI before it answered — if this keeps happening, check that your API key is valid." + (why ? " (" + why + ")" : ""), gen);
     }
     return;
   }
@@ -347,7 +369,7 @@ function handleRealtimeEvent(msg) {
     // Action first; the technical detail rides along for the curious (and is
     // always in the log).
     const detail = msg.error?.message || msg.message || "";
-    reportFailure("Transcription failed — press and try again." + (detail ? " (" + detail + ")" : ""));
+    reportFailure("Transcription failed — press and try again." + (detail ? " (" + detail + ")" : ""), gen);
   }
 }
 
@@ -372,34 +394,36 @@ function drainChunks() {
 // the whole recording to the main process so it can be saved and offered back
 // for retry / playback. Otherwise there's nothing worth keeping — just report
 // a plain error. Runs at most once per utterance.
-function reportFailure(reason) {
+function reportFailure(reason, gen = activeProfile?.gen) {
   if (failureHandled) return;
   failureHandled = true;
+  sendTiming("terminal", { outcome: "failure" }, gen);
   isRecording = false;
   clearFailureTimer();
   setStatus("Saved for retry");
   log("Failure: " + reason + " (" + recordedBytes + "B captured)");
 
   if (recordedBytes >= MIN_FAILURE_BYTES) {
-    window.dictationBridge.reportFailure({ chunks: drainChunks(), sampleRate: targetSampleRate, reason });
+    window.dictationBridge.reportFailure({ chunks: drainChunks(), sampleRate: targetSampleRate, reason }, gen);
   } else {
-    window.dictationBridge.sendError(reason);
+    window.dictationBridge.sendError(reason, gen);
     drainChunks(); // misfire — discard the buffer
   }
 }
 
-function finalizeAndSend(text) {
+function finalizeAndSend(text, gen = activeProfile?.gen) {
   // failureHandled guard: a delayed `completed` after an error already reported
   // must not paste a transcript into a field the user has moved on from.
   if (alreadyFinalized || failureHandled) return;
   if (!text || !text.trim()) return;
   alreadyFinalized = true;
+  sendTiming("terminal", { outcome: "transcript" }, gen);
   clearFailureTimer();
   log("Final: " + text);
   // Ship the captured audio with the transcript so main can save it to the
   // recordings folder — the success pill's "Open recording" button and the
   // tray's playback items need a file even when transcription succeeded.
-  window.dictationBridge.sendTranscript({ text, chunks: drainChunks(), sampleRate: targetSampleRate });
+  window.dictationBridge.sendTranscript({ text, chunks: drainChunks(), sampleRate: targetSampleRate }, gen);
   transcriptParts = [];
 }
 
@@ -411,18 +435,18 @@ function finalizeAndSend(text) {
 // degrade Whisper accuracy. AGC ramps gain down during silence and lags on the
 // first word; noise suppression can clip speech onsets. Whisper wants the raw
 // signal.
-async function initCapture() {
+async function initCapture(isCurrent = () => true) {
   if (captureReady) return;
   try {
     // Prefer the last device we got real audio from — on a machine with virtual
     // mics, the bare system default can be a silent one.
-    await buildCaptureGraph(lastGoodDeviceId);
+    await buildCaptureGraph(lastGoodDeviceId, isCurrent);
   } catch (err) {
     // Never leave a half-built graph behind: getUserMedia may have succeeded
     // before a later step threw, and that stray live track would keep the
     // mic-in-use indicator on AND get a second graph stacked on top by the
     // next attempt (doubled, garbled audio).
-    teardownCapture(true);
+    if (isCurrent()) teardownCapture(true);
     throw err;
   }
 }
@@ -454,9 +478,12 @@ async function getMicStream(deviceId) {
   return await navigator.mediaDevices.getUserMedia({ audio: base });
 }
 
-async function buildCaptureGraph(deviceId = null) {
+async function buildCaptureGraph(deviceId = null, isCurrent = () => true) {
+  const assertCurrent = () => { if (!isCurrent()) throw new Error("Startup superseded"); };
+  assertCurrent();
   audioContext = audioContext || new AudioContext();
   if (audioContext.state === "suspended") await audioContext.resume();
+  assertCurrent();
 
   // Re-acquire whenever the audio device set changes (unplug, switch, BT
   // connect). Mid-hold we only mark stale (a rebuild would abandon the user's
@@ -474,7 +501,12 @@ async function buildCaptureGraph(deviceId = null) {
     });
   }
 
-  mediaStream = await getMicStream(deviceId);
+  const acquiredStream = await getMicStream(deviceId);
+  if (!isCurrent()) {
+    for (const track of acquiredStream.getTracks()) track.stop();
+    throw new Error("Startup superseded");
+  }
+  mediaStream = acquiredStream;
 
   // The stream is bound to this one device. If the OS drops it (ended) or
   // another app seizes it (mute), tear down so the next press rebuilds, and
@@ -495,6 +527,7 @@ async function buildCaptureGraph(deviceId = null) {
   // registering the same processor name twice throws. Load it exactly once.
   if (!workletLoaded) {
     await audioContext.audioWorklet.addModule("/audio-capture-worklet.js");
+    assertCurrent();
     workletLoaded = true;
   }
   sourceNode = audioContext.createMediaStreamSource(mediaStream);
@@ -868,8 +901,44 @@ function currentTrackMuted() {
 
 async function startRecording(profile) {
   if (isRecording || startInFlight) return;
+  const operation = { gen: profile?.gen };
+  activeStart = operation;
   startInFlight = true;
   stopRequested = false;
+  let deadline;
+  const expired = new Promise((resolve) => {
+    deadline = setTimeout(() => {
+      if (activeStart !== operation) return resolve();
+      activeStart = null;
+      startInFlight = false;
+      stopRequested = false;
+      const abandonedSocket = socket;
+      socket = null;
+      try { abandonedSocket?.close(); } catch {}
+      teardownCapture(true);
+      setStatus("Startup timed out");
+      window.dictationBridge.sendError("Dictation took too long to start — press and try again.", operation.gen);
+      sendTiming("terminal", { outcome: "startup-timeout" }, operation.gen);
+      resolve();
+    }, STARTUP_MS);
+  });
+  try {
+    await Promise.race([startRecordingOperation(profile, () => activeStart === operation), expired]);
+  } catch (error) {
+    if (activeStart === operation) {
+      teardownCapture(true);
+      window.dictationBridge.sendError("Dictation couldn't start — press and try again.", operation.gen);
+    }
+  } finally {
+    clearTimeout(deadline);
+    if (activeStart === operation) {
+      activeStart = null;
+      startInFlight = false;
+    }
+  }
+}
+
+async function startRecordingOperation(profile, isCurrent) {
   // A press supersedes any pending grace-delayed mic warning — it must not pop
   // a "disconnected" notice in the middle of a fresh dictation.
   clearPendingMicWarning();
@@ -888,12 +957,19 @@ async function startRecording(profile) {
   // disk and the tray's "Transcribe again" gets the words back.
   if (failureTimer && !alreadyFinalized && !failureHandled && recordedBytes >= MIN_FAILURE_BYTES) {
     log("Superseded by a new press — saving the unanswered dictation (" + recordedBytes + "B)");
-    window.dictationBridge.reportSuperseded({ chunks: drainChunks(), sampleRate: targetSampleRate });
+    window.dictationBridge.reportSuperseded({ chunks: drainChunks(), sampleRate: targetSampleRate }, activeProfile?.gen);
   }
   clearFailureTimer();
+  clearTimeout(fallbackTimer);
+  fallbackTimer = null;
+  // Detach the previous socket before any startup await can receive its frames.
+  const previousSocket = socket;
+  socket = null;
+  try { previousSocket?.close(); } catch {}
   // If recovery is mid-rebuild, wait it out — it sees startInFlight and stops
   // after this build, so we won't race it into a second (stacked) graph.
   if (captureBusy) { try { await captureBusy; } catch {} }
+  if (!isCurrent()) return;
   // A new press during the previous utterance's tail drain supersedes it: cancel
   // the pending commit so this fresh recording's frames aren't committed early.
   if (draining) { clearTimeout(drainTimer); draining = false; }
@@ -915,7 +991,7 @@ async function startRecording(profile) {
     startInFlight = false;
     // Action first — the pill label can truncate the tail of a long reason.
     window.dictationBridge.sendError(
-      "Offline — switch to the local Whisper engine in Settings, or reconnect."
+      "Offline — switch to the local Whisper engine in Settings, or reconnect.", profile?.gen
     );
     return;
   }
@@ -948,11 +1024,15 @@ async function startRecording(profile) {
   }
 
   try {
-    await initCapture();
+    await initCapture(isCurrent);
+    if (!isCurrent()) return;
     // The pipeline persists across presses; the OS may have suspended the
     // context (e.g. after sleep). Resume so frames flow again.
     if (audioContext.state === "suspended") await audioContext.resume();
+    if (!isCurrent()) return;
+    sendTiming("captureReady", { capture: wasCold ? "cold" : "warm" }, profile?.gen);
   } catch (error) {
+    if (!isCurrent()) return;
     // A partial build must not linger: the old track would stay live (mic
     // indicator on) and the next attempt would stack a second graph on top.
     teardownCapture(true);
@@ -964,7 +1044,7 @@ async function startRecording(profile) {
       : errName === "NotFoundError"
         ? "No microphone found — plug one in and try again."
         : "Microphone not available: " + (error && error.message);
-    window.dictationBridge.sendError(micMsg);
+    window.dictationBridge.sendError(micMsg, profile?.gen);
     return;
   }
 
@@ -978,14 +1058,16 @@ async function startRecording(profile) {
   // the handshake.
   try {
     await socketReady;
+    if (!isCurrent()) return;
   } catch {
+    if (!isCurrent()) return;
     // No utterance started, so the normal finishUtterance cold-mic cleanup will
     // never run. Release the stream acquired above or a relay/cloud outage
     // leaves the operating system's microphone-in-use indicator on forever.
     dropCapture("socket startup failed");
     setStatus("WS failed");
     startInFlight = false;
-    window.dictationBridge.sendError("Dictation couldn't start — quit GVoice and reopen it, then try again.");
+    window.dictationBridge.sendError("Dictation couldn't start — press and try again.", profile?.gen);
     return;
   }
 
@@ -1107,6 +1189,7 @@ function finishUtterance() {
   if (socket && socket.readyState === WebSocket.OPEN) {
     log("Sending commit (socket readyState=" + socket.readyState + ")");
     socket.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+    sendTiming("committed");
   } else {
     log("CANNOT send commit, socket=" + !!socket + " readyState=" + (socket ? socket.readyState : "no-socket"));
     // The connection dropped before we could ask for a transcript, but the

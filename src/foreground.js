@@ -80,6 +80,7 @@ let AXUIElementCopyAttributeValue = null;
 let AXUIElementIsAttributeSettable = null;
 /** @type {(() => boolean) | null} */
 let AXIsProcessTrusted = null;
+let AXUIElementSetMessagingTimeout = null;
 /** @type {((cf: unknown) => void) | null} */
 let CFRelease = null;
 /** @type {((str: unknown, buf: Buffer, size: number, enc: number) => boolean) | null} */
@@ -120,6 +121,7 @@ if (isMac) {
       "int AXUIElementIsAttributeSettable(void *element, void *attribute, _Out_ bool *settable)"
     );
     AXIsProcessTrusted = AX.func("bool AXIsProcessTrusted(void)");
+    AXUIElementSetMessagingTimeout = AX.func("int AXUIElementSetMessagingTimeout(void *element, float timeout)");
     // pid_t is int32. Lets us walk from the focused element back to the app that
     // owns it, so we can tell when the paste target is a terminal emulator.
     AXUIElementGetPid = AX.func("int AXUIElementGetPid(void *element, _Out_ int *pid)");
@@ -138,6 +140,22 @@ if (isMac) {
   }
 }
 
+// How long a single Accessibility question may block before we give up on it.
+// AX is advisory everywhere in this app: every caller treats null as "couldn't
+// tell" and never holds it against a paste, so a short cap only ever costs us
+// an answer we could live without.
+//   AX_TIMEOUT_S  — the after-the-paste reads, off the user's critical path.
+//   PRESS_TIMEOUT_S — the one read taken while the user is holding the hotkey
+//     and waiting for the microphone. Every millisecond here is a millisecond
+//     of the first word that never got recorded, so it is capped tighter. Not
+//     tighter than this, though: when this read fails, nothing is recorded
+//     about which app the dictation came from, and the paste guard downstream
+//     then has nothing to check. Shaving the microphone delay by disarming the
+//     guard is a bad trade. Watch the `sourcePid` field in the paste log — a
+//     run of nulls means this number is too small for the machine.
+export const AX_TIMEOUT_S = 0.2;
+export const PRESS_TIMEOUT_S = 0.12;
+
 /**
  * Is the currently-focused element something the user can type into?
  *
@@ -150,6 +168,7 @@ export function isEditableFieldFocused() {
   try {
     if (AXIsProcessTrusted && !AXIsProcessTrusted()) return null; // permission missing
     const systemWide = AXUIElementCreateSystemWide();
+    if (systemWide) AXUIElementSetMessagingTimeout?.(systemWide, AX_TIMEOUT_S);
     if (!systemWide) return null;
     try {
       const focusedOut = [null];
@@ -164,6 +183,7 @@ export function isEditableFieldFocused() {
         return NO_FOCUS_CODES.has(axErr) ? false : null;
       }
       const focused = focusedOut[0];
+      if (focused) AXUIElementSetMessagingTimeout?.(focused, AX_TIMEOUT_S);
       if (!focused) return false;
       try {
         let editable = false;
@@ -198,12 +218,13 @@ export function isEditableFieldFocused() {
   }
 }
 
+
 /**
  * Run `cb` with the currently-focused AX element, owning the shared
  * acquire-and-release dance: trust check → system-wide element → focused
  * element → CFRelease both (even if `cb` throws). Returns whatever `cb`
  * returns, or null when the focused element can't be reached (not mac / AX
- * unavailable / not trusted / nothing focused).
+ * unavailable / not trusted / nothing focused / timed out).
  *
  * isEditableFieldFocused intentionally does NOT use this — it needs to tell a
  * transient AX error (⇒ null, "couldn't verify") from a genuine "nothing
@@ -211,18 +232,21 @@ export function isEditableFieldFocused() {
  *
  * @template T
  * @param {(focused: unknown) => T} cb
+ * @param {number} timeoutS
  * @returns {T | null}
  */
-function withFocusedElement(cb) {
+function withFocusedElement(cb, timeoutS = AX_TIMEOUT_S) {
   if (!isMac || !AXUIElementCreateSystemWide || !AXUIElementCopyAttributeValue) return null;
   try {
     if (AXIsProcessTrusted && !AXIsProcessTrusted()) return null;
     const systemWide = AXUIElementCreateSystemWide();
+    if (systemWide) AXUIElementSetMessagingTimeout?.(systemWide, timeoutS);
     if (!systemWide) return null;
     try {
       const focusedOut = [null];
       if (AXUIElementCopyAttributeValue(systemWide, kAXFocusedUIElement, focusedOut) !== 0) return null;
       const focused = focusedOut[0];
+      if (focused) AXUIElementSetMessagingTimeout?.(focused, timeoutS);
       if (!focused) return null;
       try {
         return cb(focused);
@@ -271,16 +295,17 @@ const pidPathBuf = Buffer.alloc(4096); // PROC_PIDPATHINFO_MAXSIZE
 // Empty strings whenever we can't tell, so a non-terminal app is never mistaken
 // for one.
 function elementApp(/** @type {unknown} */ focused) {
-  const none = { bundle: "", basename: "" };
+  const none = { bundle: "", basename: "", path: "" };
   if (!AXUIElementGetPid || !proc_pidpath) return none;
   const pidOut = [0];
   if (AXUIElementGetPid(focused, pidOut) !== 0 || !pidOut[0]) return none;
   const len = proc_pidpath(pidOut[0], pidPathBuf, pidPathBuf.length);
   if (len <= 0) return none;
-  const path = pidPathBuf.toString("utf8", 0, len).toLowerCase();
+  const path = pidPathBuf.toString("utf8", 0, len).replace(/\0.*$/, "").toLowerCase();
   // e.g. "/applications/iterm.app/contents/macos/iterm2" → bundle "iterm",
   // basename "iterm2". Exact match against each (not substring — see above).
   return {
+    path,
     bundle: (path.match(/\/([^/]+)\.app\//) || [])[1] || "",
     basename: path.slice(path.lastIndexOf("/") + 1)
   };
@@ -330,6 +355,58 @@ export function captureForegroundWindow() {
     console.error("[foreground] capture failed:", err && err.message);
     return null;
   }
+}
+
+// macOS does not restore focus for ordinary dictation. Remember the owning
+// process so a user switching apps during cleanup cannot receive an old paste
+// in the new app. No field text is read or retained.
+export function captureForegroundApp() {
+  return withFocusedElement(focused => {
+    if (!AXUIElementGetPid) return null;
+    const pid = [0];
+    return AXUIElementGetPid(focused, pid) === 0 && pid[0] > 0 ? pid[0] : null;
+  });
+}
+
+/**
+ * Both facts a key press needs about the app it is dictating into, from ONE
+ * focused-element traversal: the process that owns the field (so a later paste
+ * can refuse to land in a different app) and that app's identity (so the output
+ * profile matches the destination).
+ *
+ * COST, stated plainly: this is a system-wide Accessibility traversal, and it
+ * runs on the press path, in front of the microphone. It is not free and it did
+ * not replace an older press-path cost — before destination profiles existed,
+ * nothing AX ran at press time on macOS at all. What it replaces is the pair of
+ * traversals the two answers would otherwise need. It is bounded by
+ * PRESS_TIMEOUT_S so a wedged foreground app can delay the microphone by tens
+ * of milliseconds, not hundreds; both answers are allowed to come back null,
+ * and every caller treats null as "couldn't tell" rather than as a refusal.
+ *
+ * Both answers must be taken BEFORE the microphone is told to start: opening
+ * capture can move the frontmost app, and a source recorded after that names
+ * the wrong app, which makes the paste refuse to deliver. Reordering this was
+ * tried on 2026-09-07 and broke every paste — do not.
+ *
+ * @returns {{ pid: number | null, identity: { id: string, name: string } | null }}
+ */
+export function captureDictationSource() {
+  return withFocusedElement(focused => {
+    const pidOut = [0];
+    const pid = AXUIElementGetPid && AXUIElementGetPid(focused, pidOut) === 0 && pidOut[0] > 0 ? pidOut[0] : null;
+    const owner = elementApp(focused);
+    return { pid, identity: owner.path ? { id: `mac:${owner.path}`, name: owner.bundle || owner.basename } : null };
+  }, PRESS_TIMEOUT_S) || { pid: null, identity: null };
+}
+
+// App identity only: no window titles, URLs, selection, or field content.
+// Automatic app mappings currently use macOS executable paths. Manual profiles
+// remain available when identity is unavailable, including other platforms.
+export function captureDestinationIdentity() {
+  return withFocusedElement(focused => {
+    const owner = elementApp(focused);
+    return owner.path ? { id: `mac:${owner.path}`, name: owner.bundle || owner.basename } : null;
+  });
 }
 
 /**

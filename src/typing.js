@@ -1,6 +1,7 @@
 // @ts-check
 import { clipboard } from "electron";
 import { execFile } from "node:child_process";
+import { createClipboardLease } from "./clipboard-lease.js";
 import { sendPasteShortcut } from "./foreground.js";
 
 const isWin = process.platform === "win32";
@@ -112,35 +113,39 @@ function pasteShortcut() {
  * @param {string} text
  * @returns {Promise<void>}
  */
-export async function typeText(text) {
-  if (!text) return;
+let typingQueue = Promise.resolve();
+let currentLease = null;
 
-  await sleep(RELEASE_DELAY_MS);
-
-  const needsLeadingSpace = !/^[\s.,;:!?\-)\]"'`]/.test(text);
-  const textToPaste = needsLeadingSpace ? " " + text : text;
-
-  if (USE_CLIPBOARD) {
-    const previousClipboard = clipboard.readText();
-    // A copied image (screenshot) reads back as empty TEXT — capture it too,
-    // or every dictation would destroy it (restore would write "" over it).
-    // Files/rich clipboard content can't be fully round-tripped from Electron;
-    // text + image covers the common cases.
-    const previousImage = previousClipboard ? null : clipboard.readImage();
-    clipboard.writeText(textToPaste);
-    try {
-      await pasteShortcut();
-    } finally {
-      setTimeout(() => {
-        try {
-          if (previousImage && !previousImage.isEmpty()) clipboard.writeImage(previousImage);
-          else clipboard.writeText(previousClipboard);
-        } catch {}
-      }, 250);
+export function typeText(text, { canPaste = () => true, exact = false } = {}) {
+  const work = typingQueue.then(async () => {
+    if (!text) return null;
+    await sleep(RELEASE_DELAY_MS);
+    // Ownership is checked AFTER the release delay and queue wait.
+    if (!canPaste()) return null;
+    const needsLeadingSpace = !exact && !/^[\s.,;:!?\-)\]"'`]/.test(text);
+    const textToPaste = needsLeadingSpace ? " " + text : text;
+    if (USE_CLIPBOARD) {
+      currentLease?.restore();
+      const lease = createClipboardLease(clipboard, textToPaste, { defer: true });
+      currentLease = lease;
+      try {
+        await pasteShortcut();
+        lease.armRestore();
+        return lease;
+      } catch (error) {
+        lease.keep(); // Recovery text remains available, no delayed write.
+        throw error;
+      }
     }
-    return;
-  }
-
-  const { keyboard } = await nut();
-  await keyboard.type(textToPaste);
+    const { keyboard } = await nut();
+    if (!canPaste()) return null;
+    await keyboard.type(textToPaste);
+    // Typed key by key: nothing of ours ever reached the clipboard, so there is
+    // no hold to end and nothing there to keep. No `keep` is how the caller
+    // tells this apart from a real lease — with one it would log a phantom
+    // "clipboard lost" on every rescue, and skip the rescue write it needs.
+    return { restore() {}, armRestore() {} };
+  });
+  typingQueue = work.then(lease => lease?.settled).catch(() => {});
+  return work;
 }

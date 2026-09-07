@@ -1,6 +1,7 @@
 // @ts-check
 
 import * as vocab from "./vocab.js";
+import { profileInstructions } from "./destination-profiles.js";
 import { withRetry, httpError, RetryableHttpError, HttpError, isRetryableError } from "./retry.js";
 
 /**
@@ -54,6 +55,29 @@ function resolveProvider() {
     ? [explicitModel]
     : [...new Set([...(cached && defaults.includes(cached) ? [cached] : []), ...defaults])];
   return { name, provider, models, usesExplicitModel: Boolean(explicitModel) };
+}
+
+/** Build an explicit editing request using the user's current cleanup configuration.
+ * The returned request contains credentials: pass it directly to fetch, never log it.
+ *
+ * `attempt` picks which vetted model to use. Dictation cleanup walks the same
+ * list when a model is retired (404) or rate-limited (429); without this the
+ * editing path would stay pinned to a dead primary and fail every time while
+ * ordinary dictation kept working. `attempts` tells the caller how many are
+ * left to try.
+ */
+export function createCleanupRequest(systemPrompt, userText, { attempt = 0 } = {}) {
+  const { name, provider, models } = resolveProvider();
+  const apiKey = process.env[provider.keyEnv] || provider.fallbackKey;
+  if (!apiKey) throw new Error("No API key configured for text editing.");
+  const model = models[Math.min(Math.max(0, attempt), models.length - 1)];
+  return {
+    ...buildRequest(provider, apiKey, model, systemPrompt, userText),
+    provider: name,
+    kind: provider.kind,
+    model,
+    attempts: models.length
+  };
 }
 
 // 2.5s ceiling: cleanup is a fast formatting pass, not a long generation. A call
@@ -276,7 +300,22 @@ function isRetiredModelError(error) {
  * @param {string} rawText
  * @returns {Promise<string>}
  */
-export async function polishTranscript(rawText) {
+export async function polishTranscript(rawText, { profile = "plain" } = {}) {
+  const controller = new AbortController();
+  let timer;
+  try {
+    return await Promise.race([
+      polishWithinBudget(rawText, controller.signal, profile),
+      new Promise(resolve => { timer = setTimeout(() => {
+        lastCleanupError = "Tidy-up took too long - text typed exactly as you said it.";
+        controller.abort();
+        resolve(rawText);
+      }, TIMEOUT_MS); })
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
+async function polishWithinBudget(rawText, budgetSignal, profile) {
   const { name: providerName, provider, models, usesExplicitModel } = resolveProvider();
   const apiKey = process.env[provider.keyEnv] || provider.fallbackKey;
   if (!apiKey) return rawText;
@@ -284,7 +323,8 @@ export async function polishTranscript(rawText) {
 
   // Self-correction handling is on unless the user turned it off in Settings.
   // Read live (next dictation reflects the toggle without a restart).
-  const systemPrompt = buildSystemPrompt(process.env.SELF_CORRECTION !== "false");
+  const systemPrompt = buildSystemPrompt(process.env.SELF_CORRECTION !== "false") +
+    (profile === "plain" ? "" : "\n\nDESTINATION FORMATTING:\n" + profileInstructions(profile));
 
   // Hand the model the user's custom dictionary so near-miss mishearings of
   // names/jargon get corrected using sentence context (e.g. "De Bezium" →
@@ -335,6 +375,7 @@ export async function polishTranscript(rawText) {
       try {
         const data = await withRetry(
           async () => {
+            if (budgetSignal.aborted) throw new DOMException("Cleanup deadline reached", "AbortError");
             const controller = new AbortController();
             const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
             try {
@@ -342,7 +383,7 @@ export async function polishTranscript(rawText) {
                 method: "POST",
                 headers: req.headers,
                 body: req.body,
-                signal: controller.signal
+                signal: AbortSignal.any([controller.signal, budgetSignal])
               });
               if (!response.ok) {
                 const body = await response.text().catch(() => "");
@@ -378,6 +419,7 @@ export async function polishTranscript(rawText) {
     }
     return rawText;
   } catch (error) {
+    if (budgetSignal.aborted) return rawText;
     if (error instanceof RetryableHttpError || error instanceof HttpError) {
       console.error(`Cleanup HTTP ${error.status} (${providerName}/${activeModel}): ${error.body}`);
       // A 404/401 is the engine actually broken (model retired, key revoked) and

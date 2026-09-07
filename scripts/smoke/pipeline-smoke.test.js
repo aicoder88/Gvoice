@@ -129,12 +129,19 @@ test(
     // only exists inside the Electron runtime — fake it here so the plain
     // `node --test` process can still exercise the real typeText() logic.
     const writes = [];
+    // The fake has to answer everything the clipboard hold asks of it —
+    // availableFormats() included, which is how the hold tells "our text is
+    // still there" from "the user copied something else". Leaving it out threw
+    // "clipboard.availableFormats is not a function" inside typeText and the
+    // assertion below never ran.
+    let held = "";
     mock.module("electron", {
       namedExports: {
         clipboard: {
-          readText: () => "",
+          readText: () => held,
           readImage: () => ({ isEmpty: () => true }),
-          writeText: (t) => writes.push(t),
+          availableFormats: () => (held ? ["public.utf8-plain-text"] : []),
+          writeText: (t) => { held = t; writes.push(t); },
           writeImage: () => {}
         }
       }

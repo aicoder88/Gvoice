@@ -77,3 +77,36 @@ export function assessPasteOutcome(input) {
   const likelyMissed = pasted && (readBackMismatch || noTargetAtAll);
   return { pasted, verified, likelyMissed };
 }
+
+/**
+ * Should this paste be allowed to land, given the app that owned the field when
+ * the user pressed the hotkey and the app that owns it now?
+ *
+ *   "same"      — read the app, it's the one we recorded. Paste.
+ *   "different" — read the app, it's a DIFFERENT one. Refuse.
+ *   "unknown"   — Accessibility wouldn't say. Refuse, but not as a failure.
+ *
+ * "unknown" refusing is deliberate, and it is the opposite of how this app
+ * treats every other Accessibility answer. Everywhere else null means "couldn't
+ * tell, don't hold it against the paste", because the cost of being wrong is a
+ * pill that says the wrong thing. Here the cost of being wrong is the user's
+ * dictation appearing inside a stranger's window, and that is not recoverable.
+ * The two mistakes are not the same size, so they don't get the same default.
+ *
+ * Refusing costs one ⌘V: the caller keeps the text on the clipboard and tells
+ * the user where it is. Allowing costs a leak. Measured 2026-09-07: the app
+ * that most often returns nothing at all to a system-wide focused-element read
+ * is Chrome — i.e. "couldn't tell" lines up with "some other app is in front",
+ * which is exactly the case the guard exists for.
+ *
+ * @param {number | null | undefined} sourcePid app that owned the field at press time
+ * @param {number | null | undefined} currentPid app that owns it now
+ * @returns {"same" | "different" | "unknown"}
+ */
+export function decidePasteOwnership(sourcePid, currentPid) {
+  // Nothing recorded at press time: there is no claim to check, so this guard
+  // has no opinion and the paste goes ahead as it always did.
+  if (sourcePid == null) return "same";
+  if (currentPid == null) return "unknown";
+  return currentPid === sourcePid ? "same" : "different";
+}
