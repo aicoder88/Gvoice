@@ -5,7 +5,7 @@ import vm from 'node:vm';
 import { join } from 'node:path';
 const local = new URL('../../src/voice-edit-window.js', import.meta.url);
 const source = readFileSync(process.env.VOICE_EDIT_CONTROLLER_SOURCE || local, 'utf8')
-  .replace(/^import .*;\n/gm, '').replace('export function createVoiceEditWindow', 'function createVoiceEditWindow');
+  .replace(/^import .*;\r?\n/gm, '').replace('export function createVoiceEditWindow', 'function createVoiceEditWindow');
 
 function setup(overrides = {}) {
   const handlers = new Map(), windows = [], calls = [];
