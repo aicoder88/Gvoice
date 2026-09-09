@@ -52,7 +52,9 @@ import { createCorrectionWatcher } from "./src/correction-watch.js";
 import { looksLikeRetraction } from "./src/cleanup.js";
 import { captureForegroundApp, captureForegroundWindow, restoreForegroundWindow, getWindowRect, isEditableFieldFocused, isForegroundWindow, readbackPasteTarget } from "./src/foreground.js";
 import { assessPasteOutcome, decidePasteOwnership } from "./src/paste-confidence.js";
-import { RESTORE_DELAY_MS, VERIFY_HOLD_MS } from "./src/clipboard-lease.js";
+import { getClipboardChangeCount } from "./src/clipboard-sequence.js";
+import { capturePasteVerification } from "./src/foreground.js";
+import { readBuildIdentity } from "./src/build-identity.js";
 import { initHistory, getHistory, getHistoryPath, recordTranscript } from "./src/history.js";
 import { computeStats } from "./src/stats.js";
 import { ensureWhisperServer, stopWhisperServer } from "./src/providers/whisper-local.js";
@@ -1206,7 +1208,7 @@ async function processTranscript(transcript, restoreHwnd = null, { canPaste = ()
   if (!transcript || !transcript.trim()) return null;
   let textToType = stripWhisperNoiseTokens(transcript.trim());
   if (!textToType) {
-    dlog("noise-only", { original: transcript });
+    dlog("noise-only", { length: transcript.length });
     return null;
   }
 
@@ -1216,7 +1218,7 @@ async function processTranscript(transcript, restoreHwnd = null, { canPaste = ()
   // leaving unrelated words untouched. No-op when the dictionary is empty.
   const corrected = vocab.correctTranscript(textToType);
   if (corrected !== textToType) {
-    dlog("vocab-correct", { from: textToType, to: corrected });
+    dlog("vocab-correct", { beforeLength: textToType.length, afterLength: corrected.length });
     textToType = corrected;
   }
 
@@ -1253,7 +1255,7 @@ async function processTranscript(transcript, restoreHwnd = null, { canPaste = ()
     try {
       const { polishTranscript, takeCleanupError, FREE_LIMIT_MESSAGE } = await import("./src/cleanup.js");
       textToType = await polishTranscript(textToType, { profile: outputProfile });
-      debug("[main] cleanup done (" + (Date.now() - t0) + "ms):", JSON.stringify(textToType));
+      debug("[main] cleanup done (" + (Date.now() - t0) + "ms):", JSON.stringify({ length: textToType.length }));
       // polishTranscript swallows its own errors and returns the raw text, so a
       // permanently dead cleanup engine looks exactly like a working one with
       // nothing to fix. Say it out loud once instead of only in a console log.
@@ -1277,186 +1279,89 @@ async function processTranscript(transcript, restoreHwnd = null, { canPaste = ()
     textToType += ".";
   }
 
-  // Check whether an editable field is actually focused BEFORE we paste, while
-  // the user's app is still frontmost. On macOS this reads the Accessibility
-  // API (true/false); on Windows it returns null (we fall back to the restore
-  // signal). null = couldn't tell, so don't hold it against the paste.
-  if (!canPaste()) return { text: textToType, pasted: false, skipped: true, verified: null, likelyMissed: false, notice: "Saved in Recent dictations." };
+  const superseded = () => ({ text: textToType, pasted: false, skipped: true,
+    verified: null, likelyMissed: false, deliveryState: "superseded", notice: "Saved in Recent dictations." });
+  if (!canPaste()) return superseded();
   const fieldFocused = isEditableFieldFocused();
-
   const tType = Date.now();
   const { typeText } = await import("./src/typing.js");
+  if (!canPaste()) return superseded();
+  const clipboardBefore = getClipboardChangeCount();
   let restored = false;
-  if (!canPaste()) return { text: textToType, pasted: false, skipped: true, verified: null, likelyMissed: false, notice: "Saved in Recent dictations." };
-  if (restoreHwnd != null) {
-    restored = restoreForegroundWindow(restoreHwnd);
-    dlog("paste", { hwnd: restoreHwnd, restored });
-  }
-  // Best-effort confidence that the text actually landed in a text field.
-  // Clipboard paste is fire-and-forget, so we can't truly confirm — but these
-  // signals tell us it did NOT: typeText threw, or (Windows) we had a foreground
-  // window to restore and the restore failed. macOS's editor-role probe is only
-  // one signal: terminal-style editors can accept ⌘V while reporting false.
-  let typed = true;
-  let clipboardLease;
-  // Which arm of the ownership check we landed on, for the log and for the
-  // wording on the pill. "same" until the check actually runs.
+  if (restoreHwnd != null) restored = restoreForegroundWindow(restoreHwnd);
   let pasteOwnership = "same";
+  let verification;
+  let lease;
+  let typed = false;
+  let deliveryState = "failed";
+  let verified = null;
+  let likelyMissed = false;
+  let readTarget = "";
+  let readLen = null;
+  let clipboardRetained = false;
   latency.mark(gen, "pasteStart");
   try {
-    // Ownership. The old code refused whenever this read came back null, and a
-    // null means only "Accessibility wouldn't answer" — so a busy app produced a
-    // red "the paste didn't land" pill on a dictation that was perfectly fine.
-    // The answer is NOT to paste anyway (that puts the text in whatever window
-    // happens to be in front); it is to stop calling the refusal a failure. See
-    // decidePasteOwnership, and the `skipped` handling below.
-    //
-    // One retry first: the read is capped by a messaging timeout, and under load
-    // the second attempt usually answers. Only paid on the null path.
-    let ownershipUnknown = false;
-    const ownershipAllows = () => {
+    lease = await typeText(textToType, { expectedPid: sourceApp, canPaste: () => {
+      if (!canPaste()) return false;
       let verdict = decidePasteOwnership(sourceApp, captureForegroundApp());
       if (verdict === "unknown") verdict = decidePasteOwnership(sourceApp, captureForegroundApp());
-      ownershipUnknown = verdict === "unknown";
       pasteOwnership = verdict;
-      return verdict === "same";
-    };
-    clipboardLease = await typeText(textToType, { canPaste: () => canPaste() && ownershipAllows() });
-    typed = !!clipboardLease;
+      if (verdict !== "same" || (restoreHwnd != null && !restored)) return false;
+      // This snapshot lives only until delivery settles; no field text is logged.
+      verification = capturePasteVerification();
+      return true;
+    } });
+    if (lease?.refused) pasteOwnership = "different";
+    typed = !!lease && lease.dispatched !== false;
     if (typed) latency.mark(gen, "pasteEnd");
+    if (!canPaste()) deliveryState = "superseded";
+    else if (pasteOwnership !== "same") deliveryState = "refused";
+    else if (!typed) deliveryState = "failed";
+    else {
+      const windowsFocusLost = restoreHwnd != null && isForegroundWindow(restoreHwnd) === false;
+      await new Promise(resolve => setTimeout(resolve, 150));
+      const snapshot = verification?.read();
+      readTarget = snapshot?.app || "";
+      readLen = typeof snapshot?.value === "string" ? snapshot.value.length : null;
+      ({ verified, likelyMissed, deliveryState } = assessPasteOutcome({
+        typed: !windowsFocusLost, restoreRequired: restoreHwnd != null, restored,
+        fieldFocused, isTerminal: snapshot?.isTerminal || false,
+        fieldValue: snapshot?.value ?? null, beforeValue: verification?.beforeValue,
+        sameField: snapshot?.sameField === true,
+        text: /^[\s.,;:!?\-)\]"'`]/.test(textToType) ? textToType : " " + textToType
+      }));
+      if (!canPaste()) deliveryState = "superseded";
+    }
   } catch (error) {
-    typed = false;
-    console.error("[main] typeText failed:", error && (error.stack || error.message));
+    deliveryState = "failed";
+    console.error("[main] paste delivery failed:", error?.message);
+  } finally {
+    try { verification?.dispose(); } catch {}
+    if (lease) {
+      clipboardRetained = lease.isCurrent?.() === true && deliveryState !== "verified";
+      deliveryState = lease.finish(deliveryState);
+    } else if (deliveryState !== "superseded" && canPaste()) {
+      // A refused paste has acquired no lease. Rescue only if nobody copied
+      // anything during the asynchronous transport or ownership check.
+      if (clipboardBefore != null && getClipboardChangeCount() === clipboardBefore) {
+        clipboard.writeText(textToType);
+        clipboardRetained = true;
+      } else deliveryState = "superseded";
+    }
   }
-  // The lease hands the user's clipboard back 250ms after the paste key is
-  // sent. Everything below — the 150ms settle plus Accessibility reads capped
-  // at 200ms each — can easily outlast that, and when it does the decision to
-  // KEEP the text loses the race and the dictation is gone from the clipboard
-  // it was supposed to be rescuable from. Hold the lease across the check and
-  // end it explicitly at every exit below.
-  const pasteSentAt = Date.now();
-  clipboardLease?.armRestore?.(VERIFY_HOLD_MS);
-  // A real clipboard hold has keep(); the keyboard-typing path and a refused
-  // paste do not. Only the first has anything of ours on the clipboard to end.
-  const heldClipboard = typeof clipboardLease?.keep === "function" ? clipboardLease : null;
-  const releaseClipboard = (keepText) => {
-    if (!keepText) {
-      clipboardLease?.armRestore?.(RESTORE_DELAY_MS - (Date.now() - pasteSentAt));
-      return;
-    }
-    if (heldClipboard) {
-      // False here means the clipboard no longer holds our text — worth seeing
-      // in the log, because it is the exact shape of the bug this hold fixes.
-      if (heldClipboard.keep() === false) dlog("paste-clipboard-lost", { elapsed: Date.now() - pasteSentAt });
-      return;
-    }
-    // No hold, and the text is meant to stay recoverable: the paste was refused
-    // (ownership, or a throw before the clipboard was ever written) or the text
-    // was typed key by key. Nothing of ours is on the clipboard, so put it
-    // there — otherwise the pill says "Click Copy" about a clipboard that never
-    // received it, and ⌘V rescues nothing.
-    try { clipboard.writeText(textToType); dlog("paste-clipboard-rescue", { len: textToType.length }); }
-    catch (error) { console.error("[main] clipboard rescue failed:", error && error.message); }
-  };
-  // The ownership check refused: nothing was sent anywhere, so this is not a
-  // failed paste. Say where the text IS rather than "the paste didn't land",
-  // and leave it on the clipboard so a single ⌘V puts it wherever the user
-  // wants it. This is the whole price of refusing when we can't tell.
-  if (!typed && pasteOwnership !== "same") {
-    releaseClipboard(true);
-    dlog("paste-refused", { reason: pasteOwnership, sourcePid: sourceApp ?? null });
-    return { text: textToType, pasted: false, skipped: true, verified: null, likelyMissed: false,
-      notice: pasteOwnership === "different"
-        ? "Not pasted — you moved to another app. It's on your clipboard."
-        : "Not pasted — couldn't tell which app was in front. It's on your clipboard." };
-  }
-  const transportSucceeded = typed && !(restoreHwnd != null && restored === false);
-  // Windows paste verification: confirm focus is STILL the window we restored to
-  // right after sending Ctrl+V. If another app grabbed the foreground mid-paste,
-  // the keystroke went somewhere else — downgrade so the text stays recoverable
-  // from the pill instead of a false "Success". isForegroundWindow returns null
-  // off Windows (and when koffi is unavailable), which we never hold against a
-  // paste. This is the Windows counterpart to macOS's AX focus/read-back check.
-  // Any throw between here and the decision would leave the clipboard held
-  // for the full backstop and block the next dictation behind it. Hand the
-  // clipboard straight back instead.
-  try {
-    let windowsFocusLost = false;
-    if (transportSucceeded && process.platform === "win32" && restoreHwnd != null) {
-      const stillForeground = isForegroundWindow(restoreHwnd);
-      if (stillForeground === false) {
-        windowsFocusLost = true;
-        dlog("paste-foreground-lost", { hwnd: restoreHwnd });
-      }
-    }
-    // Post-paste verification (macOS, best-effort): re-read the target even when
-    // the pre-paste role probe said "not editable". A terminal identity or an
-    // exact readable match can explain that false negative. An unknown/no-target
-    // result cannot downgrade a successful ⌘V: custom Electron editors (including
-    // Codex in cmux) accept the paste while exposing no usable AX target at all.
-    // Terminals draw TUIs (tmux, vim, editors, Claude Code) whose on-screen text
-    // is full of box borders and line wraps, so reading it back and looking for
-    // our pasted string gives false negatives. Skip the value check for terminals
-    // and trust the paste —
-    // the alternative was a sticky false "paste failed" error on every terminal.
-    // The terminal check and the read-back are one AX snapshot (readbackPasteTarget)
-    // so a focus change can't make them disagree about which app is focused.
-    let readTarget = "";
-    let readLen = /** @type {number | null} */ (null);
-    let isTerminal = false;
-    let fieldValue = /** @type {string | null} */ (null);
-    if (transportSucceeded && !windowsFocusLost) {
-      await new Promise((resolve) => setTimeout(resolve, 150)); // let the paste settle
-      const snapshot = readbackPasteTarget();
-      isTerminal = snapshot.isTerminal;
-      fieldValue = snapshot.value;
-      const app = snapshot.app;
-      readTarget = app;
-      readLen = typeof fieldValue === "string" ? fieldValue.length : null;
-    }
-    const { pasted, verified, likelyMissed } = assessPasteOutcome({
-      typed: typed && !windowsFocusLost,
-      restoreRequired: restoreHwnd != null,
-      restored,
-      fieldFocused,
-      isTerminal,
-      fieldValue,
-      text: textToType
-    });
-    debug("[main] paste done (" + (Date.now() - tType) + "ms paste, restored=" + restored + ", fieldFocused=" + fieldFocused + ", verified=" + verified + ", pasted=" + pasted + ")");
-    // target/readLen say WHY a paste came back unverified — which app owned the
-    // field and whether anything was readable in it — without ever logging what
-    // the user dictated or what was already in the field.
-    dlog("typed", {
-      len: textToType.length,
-      ms: Date.now() - tType,
-      fieldFocused,
-      pasted,
-      verified,
-      target: readTarget,
-      readLen,
-      // Did the press-path read get an app at all, and did the ownership check
-      // agree? A run of sourcePid:null means PRESS_TIMEOUT_S is too tight and is
-      // buying microphone latency by disarming the guard.
-      sourcePid: sourceApp ?? null,
-      ownership: pasteOwnership
-    });
-    // verified: true = read back and confirmed, false = read back and missing,
-    // null = couldn't read the field to check. Only the OS paste transport (or
-    // Windows focus restoration) determines hard success/failure; AX is advisory.
-    // likelyMissed is the middle ground — never an error pill, but enough to keep
-    // the text on the clipboard so ⌘V rescues it. Two shapes qualify (both in
-    // assessPasteOutcome): a field we read back that held other text but not
-    // ours, and "no editable field before the paste, nothing readable after it"
-    // — ⌘V into the desktop. The seven false "paste failed" pills that got the
-    // hard downgrade removed all read back EMPTY (readLen 0 — an app that just
-    // doesn't expose its composer) and stay clear of both.
-    releaseClipboard(!pasted || likelyMissed);
-    return { text: textToType, pasted, verified, likelyMissed, notice: cleanupNotice };
-  } catch (error) {
-    clipboardLease?.restore?.();
-    throw error;
-  }
+  const pasted = typed && (deliveryState === "verified" || deliveryState === "sent-unverified");
+  const skipped = deliveryState === "refused" || deliveryState === "superseded";
+  const notice = deliveryState === "verified" ? cleanupNotice
+    : deliveryState === "superseded" ? "Saved in Recent dictations. Your newer clipboard was kept."
+    : deliveryState === "refused" ? "Not pasted. It's on your clipboard and in Recent dictations."
+    : clipboardRetained ? "Delivery unverified. Text kept on your clipboard and in Recent dictations."
+    : "Delivery unverified. Text saved in Recent dictations.";
+  dlog("typed", { len: textToType.length, ms: Date.now() - tType, fieldFocused,
+    pasted, verified, deliveryState, target: readTarget, readLen,
+    sourcePid: sourceApp ?? null, ownership: pasteOwnership,
+    clipboardChangeCount: getClipboardChangeCount(), clipboardRetained });
+  return { text: textToType, pasted, skipped, verified, likelyMissed, deliveryState, notice };
+
 }
 
 // How many recent recordings to keep on disk — matched to the history length so
@@ -1719,7 +1624,7 @@ function setupIpc() {
     const { releaseAt, sinceRelease } = dictation.finalize();
     const sourceApp = sourceApps.get(gen);
     const canPaste = () => stillMine() && Date.now() - releaseAt < 30000;
-    debug("[main] received transcript (" + sinceRelease + "ms after release):", JSON.stringify(text));
+    debug("[main] received transcript (" + sinceRelease + "ms after release):", JSON.stringify({ length: text?.length || 0 }));
     dlog("transcript", { len: (text || "").trim().length, sinceRelease });
 
     // Set when the audio was already written to disk by the empty-stream rescue
@@ -1812,7 +1717,7 @@ function setupIpc() {
         console.error("[main] transcript landed after a newer press — parked in history");
         dlog("transcript-stale", { gen });
         if (result && result.text) {
-          recordTranscript(result.text, false, recordingPath);
+          recordTranscript(result.text, false, recordingPath, { deliveryState: "superseded" });
           rebuildTrayMenu();
         }
         return;
@@ -1864,7 +1769,7 @@ function setupIpc() {
         // Keep the last 50 dictations on disk and in the tray menu, so a
         // missed paste is recoverable — and listenable — even after the pill is
         // gone.
-        recordTranscript(result.text, result.pasted, recordingPath);
+        recordTranscript(result.text, result.pasted, recordingPath, { deliveryState: result.deliveryState });
         rebuildTrayMenu();
         // Offer to teach the dictionary any likely-misheard names, and start
         // watching for a hand-typed correction. Only when the text actually
@@ -2732,6 +2637,7 @@ function needsOnboarding() {
 }
 
 app.whenReady().then(async () => {
+  dlog("startup-build", readBuildIdentity());
   // Defense-in-depth navigation lockdown. Every window today loads only bundled
   // app HTML or the loopback relay, so nothing here triggers — but if a future
   // change ever rendered remote or transcript-derived markup, this stops a
@@ -2915,6 +2821,12 @@ if (TEST_MODE) globalThis.__gvoiceTest = {
   profileView: () => destinationProfiles.view(),
   resolveProfile: identity => destinationProfiles.resolve(identity),
   activeProfile: () => utteranceProfiles.get(dictation.generation),
+  deliverFixture: async (text, sourceApp = null) => {
+    const result = await processTranscript(text, null, { sourceApp });
+    if (result?.text) recordTranscript(result.text, result.pasted, null, { deliveryState: result.deliveryState });
+    return result;
+  },
+  buildIdentity: () => readBuildIdentity(),
   formatProfileFixture: (text, identity) => processTranscript(text, null,
     { canPaste: () => false, outputProfile: destinationProfiles.resolve(identity).profile }),
   openTray: () => tray?.popUpContextMenu(trayMenu),

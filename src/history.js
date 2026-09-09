@@ -30,6 +30,7 @@ export async function initHistory() {
           ts: e.ts,
           text: e.text,
           pasted: !!e.pasted,
+          deliveryState: ["verified", "sent-unverified", "refused", "failed", "superseded"].includes(e.deliveryState) ? e.deliveryState : e.pasted ? "sent-unverified" : "failed",
           recordingPath: typeof e.recordingPath === "string" ? e.recordingPath : null
         }))
         .slice(0, MAX_ENTRIES);
@@ -58,9 +59,9 @@ export function getHistory() {
  * @param {boolean} pasted
  * @param {string | null} [recordingPath]
  */
-export function recordTranscript(text, pasted, recordingPath = null) {
+export function recordTranscript(text, pasted, recordingPath = null, { deliveryState = pasted ? "sent-unverified" : "failed" } = {}) {
   if ((!text || !text.trim()) && !recordingPath) return;
-  entries.unshift({ ts: Date.now(), text: text || "", pasted, recordingPath: recordingPath || null });
+  entries.unshift({ ts: Date.now(), text: text || "", pasted, deliveryState, recordingPath: recordingPath || null });
   if (entries.length > MAX_ENTRIES) entries.length = MAX_ENTRIES;
   const snapshot = JSON.stringify(entries, null, 2);
   // Atomic write (tmp + rename): a crash mid-write must not leave a truncated

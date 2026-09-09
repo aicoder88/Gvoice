@@ -2,6 +2,7 @@
 import { clipboard } from "electron";
 import { execFile } from "node:child_process";
 import { createClipboardLease } from "./clipboard-lease.js";
+import { getClipboardChangeCount } from "./clipboard-sequence.js";
 import { sendPasteShortcut } from "./foreground.js";
 
 const isWin = process.platform === "win32";
@@ -67,7 +68,7 @@ export function prewarmTyping() {
  * neither pulls in nut-js). Linux falls back to nut-js.
  * @returns {Promise<void>}
  */
-function pasteShortcut() {
+export function pasteShortcut({ expectedPid = null } = {}) {
   if (isWin) {
     // Native Win32 Ctrl+V. Returns false only if koffi never loaded, in which
     // case we fall through to the nut-js path below as a last resort.
@@ -85,15 +86,18 @@ function pasteShortcut() {
         settled = true;
         reject(new Error("osascript paste helper did not return within " + PASTE_TIMEOUT_MS + "ms (System Events hung?)"));
       }, PASTE_TIMEOUT_MS);
+      const guard = Number.isSafeInteger(expectedPid) && expectedPid > 0
+        ? `if (unix id of first application process whose frontmost is true) is not ${expectedPid} then return "gvoice-refused"\n`
+        : "";
       execFile(
         "/usr/bin/osascript",
-        ["-e", 'tell application "System Events" to keystroke "v" using command down'],
+        ["-e", `tell application "System Events"\n${guard}keystroke "v" using command down\nreturn "gvoice-sent"\nend tell`],
         { timeout: PASTE_TIMEOUT_MS, killSignal: "SIGKILL" },
-        (err) => {
+        (err, stdout) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          err ? reject(err) : resolve();
+          err ? reject(err) : resolve({ refused: stdout?.trim() === "gvoice-refused" });
         }
       );
     });
@@ -107,34 +111,37 @@ function pasteShortcut() {
 /**
  * Type or paste `text` into the focused app. With TYPE_VIA_CLIPBOARD=true
  * (default), saves the current clipboard, writes `text`, sends the paste
- * shortcut, then restores the original clipboard 250ms later. Otherwise, types
+ * shortcut, then retains it until the caller explicitly settles delivery. Otherwise, types
  * each character via nut-js.
  *
  * @param {string} text
  * @returns {Promise<void>}
  */
+export function createTextTyper({ clipboardTarget = clipboard, getChangeCount = getClipboardChangeCount,
+  sendShortcut = pasteShortcut, releaseDelayMs = RELEASE_DELAY_MS } = {}) {
 let typingQueue = Promise.resolve();
 let currentLease = null;
-
-export function typeText(text, { canPaste = () => true, exact = false } = {}) {
+return function typeText(text, { canPaste = () => true, exact = false, expectedPid = null } = {}) {
   const work = typingQueue.then(async () => {
     if (!text) return null;
-    await sleep(RELEASE_DELAY_MS);
+    await sleep(releaseDelayMs);
     // Ownership is checked AFTER the release delay and queue wait.
     if (!canPaste()) return null;
     const needsLeadingSpace = !exact && !/^[\s.,;:!?\-)\]"'`]/.test(text);
     const textToPaste = needsLeadingSpace ? " " + text : text;
     if (USE_CLIPBOARD) {
-      currentLease?.restore();
-      const lease = createClipboardLease(clipboard, textToPaste, { defer: true });
+      currentLease?.finish("superseded");
+      const lease = createClipboardLease(clipboardTarget, textToPaste, { getChangeCount });
       currentLease = lease;
       try {
-        await pasteShortcut();
-        lease.armRestore();
+        const dispatch = await sendShortcut({ expectedPid });
+        lease.refused = dispatch?.refused === true;
+        lease.dispatched = !lease.refused;
         return lease;
       } catch (error) {
-        lease.keep(); // Recovery text remains available, no delayed write.
-        throw error;
+        lease.dispatched = false;
+        lease.dispatchError = error;
+        return lease; // Caller settles without overwriting a newer user copy.
       }
     }
     const { keyboard } = await nut();
@@ -144,8 +151,11 @@ export function typeText(text, { canPaste = () => true, exact = false } = {}) {
     // no hold to end and nothing there to keep. No `keep` is how the caller
     // tells this apart from a real lease — with one it would log a phantom
     // "clipboard lost" on every rescue, and skip the rescue write it needs.
-    return { restore() {}, armRestore() {} };
+    return { dispatched: true, finish(state) { return state; } };
   });
   typingQueue = work.then(lease => lease?.settled).catch(() => {});
   return work;
 }
+
+}
+export const typeText = createTextTyper();

@@ -329,6 +329,42 @@ function elementApp(/** @type {unknown} */ focused) {
  *   that never ran is indistinguishable in the log from one that ran and found
  *   an unreadable field.
  */
+// Temporary foreground-field readback only while delivering one dictation.
+// Retaining the AX element lets us reject a focus switch within the same app.
+let pasteCFRetain, pasteCFRelease, pasteCFEqual;
+if (process.platform === "darwin") {
+  try {
+    const koffi = (await import("koffi")).default;
+    const core = koffi.load("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation");
+    pasteCFRetain = core.func("void *CFRetain(void *value)");
+    pasteCFRelease = core.func("void CFRelease(void *value)");
+    pasteCFEqual = core.func("bool CFEqual(void *a, void *b)");
+  } catch {}
+}
+export function capturePasteVerification() {
+  if (!pasteCFRetain) return null;
+  return withFocusedElement(focused => {
+    const { bundle, basename } = elementApp(focused);
+    const terminal = isTerminalApp(bundle, basename);
+    const beforeValue = terminal ? null : readFocusedStringValue(focused);
+    const held = pasteCFRetain(focused);
+    let disposed = false;
+    return {
+      beforeValue,
+      read() {
+        if (disposed) return null;
+        return withFocusedElement(current => {
+          const sameField = pasteCFEqual(held, current);
+          const { bundle: name, basename: binary } = elementApp(current);
+          const isTerminal = isTerminalApp(name, binary);
+          return { sameField, isTerminal, value: sameField && !isTerminal ? readFocusedStringValue(current) : null, app: name || binary };
+        });
+      },
+      dispose() { if (!disposed) { disposed = true; pasteCFRelease(held); } }
+    };
+  });
+}
+
 export function readbackPasteTarget() {
   return withFocusedElement((focused) => {
     const { bundle, basename } = elementApp(focused);

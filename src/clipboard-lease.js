@@ -1,52 +1,47 @@
-// How long the pasted text stays on the clipboard before the user's own
-// clipboard comes back. Long enough for the target app to finish reading the
-// ⌘V, short enough that a copy-paste right after a dictation still works.
-export const RESTORE_DELAY_MS = 250;
-// While the caller is checking whether the paste actually landed, the restore
-// must not fire underneath it: the check sleeps 150ms and then makes
-// Accessibility calls that are each capped at 200ms and can stack. Losing that
-// race silently discards the text the user just dictated, so the hold is set
-// well past the worst case. The caller always ends the hold itself (keep() on a
-// miss, armRestore(remaining) on a hit, restore() if it throws) — this value is
-// only the backstop for a caller that dies mid-check.
-export const VERIFY_HOLD_MS = 2000;
+// No timer may restore an unverified paste. OS sequence numbers also detect a
+// user copying the same string (text equality alone misses that ownership loss).
+const leases = new WeakMap();
+export const DELIVERY_STATES = new Set(['verified', 'sent-unverified', 'refused', 'failed', 'superseded']);
 
-// A delayed restore owns only the clipboard contents it wrote. A user copy or
-// a subsequent GVoice paste revokes that ownership.
-export function createClipboardLease(clipboard, text, { delay = RESTORE_DELAY_MS, schedule = setTimeout, cancel = clearTimeout, defer = false } = {}) {
+export function createClipboardLease(clipboard, text, { getChangeCount = () => null } = {}) {
+  const previousLease = leases.get(clipboard);
+  const previousWasDictation = previousLease?.isCurrent() === true;
+  previousLease?.finish('superseded');
   const previousText = clipboard.readText();
   const previousImage = previousText ? null : clipboard.readImage();
   clipboard.writeText(text);
-  const formats = clipboard.availableFormats().sort().join("\n");
+  const count = getChangeCount();
+  const formats = clipboard.availableFormats().sort().join('\n');
   let active = true;
-  let timer;
+  let state = null;
   let settle;
   const settled = new Promise(resolve => { settle = resolve; });
-  const owns = () => {
-    try { return active && clipboard.readText() === text && clipboard.availableFormats().sort().join("\n") === formats; }
-    catch { return false; }
-  };
-  const restore = () => {
-    cancel(timer);
+  const isCurrent = () => {
     try {
-      if (owns()) {
+      return leases.get(clipboard) === lease && count != null && getChangeCount() === count &&
+        clipboard.readText() === text && clipboard.availableFormats().sort().join('\n') === formats;
+    } catch { return false; }
+  };
+  const owns = () => active && isCurrent();
+  const finish = delivery => {
+    if (!DELIVERY_STATES.has(delivery)) throw new Error('Invalid delivery state');
+    if (!active) return state;
+    const owned = owns();
+    state = count != null && !owned ? 'superseded' : delivery;
+    try {
+      // Never restore another dictation's retained payload. With no native
+      // sequence counter, retain the current text and fail closed on restore.
+      if (delivery === 'verified' && owned && !previousWasDictation) {
         if (previousImage && !previousImage.isEmpty()) clipboard.writeImage(previousImage);
-        // Rich/file-only clipboards cannot be faithfully reconstructed here — the
-        // writeText that opened the lease already replaced them. previousText is
-        // "" in that case, and writing it back is still right: leaving the
-        // dictation sitting on the clipboard forever is the worse of the two.
-        else clipboard.writeText(previousText);
+        else if (previousText) clipboard.writeText(previousText);
+        // Unsupported/rich-only clipboard formats cannot be faithfully restored.
       }
-    } catch {} finally { active = false; settle(); }
+    } catch { /* A restore failure cannot discard delivery/history metadata. */ }
+    finally { active = false; settle(state); }
+    return state;
   };
-  const keep = () => { cancel(timer); const owned = owns(); active = false; settle(); return owned; };
-  // An explicit delay overrides the lease's own: the paste-verification pass
-  // holds the clipboard longer while it checks, then re-arms with what is left
-  // of the normal window.
-  const armRestore = (overrideMs) => {
-    cancel(timer);
-    if (active) timer = schedule(restore, Number.isFinite(overrideMs) ? Math.max(0, overrideMs) : delay);
-  };
-  if (!defer) armRestore();
-  return { restore, keep, owns, armRestore, settled };
+  const keep = () => { const owned = owns(); finish('sent-unverified'); return owned; };
+  const lease = { finish, keep, owns, isCurrent, settled, get state() { return state; }, changeCount: count };
+  leases.set(clipboard, lease);
+  return lease;
 }
