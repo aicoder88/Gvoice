@@ -108,20 +108,109 @@ test("fail() finalizes and re-opens in one step", async () => {
   assert.equal(s.busy, true, "fail() also killed the old safety timer");
 });
 
-test("isStale() tells an overtaken press's terminal event from the live one", async () => {
+test("owns() tells an overtaken press's event from the live one", async () => {
   const s = new DictationSession({ safetyTimeoutMs: 20, log: quiet });
   s.tryStart();
-  const firstPress = s.generation;
-  assert.equal(s.isStale(firstPress), false, "its own error still ends its own session");
+  const firstPress = s.id;
+  assert.equal(s.owns(firstPress), true, "its own error still ends its own session");
   s.release();
   await sleep(50); // safety timer clears busy; the user presses again
   s.tryStart();
-  assert.equal(s.isStale(firstPress), true, "the old press must not kill the live one");
-  assert.equal(s.isStale(s.generation), false, "the live press still owns the session");
-  assert.equal(s.isStale(undefined), false, "an unstamped event is never dropped");
+  assert.equal(s.owns(firstPress), false, "the old press must not kill the live one");
+  assert.equal(s.isStale(firstPress), true, "isStale is the inverse of owns");
+  assert.equal(s.owns(s.id), true, "the live press still owns the session");
+  assert.equal(s.owns(undefined), true, "an unstamped event is never dropped");
   // The renderer reloads on the escalate-recovery path, resetting its stamp
-  // while this counter keeps climbing. Whatever it sends before the next press
-  // must still get through — that path is when the user most needs the message.
-  assert.equal(s.isStale(null), false, "a renderer that has not seen a press yet must not be muted");
-  assert.equal(s.isStale(0), false, "0 is never a real press — treat it as unstamped, not stale");
+  // while this session keeps its own name. Whatever it sends before the next
+  // press must still get through — that path is when the user most needs the
+  // message.
+  assert.equal(s.owns(null), true, "a renderer that has not seen a press yet must not be muted");
+  assert.equal(s.owns(""), true, "an empty stamp is 'never stamped', not stale");
+});
+
+test("every accepted press gets its own name, and no name is ever reused", () => {
+  const s = new DictationSession({ log: quiet });
+  const seen = new Set();
+  assert.equal(s.id, null, "no name before the first press");
+  for (let i = 0; i < 25; i += 1) {
+    assert.equal(s.tryStart(), true);
+    assert.equal(typeof s.id, "string");
+    assert.match(/** @type {string} */ (s.id), /^\d+-[0-9a-f]{8}$/, "monotonic count plus a random suffix");
+    assert.equal(seen.has(s.id), false, "a reused name would let an old press claim the live session");
+    seen.add(s.id);
+    s.done();
+  }
+
+  // A refused press must not mint a name: the in-flight handler would then see
+  // a changed name, skip done(), and leave busy stuck true — a deaf app.
+  s.tryStart();
+  const mine = s.id;
+  assert.equal(s.tryStart(), false);
+  assert.equal(s.id, mine, "a press that was ignored is not a dictation");
+});
+
+test("done() keeps the name, so the batch rescue can still ask who owns the session", async () => {
+  const s = new DictationSession({ safetyTimeoutMs: 20, log: quiet });
+  s.tryStart();
+  const mine = s.id;
+  s.release();
+  // The empty-transcript path re-opens the session BEFORE the slow batch
+  // rescue, then keeps checking ownership for seconds afterwards.
+  s.done();
+  assert.equal(s.owns(mine), true, "re-opening the session does not orphan the press that is finishing");
+  s.tryStart();
+  assert.equal(s.owns(mine), false, "a real new press does");
+});
+
+// The delivery rule this whole id exists for: a transcript that arrives after a
+// newer press must be parked in history, never pasted. This is the main.js
+// dictation:transcript handler in miniature — same ownership question, same two
+// outcomes.
+test("start A, start B: A's transcript is parked, B's is pasted", async () => {
+  const s = new DictationSession({ safetyTimeoutMs: 20, log: quiet });
+  /** @type {string[]} */
+  const pasted = [];
+  /** @type {{ text: string, recovered: boolean }[]} */
+  const history = [];
+
+  // Stand-in for the handler: it snapshots the name the event carried, then
+  // asks the session who owns it before touching anything shared.
+  const deliver = (/** @type {string | null} */ sessionId, /** @type {string} */ text) => {
+    const mine = s.owns(sessionId);
+    if (!mine) {
+      history.push({ text, recovered: true });
+      return;
+    }
+    pasted.push(text);
+    history.push({ text, recovered: false });
+  };
+
+  s.tryStart();
+  const a = s.id;
+  s.release();
+  await sleep(50); // A's answer is still out; the safety timer re-opens the session
+  s.tryStart();
+  const b = s.id;
+  assert.notEqual(a, b);
+
+  deliver(a, "hello from A");
+  assert.deepEqual(pasted, [], "A's late transcript must never reach the cursor");
+  assert.deepEqual(history, [{ text: "hello from A", recovered: true }]);
+
+  s.release();
+  deliver(b, "hello from B");
+  assert.deepEqual(pasted, ["hello from B"], "the live press still pastes");
+  assert.equal(history[1].recovered, false);
+});
+
+test("an unstamped transcript is treated as the live press, not dropped", () => {
+  const s = new DictationSession({ log: quiet });
+  s.tryStart();
+  // What main.js does on entry: pin the event's own name, or the live one when
+  // the renderer reloaded and lost its stamp.
+  const sessionOf = (/** @type {unknown} */ id) =>
+    typeof id === "string" && id.length > 0 ? id : s.id;
+  assert.equal(s.owns(sessionOf(null)), true);
+  assert.equal(s.owns(sessionOf("")), true);
+  assert.equal(s.owns(sessionOf(undefined)), true);
 });

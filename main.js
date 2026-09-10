@@ -154,12 +154,20 @@ let isQuitting = false;
 // always ends the session sooner; this is only the anti-jam backstop.
 const dictation = new DictationSession({ safetyTimeoutMs: 25000 });
 
-// Terminal events from the renderer carry the generation of the press that
-// produced them (stamped in preload.cjs from the dictation:start profile). A
-// late one belongs to a press that is already over: acting on it would clear
-// `busy` for the LIVE press and paint over its pill. Logging and recording
-// still happen — only the shared session state is protected.
-const isStalePress = (/** @type {unknown} */ gen) => dictation.isStale(gen);
+// Every event the renderer sends back carries the name of the press that
+// produced it (stamped in preload.cjs from the dictation:start profile), and
+// every slow continuation in this file snapshots the same name on entry. A late
+// one belongs to a press that is already over: acting on it would clear `busy`
+// for the LIVE press and paint over its pill. Logging and recording still
+// happen — only the shared session state is protected.
+//
+// An unstamped event (the renderer reloaded and lost its name) counts as the
+// live press, so nothing is silently dropped — see DictationSession.owns().
+// sessionOf() is what a handler calls on entry: it pins the event's own name,
+// or the live one when the event has none, and everything after that asks
+// dictation.owns(id).
+const sessionOf = (/** @type {unknown} */ id) =>
+  typeof id === "string" && id.length > 0 ? id : dictation.id;
 
 // The diagnostic log MUST live in userData, not next to main.js. When the app
 // is packaged, __dirname is inside the read-only .app/.asar bundle, so the old
@@ -1063,12 +1071,12 @@ function startDictation(/** @type {number} */ maxHoldMs = MAX_HOLD_MS) {
   correctionWatcher.disarm();
   recentTypedWords = [];
   hideVocab();
-  // `gen` rides along so the renderer can stamp its terminal events with the
-  // press they belong to (see isStalePress).
+  // The session name rides along so the renderer can stamp everything it sends
+  // back with the press it belongs to (see sessionOf / DictationSession.owns).
   const profile = {
     language: DICTATION_LANGUAGE,
     model: process.env.DEEPGRAM_MODEL || "nova-3",
-    gen: dictation.generation
+    sessionId: dictation.id
   };
   savedForegroundHwnd = captureForegroundWindow();
   dlog("press", { profile, hwnd: savedForegroundHwnd });
@@ -1174,10 +1182,18 @@ function openAccessibilitySettings() {
 // during the IPC round-trip. The retry path passes nothing (the user is
 // interacting with the pop-up, so there's no window to restore).
 //
+// `deliver: false` runs everything except the paste: noise strip, vocabulary
+// repair, cleanup, trailing punctuation — then hands the finished text back
+// without touching the clipboard, the focused app or the user's cursor. That is
+// what a transcript belonging to a press that is already over gets: the words
+// are worth keeping in history, but they must never land in whatever the user
+// is typing into now.
+//
 // @param {string} transcript
 // @param {number | null} [restoreHwnd]
+// @param {{ deliver?: boolean }} [options]
 // @returns {Promise<{ text: string, pasted: boolean, verified: boolean | null, likelyMissed: boolean, notice: string } | null>}
-async function processTranscript(transcript, restoreHwnd = null) {
+async function processTranscript(transcript, restoreHwnd = null, { deliver = true } = {}) {
   if (!transcript || !transcript.trim()) return null;
   let textToType = stripWhisperNoiseTokens(transcript.trim());
   if (!textToType) {
@@ -1249,6 +1265,13 @@ async function processTranscript(transcript, restoreHwnd = null) {
   if (!textToType) return null;
   if (!/[.!?…,;:"')\]]$/.test(textToType)) {
     textToType += ".";
+  }
+
+  // Nobody is going to receive this text — stop before the paste machinery and
+  // hand back the cleaned words for the history entry.
+  if (!deliver) {
+    dlog("processed-no-deliver", { len: textToType.length });
+    return { text: textToType, pasted: false, verified: null, likelyMissed: false, notice: cleanupNotice };
   }
 
   // Check whether an editable field is actually focused BEFORE we paste, while
@@ -1492,7 +1515,9 @@ async function retranscribeRecording(recordingPath, { deliver = true } = {}) {
       clipboard.writeText(cleaned);
       showPillResult("success", cleaned, recordingPath, { reason: "Got it on retry — press ⌘V.", holdMs: 30000 });
     }
-    recordTranscript(cleaned, false, recordingPath);
+    // Recovered from a saved clip, not from the live press that recorded it —
+    // the tray says so, and the history entry carries the flag.
+    recordTranscript(cleaned, false, recordingPath, { recovered: true });
     rebuildTrayMenu();
     return cleaned;
   } catch (error) {
@@ -1533,7 +1558,7 @@ async function retranscribeOnDemand(/** @type {string | null} */ recordingPath) 
 }
 
 function setupIpc() {
-  ipcMain.on("dictation:transcript", async (_event, payload) => {
+  ipcMain.on("dictation:transcript", async (_event, payload, eventSessionId) => {
     // payload is { text, chunks, sampleRate } on a real transcript, or "" on a
     // server-decided empty (silence gate / hallucination filter).
     // Not const: an empty stream that the batch retry rescues below replaces
@@ -1544,19 +1569,31 @@ function setupIpc() {
     // Captured audio proves the mic worked at least once — unlocks the relaunch
     // recovery rung for a later wedge.
     if (chunks && chunks.length) everHadLiveMic = true;
-    // Which press this transcript belongs to. Everything below can run for
-    // seconds (cleanup, the batch rescue, the paste) while `busy` has already
-    // been cleared — by the rescue's early done() OR, on an ordinary dictation,
-    // by release()'s 500ms safety timer. A press in that window starts a NEW
-    // dictation, and the shared state below belongs to that one from then on.
-    const gen = dictation.generation;
-    const stillMine = () => dictation.generation === gen;
+    // Which press this transcript belongs to. Two ways it can stop being the
+    // live one. It may already have been overtaken before it even arrived (the
+    // renderer stamped it with a press that is over) — success used to skip that
+    // check while errors had it, so a late transcript could paste into the
+    // middle of the next dictation. And everything below can run for seconds
+    // (cleanup, the batch rescue, the paste) while `busy` has already been
+    // cleared — by the rescue's early done() OR, on an ordinary dictation, by
+    // release()'s safety timer. A press in that window starts a NEW dictation,
+    // and the shared state below belongs to that one from then on. One question
+    // covers both: does the session still own this name?
+    const sessionId = sessionOf(eventSessionId);
+    const stillMine = () => dictation.owns(sessionId);
+    const mineOnArrival = stillMine();
     // Grab the window THIS press captured while it's still ours. Read later
-    // (after the rescue round trip) it could already be the next dictation's.
-    const targetHwnd = savedForegroundHwnd;
-    const { releaseAt, sinceRelease } = dictation.finalize();
+    // (after the rescue round trip) it could already be the next dictation's —
+    // and if the transcript was already stale on arrival it was never ours.
+    const targetHwnd = mineOnArrival ? savedForegroundHwnd : null;
+    // finalize() stops the safety timer, which belongs to whichever press is
+    // live. A transcript that arrived late must not disarm the anti-jam backstop
+    // of the dictation the user is holding right now.
+    const { releaseAt, sinceRelease } = mineOnArrival
+      ? dictation.finalize()
+      : { releaseAt: Date.now(), sinceRelease: 0 };
     debug("[main] received transcript (" + sinceRelease + "ms after release):", JSON.stringify(text));
-    dlog("transcript", { len: (text || "").trim().length, sinceRelease });
+    dlog("transcript", { len: (text || "").trim().length, sinceRelease, sessionId, mine: mineOnArrival });
 
     // Set when the audio was already written to disk by the empty-stream rescue
     // below, so the normal path doesn't save a second copy of the same clip.
@@ -1572,10 +1609,11 @@ function setupIpc() {
       // seconds (minutes on a half-open connection), and every hotkey press in
       // that window would otherwise be dropped in silence — no pill, no clue.
       // done() only clears the busy flag, so the normal path's finally can call
-      // it again harmlessly when a rescue falls through.
-      dictation.done();
+      // it again harmlessly when a rescue falls through. Never on a transcript
+      // that was already stale: `busy` belongs to the newer press by then.
+      if (mineOnArrival) dictation.done();
       if (!chunks || !chunks.length) {
-        hidePill();
+        if (mineOnArrival) hidePill();
         return;
       }
       const failedPath = await saveTempRecording(chunks, sampleRate);
@@ -1594,7 +1632,7 @@ function setupIpc() {
       // and taking the clipboard from them would be worse. Park it in history
       // and the tray's Recent dictations, where it stays recoverable.
       if (recovered && !stillMine()) {
-        recordTranscript(recovered, false, failedPath);
+        recordTranscript(recovered, false, failedPath, { recovered: true, sessionId });
         rebuildTrayMenu();
         return;
       }
@@ -1614,7 +1652,7 @@ function setupIpc() {
         // "" = the retry ran and genuinely heard nothing; it owns the pill in
         // that case. Either way, record the failed attempt so the clip stays
         // playable from the tray.
-        recordTranscript("", false, failedPath);
+        recordTranscript("", false, failedPath, { sessionId });
         rebuildTrayMenu();
         return;
       }
@@ -1626,7 +1664,12 @@ function setupIpc() {
       // Restore focus to whichever app the user was dictating into, then type.
       // processTranscript strips Whisper noise tokens, runs the cleanup pass,
       // and pastes — restoring focus right before the paste lands.
-      const result = await processTranscript(text, targetHwnd);
+      //
+      // Unless this transcript was already overtaken before it arrived. Then
+      // there is nothing of ours in front of the user, and pasting would drop
+      // these words into the middle of the dictation they are speaking right
+      // now. Clean them up anyway and park them in history below.
+      const result = await processTranscript(text, targetHwnd, { deliver: mineOnArrival });
       // Only clear the global if this press still owns the session. Comparing
       // the VALUE instead would be wrong in the commonest case of all: two
       // dictations into the same app back to back capture the same window, so
@@ -1640,9 +1683,9 @@ function setupIpc() {
       // release. Park the text where it stays recoverable and get out.
       if (!stillMine()) {
         console.error("[main] transcript landed after a newer press — parked in history");
-        dlog("transcript-stale", { gen });
+        dlog("transcript-stale", { sessionId, live: dictation.id });
         if (result && result.text) {
-          recordTranscript(result.text, false, recordingPath);
+          recordTranscript(result.text, false, recordingPath, { recovered: true, sessionId });
           rebuildTrayMenu();
         }
         return;
@@ -1655,7 +1698,7 @@ function setupIpc() {
         // just left nothing. Without this the recovered clip vanishes — no
         // history entry, nothing playable from the tray.
         if (rescuedPath) {
-          recordTranscript(text, false, recordingPath);
+          recordTranscript(text, false, recordingPath, { sessionId });
           rebuildTrayMenu();
         }
       } else {
@@ -1690,7 +1733,7 @@ function setupIpc() {
         // Keep the last 50 dictations on disk and in the tray menu, so a
         // missed paste is recoverable — and listenable — even after the pill is
         // gone.
-        recordTranscript(result.text, result.pasted, recordingPath);
+        recordTranscript(result.text, result.pasted, recordingPath, { sessionId });
         rebuildTrayMenu();
         // Failed paste — or one that read back as missing from a field with
         // other text in it: leave the text on the clipboard so it's recoverable
@@ -1714,7 +1757,7 @@ function setupIpc() {
       }
       // Cleanup never ran on this path — at least strip Whisper noise tokens
       // so the history entry matches the others as closely as possible.
-      recordTranscript(stripWhisperNoiseTokens(text.trim()) || text, false, recordingPath);
+      recordTranscript(stripWhisperNoiseTokens(text.trim()) || text, false, recordingPath, { sessionId });
       rebuildTrayMenu();
     } finally {
       // Never on a stale transcript: `busy` belongs to the newer press, and
@@ -1725,7 +1768,7 @@ function setupIpc() {
 
   // A dictation couldn't be transcribed but audio was captured. Save the clip
   // and show the Error pill so the user can open the recording and try again.
-  ipcMain.on("dictation:failure", async (_event, payload, pressGen) => {
+  ipcMain.on("dictation:failure", async (_event, payload, eventSessionId) => {
     // Snapshot before fail() re-opens the session. Saving the clip and the batch
     // retry below take seconds, and a press in that window owns the pill from
     // then on. pillFree() alone can't see that — it reads `busy`, which the new
@@ -1733,11 +1776,12 @@ function setupIpc() {
     // A failure stamped with an OLDER press was already overtaken before it even
     // arrived: don't end the live session for it, and don't run the batch rescue
     // (its text would paste into the middle of the new dictation). The clip is
-    // still saved and logged, so the tray can replay it.
-    const stale = isStalePress(pressGen);
-    const gen = dictation.generation;
-    const stillMine = () => !stale && dictation.generation === gen;
-    if (!stale) dictation.fail();
+    // still saved and logged, so the tray can replay it. One name, one question,
+    // both cases.
+    const sessionId = sessionOf(eventSessionId);
+    const stillMine = () => dictation.owns(sessionId);
+    const mineOnArrival = stillMine();
+    if (mineOnArrival) dictation.fail();
     const chunks = (payload && payload.chunks) || [];
     const recordingPath = await saveTempRecording(chunks, payload && payload.sampleRate);
     if (recordingPath) console.error("[main] dictation recording saved:", recordingPath);
@@ -1750,13 +1794,13 @@ function setupIpc() {
     // reason first would be replaced within a frame AND would leave its own
     // 45s safety-hide timer armed behind the retry's shorter states.
     const reason = (payload && payload.reason) || "Couldn't transcribe.";
-    const recovered = recordingPath && !stale ? await retranscribeRecording(recordingPath) : null;
+    const recovered = recordingPath && mineOnArrival ? await retranscribeRecording(recordingPath) : null;
     // null = no retry happened (see retranscribeRecording) — show the
     // renderer's plain-English reason rather than a pill stuck on "Transcribing…",
     // but only if a new press hasn't claimed the pill in the meantime.
     if (recovered === null && stillMine()) showPillResult("error", null, recordingPath, { reason });
     if (!recovered && recordingPath) {
-      recordTranscript("", false, recordingPath);
+      recordTranscript("", false, recordingPath, { sessionId, recovered: !mineOnArrival });
       rebuildTrayMenu();
     }
   });
@@ -1765,21 +1809,26 @@ function setupIpc() {
   // (the renderer is closing that socket), so keep the audio: save the clip and
   // log it so the tray can replay or re-transcribe it. Deliberately silent —
   // the live press owns the pill, and ending its session here would be wrong.
-  ipcMain.on("dictation:superseded", async (_event, payload) => {
+  ipcMain.on("dictation:superseded", async (_event, payload, eventSessionId) => {
     const chunks = (payload && payload.chunks) || [];
     const recordingPath = await saveTempRecording(chunks, payload && payload.sampleRate);
-    dlog("superseded", { saved: !!recordingPath, path: recordingPath || null });
+    // The name here is the press being ABANDONED, not the live one, so it is
+    // only ever written down — never used to decide who owns the pill.
+    dlog("superseded", { saved: !!recordingPath, path: recordingPath || null, sessionId: eventSessionId || null });
     if (!recordingPath) return;
-    recordTranscript("", false, recordingPath);
+    recordTranscript("", false, recordingPath, {
+      sessionId: typeof eventSessionId === "string" ? eventSessionId : null,
+      recovered: true
+    });
     rebuildTrayMenu();
   });
 
-  ipcMain.on("dictation:error", (_event, message, gen) => {
+  ipcMain.on("dictation:error", (_event, message, eventSessionId) => {
     console.error("Dictation error:", message);
-    dlog("dictation-error", { message, gen, live: dictation.generation });
+    dlog("dictation-error", { message, sessionId: eventSessionId || null, live: dictation.id });
     // A newer press owns the session and the pill — log the old error, but
     // don't end the live dictation or paint over its "Listening…".
-    if (isStalePress(gen)) return;
+    if (!dictation.owns(eventSessionId)) return;
     dictation.fail();
     // No audio, no transcript (mic blocked, relay down, offline). Show the
     // reason on the pill so the user knows WHY, not just that it failed.
@@ -2031,14 +2080,14 @@ function setupIpc() {
   // The renderer lost the microphone (disconnected, muted, seized by another
   // app, or silent for several holds in a row) and rebuilt its capture. Make
   // the failure visible instead of silently typing nothing.
-  ipcMain.on("dictation:mic-warning", (_event, message, gen) => {
+  ipcMain.on("dictation:mic-warning", (_event, message, eventSessionId) => {
     console.error("[main] mic warning:", message);
-    dlog("mic-warning", { message, gen, live: dictation.generation });
+    dlog("mic-warning", { message, sessionId: eventSessionId || null, live: dictation.id });
     // The mic really is unhappy either way, so the notification always fires.
     // The pill and the session belong to whichever press is live: a warning
     // stamped with an older press must not kill it.
     showMicWarning(message);
-    if (isStalePress(gen)) return;
+    if (!dictation.owns(eventSessionId)) return;
     dictation.fail();
     // Show the reason ON the pill (not just a system notification the user may
     // have muted) so a dead-mic rebuild visibly says "press and try again"
@@ -2249,11 +2298,20 @@ function rebuildTrayMenu() {
       ? (flat.length > 60 ? flat.slice(0, 60) + "…" : flat)
       : "(no transcript — recording only)";
     const hasRecording = !!entry.recordingPath && existsSync(entry.recordingPath);
+    // Words that came back after the press they belonged to was over, or that
+    // the retry pulled out of a saved clip. They were never meant to land in an
+    // app, so they get no warning triangle — only text can be "recovered", a
+    // clip with no transcript says so in its own preview.
+    const recovered = !!entry.recovered && !!flat;
     /** @type {import("electron").MenuItemConstructorOptions[]} */
     const sub = [];
     // The ⚠ on the parent row needs a legend — say what it means right where
     // the user looks for the text.
-    if (!entry.pasted) sub.push({ label: "⚠ Wasn't pasted into any app", enabled: false });
+    if (recovered) {
+      sub.push({ label: "Recovered later — never pasted", enabled: false });
+    } else if (!entry.pasted) {
+      sub.push({ label: "⚠ Wasn't pasted into any app", enabled: false });
+    }
     if (flat) sub.push({ label: "Copy text", click: () => clipboard.writeText(entry.text) });
     sub.push({
       label: hasRecording ? "Play recording" : "Recording unavailable",
@@ -2269,7 +2327,7 @@ function rebuildTrayMenu() {
       });
     }
     return {
-      label: `${time}${entry.pasted ? "" : " ⚠"}  ${preview}`,
+      label: `${time}${entry.pasted || recovered ? "" : " ⚠"}  ${preview}`,
       submenu: sub
     };
   });

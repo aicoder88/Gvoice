@@ -13,6 +13,8 @@
 // (transcript or error) and stops the safety timer. `done` is the last
 // transition that re-opens the session for the next press.
 
+import { randomUUID } from "node:crypto";
+
 /**
  * @typedef {object} DictationSessionOptions
  * @property {number} [safetyTimeoutMs]
@@ -36,6 +38,16 @@ export class DictationSession {
     // the safety timer already cleared by finalize() — permanently deaf app.
     /** @type {number} */
     this.generation = 0;
+    // The name of the press that is live right now, issued by tryStart() and
+    // never reused: "<generation>-<random>". Everything that travels away from
+    // this process and comes back later — the renderer's transcript, error and
+    // mic-warning events, and every slow continuation in main.js (cleanup, the
+    // batch rescue, saving the clip, delivery) — carries this string, and
+    // owns() is the single question asked before any of them touches shared
+    // state. The random half matters because the renderer reloads: a stamp
+    // minted before a reload must never collide with a counter that restarted.
+    /** @type {string | null} */
+    this.id = null;
     /** @type {number | null} */
     this.releaseAt = null;
     /** @type {ReturnType<typeof setTimeout> | null} */
@@ -58,6 +70,11 @@ export class DictationSession {
     this._clearSafetyTimer();
     this.busy = true;
     this.generation += 1;
+    // Issued here and nowhere else. done() deliberately leaves it alone: the
+    // empty-transcript rescue re-opens the session early and then keeps asking
+    // owns() for seconds afterwards, so the name has to outlive the busy flag
+    // and change only when a real new press arrives.
+    this.id = `${this.generation}-${randomUUID().slice(0, 8)}`;
     // Forget the previous session's release stamp, or finalize() on a session
     // that errors before release would report timings from the LAST dictation.
     this.releaseAt = null;
@@ -96,23 +113,34 @@ export class DictationSession {
   }
 
   /**
-   * A terminal event from the renderer (error, failure, mic warning) carries the
-   * generation of the press that produced it. True when that press is already
-   * over — the caller must not end the session or paint the pill on its behalf,
-   * because both now belong to a newer press.
+   * Does `id` name the press that owns the session right now? The one question
+   * every late arrival asks — a renderer event that took the scenic route, or a
+   * main-process continuation that has been away in cleanup, the batch rescue
+   * or a disk write while the user pressed again.
    *
-   * An unstamped event counts as current, so nothing is silently dropped: that
-   * covers a background mic warning raised outside any press, and a renderer
-   * that reloaded (escalate-recovery) and lost its stamp while this counter kept
-   * climbing. `generation` starts at 1 and only ever grows, so 0 can never be a
-   * real press either — it's a "never stamped" value, and the one that would
-   * otherwise mute the renderer permanently.
+   * An unstamped id (null, "", anything that isn't a string) counts as the live
+   * press, so nothing is ever silently dropped: that covers a background mic
+   * warning raised outside any press, and a renderer that reloaded
+   * (escalate-recovery) and lost its stamp. It also covers the very first
+   * events of a run, before any press has been accepted and `this.id` is still
+   * null.
    *
-   * @param {unknown} gen
+   * @param {unknown} id
    * @returns {boolean}
    */
-  isStale(gen) {
-    return typeof gen === "number" && gen > 0 && gen !== this.generation;
+  owns(id) {
+    if (typeof id !== "string" || id.length === 0) return true;
+    return id === this.id;
+  }
+
+  /**
+   * The inverse of owns(), for the handlers that only want to bail out early.
+   *
+   * @param {unknown} id
+   * @returns {boolean}
+   */
+  isStale(id) {
+    return !this.owns(id);
   }
 
   // Final transition: re-open the session for the next press. Call once the

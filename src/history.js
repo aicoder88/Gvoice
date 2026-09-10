@@ -9,7 +9,18 @@ import { join } from "node:path";
 
 const MAX_ENTRIES = 50;
 
-/** @typedef {{ ts: number, text: string, pasted: boolean, recordingPath?: string | null }} HistoryEntry */
+/**
+ * `recovered` marks text that reached history instead of the user's cursor: a
+ * transcript that came back after the press it belonged to was over, or one the
+ * batch retry pulled out of a saved clip. It is never pasted, so the tray has to
+ * say where it came from.
+ *
+ * `sessionId` names the press that produced the entry (see
+ * src/dictation-session.js), so a line in history can be matched to a line in
+ * the debug log.
+ *
+ * @typedef {{ ts: number, text: string, pasted: boolean, recordingPath?: string | null, recovered?: boolean, sessionId?: string | null }} HistoryEntry
+ */
 
 /** @type {HistoryEntry[]} */
 let entries = [];
@@ -30,7 +41,9 @@ export async function initHistory() {
           ts: e.ts,
           text: e.text,
           pasted: !!e.pasted,
-          recordingPath: typeof e.recordingPath === "string" ? e.recordingPath : null
+          recordingPath: typeof e.recordingPath === "string" ? e.recordingPath : null,
+          recovered: !!e.recovered,
+          sessionId: typeof e.sessionId === "string" ? e.sessionId : null
         }))
         .slice(0, MAX_ENTRIES);
     }
@@ -57,10 +70,18 @@ export function getHistory() {
  * @param {string} text
  * @param {boolean} pasted
  * @param {string | null} [recordingPath]
+ * @param {{ recovered?: boolean, sessionId?: string | null }} [meta]
  */
-export function recordTranscript(text, pasted, recordingPath = null) {
+export function recordTranscript(text, pasted, recordingPath = null, meta = {}) {
   if ((!text || !text.trim()) && !recordingPath) return;
-  entries.unshift({ ts: Date.now(), text: text || "", pasted, recordingPath: recordingPath || null });
+  entries.unshift({
+    ts: Date.now(),
+    text: text || "",
+    pasted,
+    recordingPath: recordingPath || null,
+    recovered: !!meta.recovered,
+    sessionId: typeof meta.sessionId === "string" ? meta.sessionId : null
+  });
   if (entries.length > MAX_ENTRIES) entries.length = MAX_ENTRIES;
   const snapshot = JSON.stringify(entries, null, 2);
   // Atomic write (tmp + rename): a crash mid-write must not leave a truncated
