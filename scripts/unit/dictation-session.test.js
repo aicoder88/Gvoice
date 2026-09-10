@@ -214,3 +214,224 @@ test("an unstamped transcript is treated as the live press, not dropped", () => 
   assert.equal(s.owns(sessionOf("")), true);
   assert.equal(s.owns(sessionOf(undefined)), true);
 });
+
+// ---------------------------------------------------------------------------
+// The state machine: idle -> recording -> processing -> (completed | cancelled
+// | failed) -> idle. One transition function, one table, and no path that can
+// leave the session refusing every press forever.
+// ---------------------------------------------------------------------------
+
+const ALL_STATES = ["idle", "recording", "processing", "completed", "cancelled", "failed"];
+// The same table src/dictation-session.js keeps, written out by hand so a
+// change to it has to be a deliberate change to this test too.
+const LEGAL = {
+  idle: ["recording"],
+  recording: ["processing", "completed", "cancelled", "failed"],
+  processing: ["completed", "cancelled", "failed"],
+  completed: ["idle"],
+  cancelled: ["idle"],
+  failed: ["idle"]
+};
+
+test("every legal transition is taken, and every illegal one is refused and logged", () => {
+  for (const from of ALL_STATES) {
+    for (const to of ALL_STATES) {
+      /** @type {string[]} */
+      const logged = [];
+      const s = new DictationSession({ log: (/** @type {unknown} */ m) => logged.push(String(m)) });
+      s.state = from;
+      const legal = LEGAL[from].includes(to);
+      assert.equal(s._transition(to), legal, `${from} -> ${to} should be ${legal ? "legal" : "refused"}`);
+      assert.equal(s.state, legal ? to : from, `a refused transition must not move the session`);
+      if (legal) {
+        assert.deepEqual(logged, [], `${from} -> ${to} is legal and must not log`);
+      } else {
+        assert.equal(logged.length, 1, `${from} -> ${to} must say so in the log`);
+        assert.match(logged[0], /illegal transition/);
+      }
+    }
+  }
+});
+
+test("the public methods walk the states in order", () => {
+  const s = new DictationSession({ safetyTimeoutMs: 1000, log: quiet });
+  assert.equal(s.state, "idle", "a fresh session is idle");
+  s.tryStart();
+  assert.equal(s.state, "recording");
+  assert.equal(s.busy, true, "busy is derived from the state, never stored beside it");
+  s.release();
+  assert.equal(s.state, "processing");
+  assert.equal(s.busy, true, "still busy while the words are out");
+  s.done();
+  assert.equal(s.state, "idle", "a finished press leaves the session open for the next one");
+  assert.equal(s.busy, false);
+});
+
+test("a press that errors before release still ends the session", () => {
+  const s = new DictationSession({ log: quiet });
+  s.tryStart();
+  assert.equal(s.state, "recording");
+  s.fail();
+  assert.equal(s.state, "idle");
+  assert.equal(s.tryStart(), true, "the next press is heard");
+});
+
+test("a transcript that arrives with no release still completes the press", () => {
+  const s = new DictationSession({ log: quiet });
+  s.tryStart();
+  assert.equal(s.done(), true, "recording -> completed is legal on purpose");
+  assert.equal(s.state, "idle", "otherwise the session records forever and goes deaf");
+});
+
+test("stop twice is a no-op: no restamp, no second timer, no complaint", async () => {
+  /** @type {string[]} */
+  const logged = [];
+  const s = new DictationSession({ safetyTimeoutMs: 1000, log: (m) => logged.push(String(m)) });
+  s.tryStart();
+  assert.equal(s.release(), true);
+  const firstStamp = s.releaseAt;
+  await sleep(20);
+  assert.equal(s.release(), false, "the max-hold watchdog racing a real key-up must change nothing");
+  assert.equal(s.releaseAt, firstStamp, "the second stop must not restamp the release time");
+  assert.equal(s.state, "processing");
+  assert.deepEqual(logged, [], "a duplicate stop is expected, not an error");
+});
+
+test("done twice is a no-op", () => {
+  /** @type {string[]} */
+  const logged = [];
+  const s = new DictationSession({ log: (m) => logged.push(String(m)) });
+  s.tryStart();
+  s.release();
+  assert.equal(s.done(), true);
+  assert.equal(s.done(), false, "the rescue path's early done() plus the finally's done()");
+  assert.equal(s.state, "idle");
+  assert.deepEqual(logged, [], "the second one is by design and must not log");
+});
+
+test("the safety timer ends the press as failed, not with a bare flag flip", async () => {
+  const s = new DictationSession({ safetyTimeoutMs: 20, log: quiet });
+  s.tryStart();
+  const mine = s.id;
+  s.release();
+  await sleep(50);
+  assert.equal(s.state, "idle", "the press is over and the session is open again");
+  assert.equal(s.busy, false);
+  // It timed out; it was not cancelled. A transcript that finally shows up
+  // still belongs to the user and still gets delivered.
+  assert.equal(s.owns(mine), true);
+  assert.equal(s.canDeliver(mine), true, "a slow transcript is late, not unwanted");
+});
+
+test("cancel from recording, and from processing, both end the press", () => {
+  const fromRecording = new DictationSession({ log: quiet });
+  fromRecording.tryStart();
+  assert.equal(fromRecording.cancel("escape"), true);
+  assert.equal(fromRecording.state, "idle");
+
+  const fromProcessing = new DictationSession({ safetyTimeoutMs: 1000, log: quiet });
+  fromProcessing.tryStart();
+  fromProcessing.release();
+  assert.equal(fromProcessing.cancel("pill click"), true);
+  assert.equal(fromProcessing.state, "idle");
+});
+
+test("cancel is idempotent, and cancelling nothing changes nothing", () => {
+  const s = new DictationSession({ log: quiet });
+  assert.equal(s.cancel(), false, "no press to cancel");
+  assert.equal(s.state, "idle");
+  s.tryStart();
+  assert.equal(s.cancel(), true);
+  assert.equal(s.cancel(), false, "a second Escape must not cancel the next press");
+  assert.equal(s.tryStart(), true, "and the next press still starts");
+  assert.equal(s.state, "recording", "the new press is live, not cancelled");
+});
+
+test("a cancelled press can never deliver, however late its words arrive", async () => {
+  const s = new DictationSession({ safetyTimeoutMs: 1000, log: quiet });
+  s.tryStart();
+  const mine = s.id;
+  s.release();
+  s.cancel("escape");
+  await sleep(20); // cleanup, the batch rescue, a slow paste — seconds in real life
+  assert.equal(s.owns(mine), true, "no newer press has taken the session");
+  assert.equal(s.wasCancelled(mine), true);
+  assert.equal(s.canDeliver(mine), false, "cancel means cancel");
+});
+
+test("cancel frees the mic for the very next press, and that one delivers", () => {
+  const s = new DictationSession({ safetyTimeoutMs: 1000, log: quiet });
+  s.tryStart();
+  const cancelled = s.id;
+  s.cancel();
+  assert.equal(s.tryStart(), true, "Escape must not cost the user their next press");
+  const live = s.id;
+  assert.equal(s.canDeliver(live), true);
+  assert.equal(s.canDeliver(cancelled), false);
+});
+
+test("the cancelled list stays small", () => {
+  const s = new DictationSession({ log: quiet });
+  const first = [];
+  for (let i = 0; i < 40; i += 1) {
+    s.tryStart();
+    first.push(s.id);
+    s.cancel();
+  }
+  assert.ok(s._cancelled.length <= 20, `expected at most 20 remembered, got ${s._cancelled.length}`);
+  assert.equal(s.wasCancelled(first[39]), true, "the recent ones are what matter");
+});
+
+// The delivery rule cancel exists for, as the main.js dictation:transcript
+// handler in miniature: the user hits Escape while the words are still out, the
+// transcript lands afterwards, nothing is pasted and the entry says why.
+test("cancel during cleanup: the transcript is parked as cancelled, never pasted", async () => {
+  const s = new DictationSession({ safetyTimeoutMs: 1000, log: quiet });
+  /** @type {string[]} */
+  const pasted = [];
+  /** @type {{ text: string, cancelled: boolean, recovered: boolean }[]} */
+  const history = [];
+
+  const deliver = (/** @type {string | null} */ sessionId, /** @type {string} */ text) => {
+    if (s.wasCancelled(sessionId)) {
+      history.push({ text, cancelled: true, recovered: false });
+      return;
+    }
+    if (!s.owns(sessionId)) {
+      history.push({ text, cancelled: false, recovered: true });
+      return;
+    }
+    pasted.push(text);
+    history.push({ text, cancelled: false, recovered: false });
+  };
+
+  s.tryStart();
+  const a = s.id;
+  s.release();
+  s.cancel("escape during cleanup");
+  await sleep(20);
+  deliver(a, "words the user gave up on");
+  assert.deepEqual(pasted, [], "a cancelled press must never reach the cursor");
+  assert.deepEqual(history, [{ text: "words the user gave up on", cancelled: true, recovered: false }]);
+
+  // The next press is unaffected: it pastes like any other.
+  s.tryStart();
+  const b = s.id;
+  s.release();
+  deliver(b, "the next thing they said");
+  assert.deepEqual(pasted, ["the next thing they said"]);
+  assert.equal(history[1].cancelled, false);
+});
+
+test("an unstamped event follows the live press's cancellation", () => {
+  const s = new DictationSession({ log: quiet });
+  s.tryStart();
+  assert.equal(s.wasCancelled(null), false, "nothing cancelled yet");
+  s.cancel();
+  // The renderer reloaded and lost its stamp. The live press is the cancelled
+  // one, so its words are still not wanted.
+  assert.equal(s.wasCancelled(null), true);
+  assert.equal(s.canDeliver(""), false);
+  s.tryStart();
+  assert.equal(s.wasCancelled(undefined), false, "a fresh press starts clean");
+});

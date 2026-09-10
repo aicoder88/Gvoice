@@ -15,11 +15,16 @@ const MAX_ENTRIES = 50;
  * batch retry pulled out of a saved clip. It is never pasted, so the tray has to
  * say where it came from.
  *
+ * `cancelled` marks text whose press the user stopped on purpose (Escape, or a
+ * click on the pill) while it was still being transcribed. It is never pasted
+ * either, but it is not a mishap the way `recovered` is — the tray says
+ * "cancelled" so the user knows their own key did it.
+ *
  * `sessionId` names the press that produced the entry (see
  * src/dictation-session.js), so a line in history can be matched to a line in
  * the debug log.
  *
- * @typedef {{ ts: number, text: string, pasted: boolean, recordingPath?: string | null, recovered?: boolean, sessionId?: string | null }} HistoryEntry
+ * @typedef {{ ts: number, text: string, pasted: boolean, recordingPath?: string | null, recovered?: boolean, cancelled?: boolean, sessionId?: string | null }} HistoryEntry
  */
 
 /** @type {HistoryEntry[]} */
@@ -43,6 +48,7 @@ export async function initHistory() {
           pasted: !!e.pasted,
           recordingPath: typeof e.recordingPath === "string" ? e.recordingPath : null,
           recovered: !!e.recovered,
+          cancelled: !!e.cancelled,
           sessionId: typeof e.sessionId === "string" ? e.sessionId : null
         }))
         .slice(0, MAX_ENTRIES);
@@ -70,7 +76,7 @@ export function getHistory() {
  * @param {string} text
  * @param {boolean} pasted
  * @param {string | null} [recordingPath]
- * @param {{ recovered?: boolean, sessionId?: string | null }} [meta]
+ * @param {{ recovered?: boolean, cancelled?: boolean, sessionId?: string | null }} [meta]
  */
 export function recordTranscript(text, pasted, recordingPath = null, meta = {}) {
   if ((!text || !text.trim()) && !recordingPath) return;
@@ -80,6 +86,7 @@ export function recordTranscript(text, pasted, recordingPath = null, meta = {}) 
     pasted,
     recordingPath: recordingPath || null,
     recovered: !!meta.recovered,
+    cancelled: !!meta.cancelled,
     sessionId: typeof meta.sessionId === "string" ? meta.sessionId : null
   });
   if (entries.length > MAX_ENTRIES) entries.length = MAX_ENTRIES;

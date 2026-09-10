@@ -1581,6 +1581,17 @@ function setupIpc() {
     // covers both: does the session still own this name?
     const sessionId = sessionOf(eventSessionId);
     const stillMine = () => dictation.owns(sessionId);
+    // The user stopped this press on purpose while its words were still out.
+    // Cancel means cancel: nothing is pasted, nothing is shown, the clipboard
+    // is left alone. The words and the clip still go to history, so a cancel
+    // the user regrets is one tray click from being copied back.
+    if (dictation.wasCancelled(sessionId)) {
+      const cancelledPath = chunks && chunks.length ? await saveTempRecording(chunks, sampleRate) : null;
+      dlog("transcript-cancelled", { sessionId, len: (text || "").trim().length });
+      recordTranscript(text, false, cancelledPath, { sessionId, cancelled: true });
+      rebuildTrayMenu();
+      return;
+    }
     const mineOnArrival = stillMine();
     // Grab the window THIS press captured while it's still ours. Read later
     // (after the rescue round trip) it could already be the next dictation's —
@@ -1780,9 +1791,19 @@ function setupIpc() {
     // both cases.
     const sessionId = sessionOf(eventSessionId);
     const stillMine = () => dictation.owns(sessionId);
+    const chunks = (payload && payload.chunks) || [];
+    // Cancelled while the failure was on its way. Keep the clip so it can be
+    // replayed, but no pill and — above all — no batch rescue: that rescue
+    // pastes what it finds, and the user already said no.
+    if (dictation.wasCancelled(sessionId)) {
+      const cancelledPath = await saveTempRecording(chunks, payload && payload.sampleRate);
+      dlog("failure-cancelled", { sessionId, saved: !!cancelledPath });
+      recordTranscript("", false, cancelledPath, { sessionId, cancelled: true });
+      rebuildTrayMenu();
+      return;
+    }
     const mineOnArrival = stillMine();
     if (mineOnArrival) dictation.fail();
-    const chunks = (payload && payload.chunks) || [];
     const recordingPath = await saveTempRecording(chunks, payload && payload.sampleRate);
     if (recordingPath) console.error("[main] dictation recording saved:", recordingPath);
     // The renderer sends a plain-English reason ("didn't respond in time", "lost
@@ -1829,6 +1850,9 @@ function setupIpc() {
     // A newer press owns the session and the pill — log the old error, but
     // don't end the live dictation or paint over its "Listening…".
     if (!dictation.owns(eventSessionId)) return;
+    // The user already cancelled this press. Ending it and flashing red would
+    // be the app arguing with a key they pressed on purpose.
+    if (dictation.wasCancelled(eventSessionId)) return;
     dictation.fail();
     // No audio, no transcript (mic blocked, relay down, offline). Show the
     // reason on the pill so the user knows WHY, not just that it failed.
@@ -2303,11 +2327,16 @@ function rebuildTrayMenu() {
     // app, so they get no warning triangle — only text can be "recovered", a
     // clip with no transcript says so in its own preview.
     const recovered = !!entry.recovered && !!flat;
+    // Words whose press the user stopped on purpose. Also never pasted, but
+    // their own key did it, so no warning triangle either.
+    const cancelled = !!entry.cancelled && !!flat;
     /** @type {import("electron").MenuItemConstructorOptions[]} */
     const sub = [];
     // The ⚠ on the parent row needs a legend — say what it means right where
     // the user looks for the text.
-    if (recovered) {
+    if (cancelled) {
+      sub.push({ label: "Cancelled — never pasted", enabled: false });
+    } else if (recovered) {
       sub.push({ label: "Recovered later — never pasted", enabled: false });
     } else if (!entry.pasted) {
       sub.push({ label: "⚠ Wasn't pasted into any app", enabled: false });
@@ -2327,7 +2356,7 @@ function rebuildTrayMenu() {
       });
     }
     return {
-      label: `${time}${entry.pasted || recovered ? "" : " ⚠"}  ${preview}`,
+      label: `${time}${entry.pasted || recovered || cancelled ? "" : " ⚠"}  ${preview}`,
       submenu: sub
     };
   });
