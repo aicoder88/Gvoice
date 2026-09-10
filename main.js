@@ -46,7 +46,7 @@ import * as vocab from "./src/vocab.js";
 import { createCorrectionWatcher } from "./src/correction-watch.js";
 import { looksLikeRetraction } from "./src/cleanup.js";
 import { captureForegroundWindow, captureForegroundTarget, restoreForegroundWindow, getWindowRect, isEditableFieldFocused, isForegroundWindow, readbackPasteTarget } from "./src/foreground.js";
-import { initHistory, getHistory, getHistoryPath, recordTranscript } from "./src/history.js";
+import { initHistory, getHistory, getHistoryPath, recordTranscript, lastResult } from "./src/history.js";
 import { computeStats } from "./src/stats.js";
 import { ensureWhisperServer, stopWhisperServer } from "./src/providers/whisper-local.js";
 import { ENV_FILE, MODELS_DIR, BIN_DIR } from "./src/bootstrap-env.js";
@@ -55,7 +55,7 @@ import { probeCapability, recommendedAssets } from "./src/hardware.js";
 import { suggestBeforeBenchmark } from "./src/benchmark.js";
 import { runLocalBenchmark } from "./src/benchmark-run.js";
 import { ensureModel, ensureWindowsBinaries, findInstalledWhisperCli, hasWhisperServer, MODELS, WINDOWS_BINARY_ZIPS } from "./src/model-download.js";
-import { saveRecording, pruneRecordings, clearRecordings } from "./src/recordings.js";
+import { saveRecording, pruneRecordings, clearRecordings, recordingsEnabledFrom } from "./src/recordings.js";
 import { transcribeWavFile, batchFailureReason } from "./src/providers/deepgram.js";
 import { resolveDeepgramKey } from "./realtime-relay.js";
 import { appendFileSync, statSync, renameSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
@@ -527,11 +527,14 @@ function createPillWindow() {
 const PILL_BOTTOM_MARGIN = 8; // gap above the dock / taskbar
 const PILL_SIDE_MARGIN = 12; // gap from the right edge of the screen
 const PILL_SIZES = {
-  // 300, not 200: the listening label carries the "(click to stop)" hint now,
-  // and at 200 the window clipped it away — the one state where the text has to
-  // be readable is the one someone is stuck in.
-  listening: { width: 300, height: 56 },
-  transcribing: { width: 220, height: 56 },
+  // 320, not 200: both in-progress labels carry the "(click to cancel)" hint
+  // now, and at 200 the window clipped it away — the one state where the text
+  // has to be readable is the one someone is stuck in. Transcribing gets the
+  // same width for the same reason; 220 cut the hint in half.
+  listening: { width: 320, height: 56 },
+  transcribing: { width: 320, height: 56 },
+  // A two-second notice with no buttons — narrow, like the in-progress pills.
+  cancelled: { width: 300, height: 56 },
   // Wide enough for the full action row (Copy · Play recording · Transcribe
   // again · Add word · ✕) plus a readable reason — at 560 the label ellipsized
   // away the instruction the user needs. Taller too: the longest reason (the
@@ -581,15 +584,16 @@ function showPillForWindow(/** @type {number | null} */ _hwnd) {
 // enabled and the renderer owns the auto-hide (with hover-pause). `opts` only
 // applies to result states: { canCopy, canOpen }.
 function setPillState(
-  /** @type {"listening" | "transcribing" | "success" | "error"} */ state,
+  /** @type {"listening" | "transcribing" | "success" | "error" | "cancelled"} */ state,
   /** @type {{ canCopy?: boolean, canOpen?: boolean, holdMs?: number, reason?: string }} */ opts = {}
 ) {
   if (!pillWindow || pillWindow.isDestroyed()) return;
   const size = PILL_SIZES[state] || PILL_SIZES.listening;
   positionPill(size.width, size.height);
-  // "listening" joins the result states: the pill is clickable there so a stuck
-  // hold can be ended by hand.
-  const interactive = state === "success" || state === "error" || state === "listening";
+  // "listening" and "transcribing" join the result states: the pill is
+  // clickable throughout a dictation so it can be cancelled by hand.
+  const interactive = state === "success" || state === "error"
+    || state === "listening" || state === "transcribing";
   // Result states stay click-through but FORWARD mouse moves to the renderer,
   // which flips real interactivity on only while the pointer is over the
   // visible pill (pill:set-interactive). Without forwarding, the invisible
@@ -1123,13 +1127,50 @@ function fireRelease(/** @type {string} */ source) {
   armPillSafetyHide(25000);
 }
 
+// Give up on the dictation that is running: the mic closes, nothing is pasted,
+// and the words still reach history so a cancel the user regrets is one tray
+// click ("Copy last result") from the clipboard.
+//
+// Three ways in: Escape, a click on the pill, and — indirectly — anything else
+// that decides the press is over. Every one of them lands here so the mic is
+// always told to stop. DictationSession.cancel() alone can't do that: it
+// re-opens the session immediately, and after that fireRelease() returns before
+// it ever sends `dictation:stop`, leaving the mic open with no way to close it.
+//
+// Returns false when there was nothing to cancel, so a stray Escape in another
+// app costs nothing.
+function cancelDictation(/** @type {string} */ source) {
+  // Read BEFORE cancel(): it re-opens the session in the same call, so asking
+  // afterwards always says "not recording" and the renderer is never stopped.
+  const wasRecording = dictation.isRecording;
+  const cancelledId = dictation.id;
+  if (!dictation.cancel(source)) return false;
+  trayHolding = false;
+  if (maxHoldTimer) { clearTimeout(maxHoldTimer); maxHoldTimer = null; }
+  dlog("cancel", { source, sessionId: cancelledId, wasRecording });
+  debug("[main] dictation cancelled (" + source + ")");
+  if (wasRecording && dictationWindow && !dictationWindow.isDestroyed()) {
+    dictationWindow.webContents.send("dictation:stop");
+  }
+  // Say so, briefly. No transcript and no clip to offer here: the words are
+  // still in flight and land in history when they arrive — so this is a plain
+  // notice, not a result pill with buttons that would act on the press before.
+  currentTranscript = null;
+  currentRecordingPath = null;
+  setPillState("cancelled", { holdMs: 2000 });
+  pillWindow?.showInactive();
+  armPillSafetyHide(4000);
+  return true;
+}
+
 async function setupHotkey() {
   if (!serverPort || !dictationWindow) return false;
   try {
     const mod = await import("./src/hotkey.js");
     hotkeyEngine = mod.startHotkey({
       onPress: () => { startDictation(); },
-      onRelease: () => { fireRelease("hotkey"); }
+      onRelease: () => { fireRelease("hotkey"); },
+      onCancel: () => { cancelDictation("escape"); }
     });
     updateTrayTooltip();
     startHookWatchdog(hotkeyEngine.sawEvent);
@@ -1413,7 +1454,7 @@ const MAX_RECORDINGS = 50;
 // RECORDING_RETENTION_DAYS bounds how long clips linger on top of the count cap.
 // Both are read fresh each call so a Settings change applies without a restart.
 function recordingsEnabled() {
-  return !/^(false|0|no|off)$/i.test(String(process.env.RECORDINGS_ENABLED ?? "true").trim());
+  return recordingsEnabledFrom(process.env);
 }
 function recordingMaxAgeMs() {
   const days = Number(process.env.RECORDING_RETENTION_DAYS ?? 7);
@@ -1919,10 +1960,12 @@ function setupIpc() {
     if (currentRecordingPath) retranscribeOnDemand(currentRecordingPath);
   });
   ipcMain.on("pill:hide", () => hidePill());
-  // Clicking the "Listening…" pill stops the recording. The escape hatch for a
-  // hold whose key-up or button-up went missing: without it the only way out is
-  // waiting MAX_HOLD_MS, and the app looks frozen the whole time.
-  ipcMain.on("pill:stop", () => fireRelease("pill"));
+  // Clicking the pill while it is listening or transcribing gives up on that
+  // dictation. Also the escape hatch for a hold whose key-up or button-up went
+  // missing: without it the only way out is waiting MAX_HOLD_MS, and the app
+  // looks frozen the whole time. The words are not lost — they land in history
+  // and the tray's "Copy last result" puts them on the clipboard.
+  ipcMain.on("pill:cancel", () => cancelDictation("pill"));
   ipcMain.on("pill:add-word", () => openDictionaryWindow());
   // Pointer entered/left the visible pill (renderer detects it from the
   // forwarded mouse moves). On=real clicks land; off=back to forward-only.
@@ -2409,6 +2452,8 @@ function rebuildTrayMenu() {
 
   // The newest saved recording, for the one-click "play my last attempt" item.
   const lastRecording = history.find((e) => e.recordingPath && existsSync(e.recordingPath));
+  // The newest dictation that produced words, for "Copy last result".
+  const lastText = lastResult(history);
 
   const menu = Menu.buildFromTemplate([
     // Only present when macOS refused the key hook. First item in the menu
@@ -2443,6 +2488,18 @@ function rebuildTrayMenu() {
           click: () => { const p = getHistoryPath(); if (p) shell.showItemInFolder(p); }
         }
       ]
+    },
+    {
+      // The words of the last dictation, whatever happened to them — pasted,
+      // cancelled, recovered, or left on the clipboard. The one-click way back
+      // to text that never reached the cursor.
+      label: "Copy last result",
+      enabled: !!lastText,
+      click: () => {
+        if (!lastText) return;
+        clipboard.writeText(lastText.text);
+        dlog("tray-copy-last", { len: lastText.text.length, sessionId: lastText.sessionId || null });
+      }
     },
     {
       label: "Play last recording",

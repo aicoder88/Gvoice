@@ -31,7 +31,7 @@
 
 import { createRequire } from "node:module";
 import { isCtrlDown, isShiftDown } from "./foreground.js";
-import { createHoldTracker } from "./hotkey-logic.js";
+import { createHoldTracker, isCancelKey } from "./hotkey-logic.js";
 
 const require = createRequire(import.meta.url);
 
@@ -45,9 +45,15 @@ function debug(/** @type {any[]} */ ...args) {
 }
 
 /**
+ * `onCancel` is the give-up key (Escape). It fires on every Escape the machine
+ * sees, held dictation or not — the caller decides whether one is running. Only
+ * the macOS/Linux event path reports it; the Windows poll deliberately stays as
+ * it was, so there the pill click is the way to cancel.
+ *
  * @typedef {{
  *   onPress?: (key: "alt") => void,
  *   onRelease?: (key: "alt") => void,
+ *   onCancel?: () => void,
  * }} HotkeyCallbacks
  */
 
@@ -127,7 +133,7 @@ function startHotkeyWindows({ onPress, onRelease }) {
  * @param {HotkeyCallbacks} callbacks
  * @returns {{ stop: () => void, sawEvent: () => boolean }}
  */
-function startHotkeyUiohook({ onPress, onRelease }) {
+function startHotkeyUiohook({ onPress, onRelease, onCancel }) {
   // Lazy require so Windows builds don't choke if uiohook-napi isn't present
   // (e.g. native rebuild skipped, prebuild missing). The project is ESM, so
   // we go through createRequire to keep this synchronous and preserve the
@@ -202,6 +208,13 @@ function startHotkeyUiohook({ onPress, onRelease }) {
 
   const handleDown = (/** @type {any} */ event) => {
     const code = event && event.keycode;
+    // Escape: give up on the dictation that is running. Checked before the
+    // self-heal below so it can never be swallowed by a chord repair, and it
+    // returns straight away — Escape is not a hold-to-talk trigger.
+    if (isCancelKey(code, keyCodes)) {
+      try { onCancel?.(); } catch (error) { console.error("hotkey onCancel error:", error); }
+      return;
+    }
     // Self-heal stale chord state: if a keyup was swallowed (lock screen,
     // emoji picker, focus churn) a flag can stay latched and a later lone
     // Ctrl or Cmd press would start dictation. The event's live modifier

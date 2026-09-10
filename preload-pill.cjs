@@ -13,9 +13,10 @@ contextBridge.exposeInMainWorld("pillBridge", {
   // Force the saved clip back through transcription.
   retry: () => ipcRenderer.send("pill:retry"),
   hide: () => ipcRenderer.send("pill:hide"),
-  // Clicking the "Listening…" pill ends the dictation, for a hold that got
-  // stuck because its key-up or button-up never arrived.
-  stopListening: () => ipcRenderer.send("pill:stop"),
+  // Clicking the pill during a dictation gives up on it: the mic closes and
+  // nothing is pasted. Also the way out of a hold that got stuck because its
+  // key-up or button-up never arrived.
+  cancel: () => ipcRenderer.send("pill:cancel"),
   // Opens the dictionary window so the user can add a misheard word.
   addWord: () => ipcRenderer.send("pill:add-word"),
   // True while the pointer is over the visible pill: main flips the window

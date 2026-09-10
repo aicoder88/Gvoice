@@ -35,3 +35,27 @@ export function createHoldTracker({ onPress, onRelease } = {}) {
     }
   };
 }
+
+// Escape gives up on the dictation that is running right now: the mic closes
+// and whatever was said is never pasted (see DictationSession.cancel). uiohook
+// reports Escape as keycode 1 on every platform it supports; UiohookKey.Escape
+// is read first so a future table change still works, and the raw number is the
+// fallback for builds whose table is missing it.
+//
+// Nothing is swallowed: the app in front still receives its own Escape. The
+// only reason this is safe to watch globally is that main.js ignores it unless
+// a dictation is actually in flight.
+const ESCAPE_KEYCODE = 1;
+
+/**
+ * Is this keycode the cancel key?
+ *
+ * @param {unknown} code the uiohook keycode from a keydown event
+ * @param {{ Escape?: number }} [keyTable] uiohook's UiohookKey, when available
+ * @returns {boolean}
+ */
+export function isCancelKey(code, keyTable = {}) {
+  if (typeof code !== "number") return false;
+  const named = keyTable && typeof keyTable.Escape === "number" ? keyTable.Escape : null;
+  return code === ESCAPE_KEYCODE || (named !== null && code === named);
+}

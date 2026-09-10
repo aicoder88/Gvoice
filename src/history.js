@@ -111,3 +111,23 @@ export function recordTranscript(text, pasted, recordingPath = null, meta = {}) 
     })
     .catch((err) => console.error("[history] write failed:", err && err.message));
 }
+
+/**
+ * The newest entry that actually has words in it — what the tray's "Copy last
+ * result" copies. Entries with only a recording (a failed or empty attempt) are
+ * skipped: there is nothing to put on the clipboard, and stopping at one would
+ * hide the result the user is reaching for.
+ *
+ * Whether the text was pasted, cancelled, recovered or left on the clipboard
+ * makes no difference here. Those are all "the last thing I said", and this menu
+ * item exists precisely to rescue the ones that never landed.
+ *
+ * @param {HistoryEntry[]} [list] defaults to the live history
+ * @returns {HistoryEntry | null}
+ */
+export function lastResult(list = entries) {
+  for (const entry of list) {
+    if (entry && typeof entry.text === "string" && entry.text.trim()) return entry;
+  }
+  return null;
+}

@@ -105,3 +105,16 @@ export async function clearRecordings(dir) {
   await Promise.all(names.map((n) => unlink(join(dir, n)).catch(() => {})));
   return names.length;
 }
+
+/**
+ * Is saving voice clips turned on? Read fresh on every save so a Settings
+ * change applies without a restart, and kept here — beside the code that writes
+ * the clips — so every path that could put audio on disk asks the same
+ * question. Anything but an explicit off means on.
+ *
+ * @param {Record<string, string | undefined>} [env]
+ * @returns {boolean}
+ */
+export function recordingsEnabledFrom(env = process.env) {
+  return !/^(false|0|no|off)$/i.test(String(env.RECORDINGS_ENABLED ?? "true").trim());
+}
