@@ -33,6 +33,13 @@ const RELEASE_DELAY_MS = Number(process.env.TYPE_RELEASE_DELAY_MS || 80);
 // kernel exit — seen 2026-06-06), where waiting longer never helps. Without
 // this cap, typeText awaits forever and the pill is stuck on "Transcribing…".
 const PASTE_TIMEOUT_MS = Number(process.env.TYPE_PASTE_TIMEOUT_MS) || 4000;
+// How long to let the target app actually consume the ⌘V before we put the
+// user's own clipboard back. The keystroke returns as soon as it is delivered,
+// not when the app has read the pasteboard, so restoring instantly would rip
+// the text away mid-paste. This wait is now AWAITED (it used to be a bare
+// fire-and-forget setTimeout), so the restore finishes inside the delivery and
+// two dictations can never have their clipboard writes interleave.
+const PASTE_SETTLE_MS = Number(process.env.TYPE_PASTE_SETTLE_MS) || 250;
 
 /**
  * @param {number} ms
@@ -123,11 +130,112 @@ function pasteShortcut() {
   });
 }
 
+// One clipboard at a time. Every delivery runs to completion — snapshot, write,
+// paste, restore — before the next one starts, so two transcripts arriving
+// close together can never have one's restore land on top of the other's text.
+/** @type {Promise<any>} */
+let clipboardQueue = Promise.resolve();
+/**
+ * @template T
+ * @param {() => Promise<T>} job
+ * @returns {Promise<T>}
+ */
+function serialise(job) {
+  const run = clipboardQueue.then(job, job);
+  clipboardQueue = run.then(() => {}, () => {});
+  return run;
+}
+
+/**
+ * Everything on the clipboard right now that we know how to put back: plain
+ * text, an image (a screenshot reads back as EMPTY text, so it needs its own
+ * capture), and the rich flavours a copy from a document carries. Files and
+ * anything else Electron cannot round-trip are simply not captured — the
+ * snapshot says what it holds and nothing more.
+ * @param {any} clipboard
+ * @returns {{ text?: string, html?: string, rtf?: string, image?: any }}
+ */
+function snapshotClipboard(clipboard) {
+  /** @type {string[]} */
+  let formats = [];
+  try {
+    if (typeof clipboard.availableFormats === "function") formats = clipboard.availableFormats() || [];
+  } catch { formats = []; }
+  const has = (/** @type {string} */ mime) => formats.some((f) => String(f).startsWith(mime));
+
+  /** @type {{ text?: string, html?: string, rtf?: string, image?: any }} */
+  const snap = {};
+  try {
+    const text = clipboard.readText();
+    if (text) snap.text = text;
+  } catch {}
+  try {
+    if (has("text/html") && typeof clipboard.readHTML === "function") {
+      const html = clipboard.readHTML();
+      if (html) snap.html = html;
+    }
+  } catch {}
+  try {
+    if ((has("text/rtf") || has("public.rtf")) && typeof clipboard.readRTF === "function") {
+      const rtf = clipboard.readRTF();
+      if (rtf) snap.rtf = rtf;
+    }
+  } catch {}
+  try {
+    // Ask for the image when the formats say there is one, and also when there
+    // is no text at all — availableFormats is missing on the injected
+    // clipboards the tests use, and a screenshot must survive either way.
+    if (has("image/") || !snap.text) {
+      const image = clipboard.readImage();
+      if (image && typeof image.isEmpty === "function" && !image.isEmpty()) snap.image = image;
+    }
+  } catch {}
+  return snap;
+}
+
+/**
+ * Put a snapshot back, but ONLY if the clipboard still holds the exact text we
+ * put there. If the user copied something of their own while the paste was
+ * settling, their copy wins and is never overwritten.
+ * @param {any} clipboard
+ * @param {{ text?: string, html?: string, rtf?: string, image?: any }} snap
+ * @param {string} ourText
+ * @returns {boolean} true when the snapshot was written back
+ */
+function restoreClipboard(clipboard, snap, ourText) {
+  try {
+    if (clipboard.readText() !== ourText) return false;
+  } catch {
+    return false;
+  }
+  const keys = Object.keys(snap);
+  try {
+    if (keys.length === 0) {
+      // Nothing was on it before; leave nothing behind either.
+      if (typeof clipboard.clear === "function") clipboard.clear();
+      else clipboard.writeText("");
+      return true;
+    }
+    if (typeof clipboard.write === "function") {
+      clipboard.write(snap);
+      return true;
+    }
+    // Injected/older clipboards without write(): text and image cover them.
+    if (snap.image) clipboard.writeImage(snap.image);
+    else clipboard.writeText(snap.text || "");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Type or paste `text` into the focused app. With TYPE_VIA_CLIPBOARD=true
- * (default), saves the current clipboard, writes `text`, sends the paste
- * shortcut, then restores the original clipboard 250ms later. Otherwise, types
- * each character via nut-js.
+ * (default), snapshots the current clipboard, writes `text`, sends the paste
+ * shortcut, then puts the snapshot back — but only if the clipboard still reads
+ * back as our text, so a copy the user made mid-paste is never clobbered.
+ * Deliveries are serialised: one clipboard transaction at a time. Otherwise,
+ * types each character via nut-js.
  *
  * `target` is the destination captured when the hotkey went down (see
  * src/foreground.js). If it is set, the destination is read AGAIN here — the
@@ -143,15 +251,28 @@ function pasteShortcut() {
  * @param {() => any} [options.readTarget] destination reader (tests inject one)
  * @param {any} [options.clipboard] clipboard (tests inject one)
  * @param {() => Promise<void>} [options.paste] paste keystroke (tests inject one)
+ * @param {number} [options.settleMs] how long to let the app read the pasteboard
  * @returns {Promise<{ pasted: boolean, reason: string }>}
  */
 export async function typeText(text, options = {}) {
   if (!text) return { pasted: false, reason: "empty" };
+  return serialise(() => deliver(text, options));
+}
+
+/**
+ * One clipboard transaction, start to finish. Only ever called from the queue
+ * in typeText().
+ * @param {string} text
+ * @param {NonNullable<Parameters<typeof typeText>[1]>} options
+ * @returns {Promise<{ pasted: boolean, reason: string }>}
+ */
+async function deliver(text, options) {
   const {
     target = null,
     readTarget = realForegroundTarget,
     clipboard: injectedClipboard = null,
-    paste = pasteShortcut
+    paste = pasteShortcut,
+    settleMs = PASTE_SETTLE_MS
   } = options;
   const clipboard = injectedClipboard || (await realClipboard());
 
@@ -174,22 +295,16 @@ export async function typeText(text, options = {}) {
   }
 
   if (USE_CLIPBOARD) {
-    const previousClipboard = clipboard.readText();
-    // A copied image (screenshot) reads back as empty TEXT — capture it too,
-    // or every dictation would destroy it (restore would write "" over it).
-    // Files/rich clipboard content can't be fully round-tripped from Electron;
-    // text + image covers the common cases.
-    const previousImage = previousClipboard ? null : clipboard.readImage();
+    const snapshot = snapshotClipboard(clipboard);
     clipboard.writeText(textToPaste);
     try {
       await paste();
     } finally {
-      setTimeout(() => {
-        try {
-          if (previousImage && !previousImage.isEmpty()) clipboard.writeImage(previousImage);
-          else clipboard.writeText(previousClipboard);
-        } catch {}
-      }, 250);
+      // Let the app actually take the text, then hand the clipboard back —
+      // inside the transaction, so the next delivery starts from a settled
+      // clipboard instead of racing this restore.
+      if (settleMs > 0) await sleep(settleMs);
+      restoreClipboard(clipboard, snapshot, textToPaste);
     }
     return { pasted: true, reason: destination.reason };
   }
