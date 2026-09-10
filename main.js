@@ -42,6 +42,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, basename } from "node:path";
 import { startServer } from "./server.js";
 import { DictationSession } from "./src/dictation-session.js";
+import { createControlServer, controlSocketPath } from "./src/control-socket.js";
 import * as vocab from "./src/vocab.js";
 import { createCorrectionWatcher } from "./src/correction-watch.js";
 import { looksLikeRetraction } from "./src/cleanup.js";
@@ -129,6 +130,11 @@ let serverPort = null;
 let serverError = null;
 /** @type {{ stop: () => void } | null} */
 let hotkeyEngine = null;
+// The local socket a companion app (Better Options) talks to instead of faking
+// a keyboard chord. Module-scoped so shutdownAll() can close it and delete the
+// socket file on the way out.
+/** @type {ReturnType<typeof createControlServer> | null} */
+let controlServer = null;
 // Module-scoped so shutdownAll() can clear a pending max-hold watchdog on quit —
 // a closure-local timer would outlive teardown and fire on a destroyed window.
 /** @type {ReturnType<typeof setTimeout> | null} */
@@ -1161,6 +1167,65 @@ function cancelDictation(/** @type {string} */ source) {
   pillWindow?.showInactive();
   armPillSafetyHide(4000);
   return true;
+}
+
+// --- The companion's way in ---------------------------------------------------
+// Better Options used to hold down Ctrl+Cmd for the user by posting synthetic
+// key events. Anything that ate the release left the modifiers stuck and the
+// microphone open. Now it asks in words over a socket inside this instance's own
+// data folder, and the same three calls the keyboard makes — start, release,
+// cancel — are all it can reach. Nothing here is new behaviour: it is the
+// existing dictation path with a second doorbell.
+
+/** Can a press start right now? */
+function dictationReady() {
+  return !!serverPort && !!dictationWindow && !dictationWindow.isDestroyed();
+}
+
+async function startControlSocket() {
+  if (controlServer) return;
+  const socketPath = controlSocketPath(app.getPath("userData"));
+  const server = createControlServer({
+    socketPath,
+    log: (...args) => { console.error(...args); try { dlog("control-socket", args.map(String).join(" ")); } catch {} },
+    hooks: {
+      status: () => ({
+        ready: dictationReady() && !dictation.busy,
+        // One mode today: the microphone stays warm for two minutes after the
+        // last dictation and then lets go. Step 15 of the plan makes this a real
+        // preference; until then reporting anything else would be a guess.
+        micMode: "balanced",
+        session: dictation.busy ? dictation.id : null
+      }),
+      start: () => {
+        if (!dictationReady()) return { ok: false, reason: "not-ready" };
+        if (dictation.busy) return { ok: false, reason: "busy" };
+        if (!startDictation()) return { ok: false, reason: "refused" };
+        return { ok: true, sessionId: dictation.id };
+      },
+      // A stop or cancel naming a press that is no longer the live one is
+      // dropped here as well as in the socket: the companion's retry must never
+      // end the press that came after it.
+      stop: (sessionId, reason) => {
+        if (!dictation.owns(sessionId)) return;
+        fireRelease("companion:" + reason);
+      },
+      cancel: (sessionId, reason) => {
+        if (!dictation.owns(sessionId)) return;
+        cancelDictation("companion:" + reason);
+      }
+    }
+  });
+  try {
+    await server.start();
+    controlServer = server;
+  } catch (error) {
+    // A missing socket is not a broken app: the keyboard and the tray still
+    // dictate, and the companion shows "update needed" and passes the button
+    // through to whatever the mouse normally does.
+    console.error("[main] control socket failed to start:", error && error.message);
+    dlog("control-socket-failed", { path: socketPath, error: String(error && error.message) });
+  }
 }
 
 async function setupHotkey() {
@@ -2752,6 +2817,10 @@ app.whenReady().then(async () => {
   buildAppMenu();
   createTray();
   setupIpc();
+  // Up as early as the tray, and whether or not dictation itself came up: a
+  // companion that can connect and hear "not ready" behaves; one that finds no
+  // socket at all cannot tell a broken GVoice from an old one.
+  await startControlSocket();
 
   // First run / misconfiguration: guide the user to Settings instead of silently
   // doing nothing. The tray stays live either way.
@@ -2840,6 +2909,10 @@ function shutdownAll() {
     try { hotkeyEngine.stop(); } catch {}
   }
   try { correctionWatcher.stop(); } catch {}
+  // Closes every companion connection and deletes the socket file, so the next
+  // launch never inherits a dead one.
+  try { controlServer?.stop(); } catch {}
+  controlServer = null;
   try { stopWhisperServer(); } catch {}
 }
 
