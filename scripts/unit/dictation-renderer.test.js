@@ -5,9 +5,18 @@ import vm from "node:vm";
 
 const SOURCE = readFileSync(new URL("../../public/dictation.js", import.meta.url), "utf8")
   .replace(
-    'import { classifyHold } from "/mic-health.js";',
-    "const classifyHold = () => ({ action: 'ok', silentStreak: 0 });"
+    'import { classifyHold, idleMsForMode, chooseCaptureDevice } from "/mic-health.js";',
+    "const classifyHold = () => ({ action: 'ok', cause: '', silentStreak: 0 });"
+      + " const idleMsForMode = () => Infinity;"
+      + " const chooseCaptureDevice = () => ({ deviceId: null, source: 'default', rebuild: true });"
   );
+
+// The stub above only works while the renderer's import line looks exactly like
+// that. Fail loudly here rather than at the confusing "Cannot use import
+// statement outside a module" the vm throws three tests later.
+if (SOURCE.includes("mic-health.js\"")) {
+  throw new Error("public/dictation.js changed its mic-health import – update the stub in this test");
+}
 
 test("a rejected socket handshake closes a mic opened for that press", async () => {
   let onStart;

@@ -46,5 +46,20 @@ contextBridge.exposeInMainWorld("dictationBridge", {
   // main asks the renderer to rebuild its whole mic pipeline (system wake).
   onRebuildCapture: (callback) => {
     ipcRenderer.on("dictation:rebuild-capture", (_event, reason) => callback(reason));
-  }
+  },
+
+  // --- Microphone preferences (preferences.json, never .env) ----------------
+  // The saved mic mode and preferred device, read once on load.
+  getMicPrefs: () => ipcRenderer.invoke("mic:prefs"),
+  // The user changed them in the Settings window.
+  onMicPrefs: (callback) => {
+    ipcRenderer.on("mic:prefs", (_event, prefs) => callback(prefs));
+  },
+  // The Settings window opened and wants a fresh device list.
+  onReportMics: (callback) => {
+    ipcRenderer.on("dictation:report-mics", () => callback());
+  },
+  // Which microphones exist, which one is live, and whether it is the chosen
+  // one. This window is the only one that can see any of that.
+  sendMicState: (state) => ipcRenderer.send("dictation:mic-state", state)
 });

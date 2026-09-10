@@ -52,6 +52,7 @@ import { computeStats } from "./src/stats.js";
 import { ensureWhisperServer, stopWhisperServer } from "./src/providers/whisper-local.js";
 import { ENV_FILE, MODELS_DIR, BIN_DIR } from "./src/bootstrap-env.js";
 import { writeEnvFile, settingsView, patchFromView, VALID_PROVIDERS } from "./src/settings.js";
+import { preferencesPath, readPreferences, writePreferences, DEFAULT_PREFERENCES } from "./src/preferences.js";
 import { probeCapability, recommendedAssets } from "./src/hardware.js";
 import { suggestBeforeBenchmark } from "./src/benchmark.js";
 import { runLocalBenchmark } from "./src/benchmark-run.js";
@@ -106,6 +107,26 @@ let dictionaryWindow = null;
 let settingsWindow = null;
 /** @type {string | null} */
 let recordingsDir = null;
+
+// --- Microphone preferences ---------------------------------------------------
+// Which microphone the user picked and how ready GVoice keeps it. Saved in
+// preferences.json inside the app's data folder – NOT in the .env, which holds
+// API keys and must never be rewritten for something this ordinary.
+/** @type {string | null} */
+let prefsPath = null;
+/** @type {import("./src/preferences.js").Preferences} */
+let micPrefs = { ...DEFAULT_PREFERENCES };
+// What the hidden dictation window last told us about the microphones: the only
+// place in the app that can see them. The Settings window renders this.
+let micState = {
+  devices: /** @type {{ id: string, label: string }[]} */ ([]),
+  activeId: /** @type {string | null} */ (null),
+  activeLabel: "",
+  open: false,
+  source: "default"
+};
+/** @type {((state: typeof micState) => void)[]} */
+let micStateWaiters = [];
 // The transcript + recording shown on the current result pill, so the pill's
 // Copy / Open-recording buttons act on the right data. Set when a result pill
 // is shown, cleared when it hides.
@@ -2285,12 +2306,89 @@ function setupIpc() {
     try { hidePill(); } catch {}
   });
 
+  // --- Microphone preferences ----------------------------------------------
+  // The hidden dictation window asks for the saved choice as it loads.
+  ipcMain.handle("mic:prefs", () => micPrefs);
+
+  // …and reports back what it can see: every input, which one is live, and
+  // whether that is the one the user asked for.
+  ipcMain.on("dictation:mic-state", (_event, state) => {
+    const src = state && typeof state === "object" ? state : {};
+    micState = {
+      devices: Array.isArray(src.devices)
+        ? src.devices
+            .filter((d) => d && typeof d.id === "string" && d.id)
+            .map((d) => ({ id: d.id, label: typeof d.label === "string" ? d.label : "" }))
+        : [],
+      activeId: typeof src.activeId === "string" ? src.activeId : null,
+      activeLabel: typeof src.activeLabel === "string" ? src.activeLabel : "",
+      open: !!src.open,
+      source: typeof src.source === "string" ? src.source : "default"
+    };
+    // Written down so "which microphone was it actually on?" is answerable
+    // after the fact, without asking the user to reproduce anything.
+    dlog("mic-state", {
+      activeId: micState.activeId,
+      activeLabel: micState.activeLabel,
+      open: micState.open,
+      source: micState.source,
+      preferredMicId: micPrefs.preferredMicId,
+      micMode: micPrefs.micMode
+    });
+    const waiting = micStateWaiters;
+    micStateWaiters = [];
+    for (const resolve of waiting) resolve(micState);
+  });
+
+  // The Settings window's microphone section. It cannot enumerate devices
+  // itself with any confidence – the dictation window is the one holding a live
+  // stream – so ask that window and wait a beat for its answer.
+  ipcMain.handle("mic:get", async () => ({ prefs: micPrefs, state: await refreshMicState() }));
+
+  ipcMain.handle("mic:set", async (_event, payload) => {
+    if (!prefsPath) return { error: "GVoice hasn't finished starting up – try again in a moment." };
+    try {
+      micPrefs = writePreferences(prefsPath, payload || {});
+    } catch (err) {
+      console.error("[main] preferences write failed:", err && err.message);
+      return { error: "Couldn't save that. Check that GVoice can write to its settings folder, then try again." };
+    }
+    dlog("mic-prefs-saved", micPrefs);
+    if (dictationWindow && !dictationWindow.isDestroyed()) {
+      dictationWindow.webContents.send("mic:prefs", micPrefs);
+    }
+    return { prefs: micPrefs, state: await refreshMicState() };
+  });
+
   // The renderer tried hard to find a live mic and couldn't. Escalate, cheapest
   // first: reload the hidden renderer (fresh AudioContext); if that already
   // happened this episode and the mic is STILL dead, the audio service itself is
   // wedged — only a full relaunch respawns it. Guarded so neither step can loop.
   ipcMain.on("dictation:escalate-recovery", (_event, reason) => {
     handleRecoveryEscalation(typeof reason === "string" ? reason : "recovery");
+  });
+}
+
+// Ask the dictation window for a fresh look at the microphones and wait briefly
+// for it. The cached answer is returned if that window is gone or slow, so the
+// Settings page always renders something rather than hanging on a spinner.
+function refreshMicState(timeoutMs = 1500) {
+  if (!dictationWindow || dictationWindow.isDestroyed()) return Promise.resolve(micState);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (state) => {
+      if (done) return;
+      done = true;
+      micStateWaiters = micStateWaiters.filter((w) => w !== finish);
+      resolve(state);
+    };
+    micStateWaiters.push(finish);
+    setTimeout(() => finish(micState), timeoutMs);
+    try {
+      dictationWindow.webContents.send("dictation:report-mics");
+    } catch {
+      finish(micState);
+    }
   });
 }
 
@@ -2815,6 +2913,10 @@ app.whenReady().then(async () => {
   // isn't bundled into the read-only app. The providers read it on every
   // connection; the cursor pop-up writes to it.
   vocab.init(join(app.getPath("userData"), "custom-vocab.json"));
+  // The saved microphone choice. A missing or damaged file reads back as the
+  // defaults (always ready, system microphone), so dictation still works.
+  prefsPath = preferencesPath(app.getPath("userData"));
+  micPrefs = readPreferences(prefsPath);
   // Last-50 dictation history, persisted across restarts; shown in the tray's
   // "Recent dictations" menu. Loaded before the tray builds its first menu.
   await initHistory();

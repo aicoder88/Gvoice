@@ -1,4 +1,4 @@
-import { classifyHold } from "/mic-health.js";
+import { classifyHold, idleMsForMode, chooseCaptureDevice } from "/mic-health.js";
 
 const targetSampleRate = 24000;
 const statusEl = document.getElementById("status");
@@ -14,10 +14,26 @@ const logEl = document.getElementById("log");
 // puts its orange "mic in use" dot out once the burst ends.
 //
 // 0 = close after every hold (no pre-roll), Infinity = never close.
-const MIC_IDLE_MS = 120000;
+//
+// The user picks this in Settings ("Microphone"), and the choice is stored in
+// preferences.json inside the app's data folder – never in .env, which holds
+// keys. Three modes: always ready (never dropped), ready for two minutes, only
+// while the key is held. Until main sends the saved choice this is the default,
+// "always": guessing "closed" would clip the first word of the first dictation
+// after every launch.
+let micMode = "always";
+let MIC_IDLE_MS = idleMsForMode(micMode);
 // Cold mode: nothing is kept warm between presses, so every press builds a
 // fresh graph (which is also its own recovery).
-const COLD_MIC = MIC_IDLE_MS === 0;
+function coldMic() { return MIC_IDLE_MS === 0; }
+
+// The microphone the user asked for, and the one we are actually on. A
+// preferred device that is unplugged falls back to the system default and comes
+// back on the next between-dictation check – see checkPreferredDevice.
+let preferredMicId = "";
+let preferredMicLabel = "";
+// "preferred" | "fallback" | "default" – what the settings window shows.
+let deviceSource = "default";
 
 let socket = null;
 let audioContext = null;
@@ -140,10 +156,29 @@ let liveProbePeak = 0;        // loudest frame seen since the last probe reset
 let recovering = false;       // an auto-recovery loop is in flight
 let recoveryMutedSeen = false;// a probed device existed but was muted (don't escalate)
 let deviceChangeTimer = null; // debounce for the noisy 'devicechange' burst
-// While set, a teardown+rebuild of the capture graph is in flight. A key-press
-// awaits it before its own initCapture so recovery and a press can never build
-// two graphs at once (stacked streams) or tear one down under the other.
+// Every teardown+rebuild of the capture graph goes through ONE promise chain,
+// so recovery, a preferred-device switch, a mode change and a key-press can
+// never build two graphs at once (stacked streams, doubled audio) or tear one
+// down under another. captureBusy is the tail of that chain while anything is
+// in flight, and null when the chain is idle – a key-press awaits it before
+// starting its own build.
+let captureLock = Promise.resolve();
 let captureBusy = null;
+
+/**
+ * Run `task` after every queued capture change has finished, and mark the
+ * pipeline busy until it settles. Failures are swallowed by the chain (the
+ * caller still sees them) so one bad build can never wedge every later one.
+ * @param {() => Promise<void>} task
+ */
+function withCaptureLock(task) {
+  const run = captureLock.then(task, task);
+  const settled = run.then(() => {}, () => {});
+  captureLock = settled;
+  captureBusy = settled;
+  settled.then(() => { if (captureBusy === settled) captureBusy = null; });
+  return run;
+}
 // How long to listen for a real (non-zero) signal when probing a device. A live
 // mic clears 0 within a few worklet frames; a dead/virtual-silent one sits at 0.
 const PROBE_MS = Number(window.DICTATION_PROBE_MS || 500);
@@ -413,18 +448,55 @@ function finalizeAndSend(text) {
 // signal.
 async function initCapture() {
   if (captureReady) return;
+  return withCaptureLock(async () => {
+    // Another queued build may have finished while this one waited its turn.
+    if (captureReady) return;
+    try {
+      await buildCaptureGraph(await pickDevice());
+    } catch (err) {
+      // Never leave a half-built graph behind: getUserMedia may have succeeded
+      // before a later step threw, and that stray live track would keep the
+      // mic-in-use indicator on AND get a second graph stacked on top by the
+      // next attempt (doubled, garbled audio).
+      teardownCapture(true);
+      throw err;
+    }
+  });
+}
+
+// Every audio input the browser will admit to right now. An empty list means we
+// could not look (the call threw, or device labels are not allowed yet) – never
+// that the machine has no microphone, which is why chooseCaptureDevice treats
+// an empty list as "unknown" instead of "the preferred one is gone".
+async function availableInputIds() {
   try {
-    // Prefer the last device we got real audio from — on a machine with virtual
-    // mics, the bare system default can be a silent one.
-    await buildCaptureGraph(lastGoodDeviceId);
-  } catch (err) {
-    // Never leave a half-built graph behind: getUserMedia may have succeeded
-    // before a later step threw, and that stray live track would keep the
-    // mic-in-use indicator on AND get a second graph stacked on top by the
-    // next attempt (doubled, garbled audio).
-    teardownCapture(true);
-    throw err;
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices.filter((d) => d.kind === "audioinput" && d.deviceId).map((d) => d.deviceId);
+  } catch {
+    return [];
   }
+}
+
+// Which device to open when nothing is live: the user's preferred microphone if
+// it is plugged in, otherwise the last device that gave us real audio (on a
+// machine with virtual mics the bare system default can be a silent one).
+async function pickDevice() {
+  if (!preferredMicId) {
+    deviceSource = "default";
+    return lastGoodDeviceId;
+  }
+  const choice = chooseCaptureDevice({
+    preferredId: preferredMicId,
+    fallbackId: lastGoodDeviceId,
+    currentId: currentDeviceId,
+    availableIds: await availableInputIds(),
+    captureReady: false
+  });
+  deviceSource = choice.source;
+  if (choice.source === "fallback") {
+    log("Preferred mic not plugged in – using the system default for now");
+  }
+  return choice.deviceId;
 }
 
 // Open a mic stream, optionally pinned to a specific device. A pinned device
@@ -469,7 +541,13 @@ async function buildCaptureGraph(deviceId = null) {
       log("Audio devices changed");
       clearTimeout(deviceChangeTimer);
       deviceChangeTimer = setTimeout(() => {
-        if (!isRecording && !recovering) recoverMic("devicechange");
+        if (isRecording || recovering) return;
+        // A device list change is exactly when a preferred mic reappears (or
+        // vanishes), so look at that first – a plain probe would happily keep
+        // running on the fallback device forever.
+        checkPreferredDevice("devicechange").then(() => {
+          if (!isRecording && !recovering) recoverMic("devicechange");
+        });
       }, 800);
     });
   }
@@ -485,7 +563,10 @@ async function buildCaptureGraph(deviceId = null) {
   // device) — remembered as last-good so recovery can re-pin it first.
   try { currentDeviceId = (track && track.getSettings && track.getSettings().deviceId) || deviceId || null; }
   catch { currentDeviceId = deviceId || null; }
-  log("Capture bound to: " + currentLabel);
+  deviceSource = !preferredMicId
+    ? "default"
+    : currentDeviceId === preferredMicId ? "preferred" : "fallback";
+  log("Capture bound to: " + currentLabel + " (" + deviceSource + ")");
   if (track) {
     track.onended = () => handleMicLost("The microphone was disconnected.");
     track.onmute = () => handleMicLost("The microphone went silent — another app may have taken it.");
@@ -620,7 +701,7 @@ function dropCapture(why) {
 // again after a busy moment.
 function armIdleTimer(ms = MIC_IDLE_MS) {
   clearIdleTimer();
-  if (COLD_MIC || !Number.isFinite(MIC_IDLE_MS)) return; // per-hold teardown, or "never"
+  if (coldMic() || !Number.isFinite(MIC_IDLE_MS)) return; // per-hold teardown, or "never"
   idleTimer = setTimeout(() => {
     idleTimer = null;
     // Never tear a graph down under a live hold or an in-flight rebuild —
@@ -638,7 +719,7 @@ function armIdleTimer(ms = MIC_IDLE_MS) {
 // The mic died or was taken (track ended/muted, or a run of silent holds).
 // Drop the dead pipeline, surface a visible warning, and reset so the next
 // press re-acquires. Safe to call mid-hold: we just abandon the current one.
-function handleMicLost(reason, immediate = false) {
+function handleMicLost(reason, immediate = false, { sameDevice = false } = {}) {
   log("Mic lost: " + reason);
   // Decide NOW, before the reset below, whether the user is waiting on a result
   // and so must be warned immediately rather than after the grace window:
@@ -677,7 +758,43 @@ function handleMicLost(reason, immediate = false) {
   // Don't just wait for the next key-press to retry — heal in the background so
   // the mic is live again before the user presses. (No-op if already recovering
   // or a hold is in progress.)
+  if (sameDevice) {
+    // The evidence was only that the sound was very quiet. Rebuild what we
+    // already had; hunting other inputs on that would be accusing the hardware
+    // of what may just be a soft voice.
+    void restartSameDevice();
+    return;
+  }
   recoverMic("mic-lost");
+}
+
+// Rebuild the capture graph on the microphone we were already using: no probing
+// of other inputs, no escalation, and so no reload of this window. Quiet audio
+// alone gets this and nothing more.
+async function restartSameDevice() {
+  if (coldMic() || idleDropped) {
+    // Nothing is meant to be warm in these states; the next press does the
+    // build, and relighting the mic here would put the orange dot back on.
+    captureStale = true;
+    return;
+  }
+  const target = currentDeviceId || preferredMicId || lastGoodDeviceId || null;
+  try {
+    await withCaptureLock(async () => {
+      if (isRecording || startInFlight) return;
+      teardownCapture(true);
+      await buildCaptureGraph(target);
+    });
+  } catch (error) {
+    log("Same-mic restart failed: " + (error && error.message));
+    return;
+  }
+  if (!captureReady) return;
+  silentStreak = 0;
+  captureStale = false;
+  setStatus("Ready");
+  armIdleTimer();
+  void reportMicState();
 }
 
 // Listen for a real signal on the currently-built capture for up to `ms`.
@@ -695,7 +812,10 @@ async function probeLive(ms) {
 // the silent ones — more robust than guessing "virtual" from device names.
 async function candidateDeviceIds() {
   const ids = [];
-  if (lastGoodDeviceId) ids.push(lastGoodDeviceId);
+  // The device the user actually asked for is tried before anything else, so a
+  // recovery round never quietly settles on a mic they did not choose.
+  if (preferredMicId) ids.push(preferredMicId);
+  if (lastGoodDeviceId && !ids.includes(lastGoodDeviceId)) ids.push(lastGoodDeviceId);
   ids.push(null); // system default
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
@@ -725,17 +845,14 @@ async function ensureLiveCapture() {
     // A key-press that arrived mid-recovery takes priority — bail so we don't
     // tear down or stack a graph under the press's own initCapture.
     if (isRecording || startInFlight) return false;
-    captureBusy = (async () => {
-      teardownCapture(true);
-      await buildCaptureGraph(deviceId); // resumes a suspended context itself
-    })();
     try {
-      await captureBusy;
+      await withCaptureLock(async () => {
+        teardownCapture(true);
+        await buildCaptureGraph(deviceId); // resumes a suspended context itself
+      });
     } catch (error) {
       log("Probe build failed: " + (error && error.message));
       continue;
-    } finally {
-      captureBusy = null;
     }
     if (await probeLive(PROBE_MS)) {
       lastGoodDeviceId = currentDeviceId || deviceId || lastGoodDeviceId;
@@ -771,7 +888,7 @@ async function recoverMic(reason) {
   // a session binds the bare system default, so it can't auto-switch away from a
   // silent virtual input the way hot mode did (the user still gets the "pick your
   // microphone" warning). Probe on press if that ever bites.
-  if (COLD_MIC || idleDropped) {
+  if (coldMic() || idleDropped) {
     // Not a full no-op: the teardown these states use keeps the AudioContext,
     // and the post-sleep wedge is IN that context (it keeps delivering zeros
     // onto a fresh stream). Mark it stale so the next press does the full
@@ -864,6 +981,95 @@ function currentTrackMuted() {
     const track = mediaStream && mediaStream.getAudioTracks && mediaStream.getAudioTracks()[0];
     return !!(track && track.readyState === "live" && track.muted);
   } catch { return false; }
+}
+
+// --- Preferences: mic mode and preferred microphone ---------------------------
+// main owns the file (preferences.json in the app's data folder) and hands the
+// values over here: once on load, and again whenever the user saves in Settings.
+
+function applyMicPrefs(prefs) {
+  if (!prefs || typeof prefs !== "object") return;
+  const nextMode = typeof prefs.micMode === "string" ? prefs.micMode : micMode;
+  const nextId = typeof prefs.preferredMicId === "string" ? prefs.preferredMicId : preferredMicId;
+  const deviceChanged = nextId !== preferredMicId;
+  const modeChanged = nextMode !== micMode;
+  micMode = nextMode;
+  MIC_IDLE_MS = idleMsForMode(micMode);
+  preferredMicId = nextId;
+  preferredMicLabel = typeof prefs.preferredMicLabel === "string" ? prefs.preferredMicLabel : "";
+  if (modeChanged) log("Mic mode: " + micMode + " (idle " + MIC_IDLE_MS + "ms)");
+
+  const idle = !isRecording && !startInFlight && !draining;
+  if (modeChanged && idle) {
+    // Hold-only means nothing should be warm between presses – let go of the
+    // device now rather than at the end of a dictation that may not come.
+    if (coldMic() && captureReady && !captureBusy) dropCapture("hold-only mic mode");
+    else if (captureReady) armIdleTimer();
+  }
+  if (deviceChanged) void checkPreferredDevice("you picked a microphone");
+  else void reportMicState();
+}
+
+// Between dictations: are we on the microphone the user asked for? Come back to
+// it when it is plugged in again, and sit on the system default (flagged as a
+// fallback) while it is not. Never runs mid-hold – rebinding under a live hold
+// would throw away what is being said.
+async function checkPreferredDevice(why) {
+  if (isRecording || startInFlight || draining || recovering) return;
+  if (!preferredMicId || !captureReady || idleDropped) {
+    // Nothing to return to, or nothing is open – the next build picks the right
+    // device on its own through pickDevice().
+    await reportMicState();
+    return;
+  }
+  const choice = chooseCaptureDevice({
+    preferredId: preferredMicId,
+    fallbackId: lastGoodDeviceId,
+    currentId: currentDeviceId,
+    availableIds: await availableInputIds(),
+    captureReady: true
+  });
+  if (!choice.rebuild) {
+    deviceSource = choice.source;
+    await reportMicState();
+    return;
+  }
+  if (isRecording || startInFlight) return;
+  log("Switching to your microphone (" + why + ")");
+  try {
+    await withCaptureLock(async () => {
+      if (isRecording || startInFlight) return;
+      teardownCapture(true);
+      await buildCaptureGraph(choice.deviceId);
+    });
+  } catch (error) {
+    log("Could not open your microphone: " + (error && error.message));
+  }
+  await reportMicState();
+}
+
+// Tell main which microphones exist, which one is live, and whether it is the
+// one the user chose. The Settings window reads this – it has no microphone of
+// its own to ask.
+async function reportMicState() {
+  let devices = [];
+  try {
+    devices = (await navigator.mediaDevices.enumerateDevices())
+      .filter((d) => d.kind === "audioinput" && d.deviceId && d.deviceId !== "communications")
+      .map((d) => ({ id: d.deviceId, label: d.label || "" }));
+  } catch {}
+  try {
+    window.dictationBridge.sendMicState({
+      devices,
+      activeId: currentDeviceId || null,
+      activeLabel: captureReady ? currentLabel : "",
+      open: captureReady,
+      source: deviceSource,
+      micMode,
+      preferredMicId,
+      preferredMicLabel
+    });
+  } catch {}
 }
 
 async function startRecording(profile) {
@@ -1071,6 +1277,20 @@ function finishUtterance() {
   if (verdict.action === "silent") {
     log("Silent hold " + silentStreak + "/" + SILENT_STREAK_LIMIT + " (peak=" + utterancePeak.toFixed(4) + ")");
   }
+  if (verdict.action === "dead" && verdict.cause === "quiet") {
+    // A run of very soft holds. That is a distant microphone or a quiet speaker
+    // at least as often as it is a broken pipeline, so this branch never hunts
+    // for another input and never asks main to reload this window – it restarts
+    // the same device and says what the user can do about it.
+    log("Quiet holds (peak=" + utterancePeak.toFixed(4) + ") – restarting the same mic");
+    handleMicLost(
+      "Barely any sound came through. Move closer to your microphone, or pick a different one in Settings.",
+      true,
+      { sameDevice: true }
+    );
+    return;
+  }
+
   if (verdict.action === "dead") {
     log("Dead mic (peak=" + utterancePeak.toFixed(4) + ", bytes=" + recordedBytes + ") — rebuilding capture");
     // Pure digital zeros mean the captured device is itself delivering silence —
@@ -1098,10 +1318,13 @@ function finishUtterance() {
   // worklet stops burning CPU until the next press. Otherwise leave the pipeline
   // warm for the next press — only stop streaming — and start the idle clock
   // that closes it if no further dictation arrives.
-  if (COLD_MIC) {
-    dropCapture("cold-mic mode");
+  if (coldMic()) {
+    dropCapture("hold-only mic mode");
   } else {
     armIdleTimer();
+    // Between dictations is the only safe moment to move back to the microphone
+    // the user asked for, so take it.
+    void checkPreferredDevice("between dictations");
   }
 
   if (socket && socket.readyState === WebSocket.OPEN) {
@@ -1157,6 +1380,13 @@ window.dictationBridge.onStop(() => {
   stopRecording();
 });
 window.dictationBridge.onRebuildCapture((reason) => recoverMic(reason));
+// The saved microphone choice, and any later change to it from the Settings
+// window. Older builds of the preload have neither, so both are optional.
+if (window.dictationBridge.onMicPrefs) window.dictationBridge.onMicPrefs(applyMicPrefs);
+if (window.dictationBridge.onReportMics) window.dictationBridge.onReportMics(() => { void reportMicState(); });
+if (window.dictationBridge.getMicPrefs) {
+  window.dictationBridge.getMicPrefs().then(applyMicPrefs).catch(() => {});
+}
 
 function arrayBufferToBase64(buffer) {
   return u8ToBase64(new Uint8Array(buffer));
