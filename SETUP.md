@@ -91,6 +91,19 @@ npm start
 
 An Electron window opens with status info. A tray icon shows up in the system tray (bottom-right of the Windows taskbar - click the small `^` to find it if hidden).
 
+## Automated checks
+
+- `pnpm test:unit`, `pnpm test:parity` and `pnpm test:pipeline-smoke` are the
+  offline suites. They never read a developer's real `.env` and never make a
+  real call to OpenAI or Deepgram — a fresh clone with no keys passes all
+  three. Set `GVOICE_NO_ENV=1` yourself (or run inside `env -i`) to prove a
+  check has no hidden dependency on a local `.env`.
+- `pnpm test:live` is the opt-in suite that talks to the real providers and
+  the local Whisper engine. It does nothing and exits 0 unless you set
+  `GVOICE_LIVE=1` — that flag is what lets the openai/deepgram parity
+  subtests run instead of skipping. Use it only when you want to burn real
+  API usage to check a live path.
+
 ## Use
 
 1. Click into any text field anywhere on your computer (Word, Slack, Chrome address bar, terminal, code editor - anything).

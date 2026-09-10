@@ -92,9 +92,14 @@ if (process.platform === "darwin") {
 }
 
 // Load .env from the app home (not cwd), so config is found wherever launched.
-const envFile = join(HOME, ".env");
-if (existsSync(envFile)) dotenv.config({ path: envFile });
-else dotenv.config();
+// GVOICE_NO_ENV=1 skips this entirely — offline checks (test:unit, test:parity,
+// test:pipeline-smoke) set it so a real key or provider setting sitting in a
+// developer's .env can never leak into a check that must pass on a bare clone.
+if (process.env.GVOICE_NO_ENV !== "1") {
+  const envFile = join(HOME, ".env");
+  if (existsSync(envFile)) dotenv.config({ path: envFile });
+  else dotenv.config();
+}
 
 // Exported so the rest of the app (main.js, the settings writer) edits the SAME
 // .env this loaded — never a cwd-relative guess that misses in a packaged launch.
