@@ -3,7 +3,6 @@
 // file in userData so a missed paste is never lost — even across restarts.
 // Newest first. Reads happen once at boot; writes are serialized so rapid
 // dictations can't interleave and corrupt the file.
-import { app } from "electron";
 import { readFile, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -20,11 +19,15 @@ const MAX_ENTRIES = 50;
  * either, but it is not a mishap the way `recovered` is — the tray says
  * "cancelled" so the user knows their own key did it.
  *
+ * `copy` marks text that was never pasted because the user had moved to a
+ * different app or window by the time it was ready. It is on the clipboard
+ * instead, and the tray says "copied" so the entry doesn't read as a failure.
+ *
  * `sessionId` names the press that produced the entry (see
  * src/dictation-session.js), so a line in history can be matched to a line in
  * the debug log.
  *
- * @typedef {{ ts: number, text: string, pasted: boolean, recordingPath?: string | null, recovered?: boolean, cancelled?: boolean, sessionId?: string | null }} HistoryEntry
+ * @typedef {{ ts: number, text: string, pasted: boolean, recordingPath?: string | null, recovered?: boolean, cancelled?: boolean, copy?: boolean, sessionId?: string | null }} HistoryEntry
  */
 
 /** @type {HistoryEntry[]} */
@@ -36,6 +39,10 @@ let writeChain = Promise.resolve();
 
 /** Load existing history from disk. Call once after app is ready. */
 export async function initHistory() {
+  // Electron is imported here rather than at the top of the file so the rest of
+  // this module (recordTranscript, getHistory) can be exercised by a plain
+  // `node --test` run, which has no Electron runtime to import from.
+  const { app } = await import("electron");
   historyPath = join(app.getPath("userData"), "history.json");
   try {
     const raw = JSON.parse(await readFile(historyPath, "utf8"));
@@ -49,6 +56,7 @@ export async function initHistory() {
           recordingPath: typeof e.recordingPath === "string" ? e.recordingPath : null,
           recovered: !!e.recovered,
           cancelled: !!e.cancelled,
+          copy: !!e.copy,
           sessionId: typeof e.sessionId === "string" ? e.sessionId : null
         }))
         .slice(0, MAX_ENTRIES);
@@ -76,7 +84,7 @@ export function getHistory() {
  * @param {string} text
  * @param {boolean} pasted
  * @param {string | null} [recordingPath]
- * @param {{ recovered?: boolean, cancelled?: boolean, sessionId?: string | null }} [meta]
+ * @param {{ recovered?: boolean, cancelled?: boolean, copy?: boolean, sessionId?: string | null }} [meta]
  */
 export function recordTranscript(text, pasted, recordingPath = null, meta = {}) {
   if ((!text || !text.trim()) && !recordingPath) return;
@@ -87,6 +95,7 @@ export function recordTranscript(text, pasted, recordingPath = null, meta = {}) 
     recordingPath: recordingPath || null,
     recovered: !!meta.recovered,
     cancelled: !!meta.cancelled,
+    copy: !!meta.copy,
     sessionId: typeof meta.sessionId === "string" ? meta.sessionId : null
   });
   if (entries.length > MAX_ENTRIES) entries.length = MAX_ENTRIES;

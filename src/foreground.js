@@ -88,11 +88,14 @@ let CFGetTypeID = null;
 let CFStringGetTypeID = null;
 /** @type {((el: unknown, out: number[]) => number) | null} */
 let AXUIElementGetPid = null;
+/** @type {((el: unknown, out: number[]) => number) | null} */
+let AXUIElementGetWindow = null;
 /** @type {((pid: number, buf: Buffer, size: number) => number) | null} */
 let proc_pidpath = null;
 /** @type {unknown} */ let kAXFocusedUIElement = null;
 /** @type {unknown} */ let kAXRole = null;
 /** @type {unknown} */ let kAXValue = null;
+/** @type {unknown} */ let kAXWindow = null;
 
 if (isMac) {
   try {
@@ -126,10 +129,23 @@ if (isMac) {
     const libSystem = koffi.load("/usr/lib/libSystem.B.dylib");
     proc_pidpath = libSystem.func("int proc_pidpath(int pid, _Out_ char *buffer, uint32_t buffersize)");
 
+    // Which on-screen window an element belongs to. _AXUIElementGetWindow is
+    // undocumented but has shipped in HIServices for every macOS release and is
+    // the only way to get a CGWindowID out of an AX element. Its own try/catch:
+    // if a future macOS drops it, the window number simply reads null and the
+    // destination check falls back to app + editable focus (see
+    // captureForegroundTarget) instead of the whole AX block failing to load.
+    try {
+      AXUIElementGetWindow = AX.func("int _AXUIElementGetWindow(void *element, _Out_ uint32 *wid)");
+    } catch (err) {
+      console.error("[foreground] window-id symbol missing:", err && err.message);
+    }
+
     // Attribute name constants — created once, intentionally never released.
     kAXFocusedUIElement = CFStringCreateWithCString(null, "AXFocusedUIElement", kCFStringEncodingUTF8);
     kAXRole = CFStringCreateWithCString(null, "AXRole", kCFStringEncodingUTF8);
     kAXValue = CFStringCreateWithCString(null, "AXValue", kCFStringEncodingUTF8);
+    kAXWindow = CFStringCreateWithCString(null, "AXWindow", kCFStringEncodingUTF8);
   } catch (err) {
     console.error("[foreground] AX init failed:", err && err.message);
     AXUIElementCreateSystemWide = null;
@@ -286,19 +302,101 @@ const pidPathBuf = Buffer.alloc(4096); // PROC_PIDPATHINFO_MAXSIZE
 // Empty strings whenever we can't tell, so a non-terminal app is never mistaken
 // for one.
 function elementApp(/** @type {unknown} */ focused) {
-  const none = { bundle: "", basename: "" };
+  const none = { pid: 0, bundle: "", basename: "" };
   if (!AXUIElementGetPid || !proc_pidpath) return none;
   const pidOut = [0];
   if (AXUIElementGetPid(focused, pidOut) !== 0 || !pidOut[0]) return none;
-  const len = proc_pidpath(pidOut[0], pidPathBuf, pidPathBuf.length);
-  if (len <= 0) return none;
+  const pid = pidOut[0];
+  const len = proc_pidpath(pid, pidPathBuf, pidPathBuf.length);
+  if (len <= 0) return { pid, bundle: "", basename: "" };
   const path = pidPathBuf.toString("utf8", 0, len).toLowerCase();
   // e.g. "/applications/iterm.app/contents/macos/iterm2" → bundle "iterm",
   // basename "iterm2". Exact match against each (not substring — see above).
   return {
+    pid,
     bundle: (path.match(/\/([^/]+)\.app\//) || [])[1] || "",
     basename: path.slice(path.lastIndexOf("/") + 1)
   };
+}
+
+// The AXRole of an already-acquired element ("AXTextField", "AXWebArea", …),
+// or "" when it can't be read. Caller owns `focused`.
+function readElementRole(/** @type {unknown} */ focused) {
+  const roleOut = [null];
+  if (!AXUIElementCopyAttributeValue) return "";
+  if (AXUIElementCopyAttributeValue(focused, kAXRole, roleOut) !== 0 || !roleOut[0]) return "";
+  try {
+    const buf = Buffer.alloc(128);
+    if (!CFStringGetCString || !CFStringGetCString(roleOut[0], buf, buf.length, kCFStringEncodingUTF8)) return "";
+    const end = buf.indexOf(0);
+    return buf.toString("utf8", 0, end < 0 ? buf.length : end);
+  } finally {
+    if (CFRelease) CFRelease(roleOut[0]);
+  }
+}
+
+// The on-screen window an element sits in, as a CGWindowID, or null when it
+// can't be read. Asks the element's own AXWindow first (the focused control is
+// usually a child of the window) and falls back to the element itself.
+function elementWindowNumber(/** @type {unknown} */ focused) {
+  if (!AXUIElementGetWindow || !AXUIElementCopyAttributeValue) return null;
+  const winOut = [null];
+  const gotWindow = AXUIElementCopyAttributeValue(focused, kAXWindow, winOut) === 0 && winOut[0];
+  const element = gotWindow ? winOut[0] : focused;
+  try {
+    const idOut = [0];
+    if (AXUIElementGetWindow(element, idOut) !== 0) return null;
+    return idOut[0] || null;
+  } finally {
+    if (gotWindow && CFRelease) CFRelease(winOut[0]);
+  }
+}
+
+/**
+ * @typedef {object} ForegroundTarget
+ * @property {number} pid          the app that owns the focused element
+ * @property {string} app          its bundle folder name, or the binary's name
+ * @property {number | null} windowNumber  the window the caret is in, when readable
+ * @property {string} role         the focused element's AXRole ("" if unreadable)
+ * @property {boolean} editable    can the user type into it right now
+ */
+
+/**
+ * Where a paste would land RIGHT NOW: which app, which window, and whether the
+ * focused element accepts typing. Taken once when the hotkey goes down and
+ * again immediately before the clipboard write, so text can never be pasted
+ * into a window the user moved to while GVoice was transcribing (see
+ * src/paste-guard.js for the comparison).
+ *
+ * Returns null when there is nothing to compare — not macOS, Accessibility not
+ * granted, AX unreachable, or nothing focused. A null at PRESS time means the
+ * check is simply not available on this machine and the paste goes ahead as it
+ * always did; a null at PASTE time when press-time had a reading means the
+ * destination became unreadable, which is treated as a change.
+ *
+ * @returns {ForegroundTarget | null}
+ */
+export function captureForegroundTarget() {
+  return withFocusedElement((focused) => {
+    const { pid, bundle, basename } = elementApp(focused);
+    const role = readElementRole(focused);
+    let editable = AX_EDITABLE_ROLES.has(role);
+    // Same fallback isEditableFieldFocused uses: a custom editor with an
+    // unusual role still counts if its value is writable.
+    if (!editable && AXUIElementIsAttributeSettable) {
+      const settableOut = [false];
+      if (AXUIElementIsAttributeSettable(focused, kAXValue, settableOut) === 0) {
+        editable = settableOut[0] === true;
+      }
+    }
+    return {
+      pid,
+      app: bundle || basename,
+      windowNumber: elementWindowNumber(focused),
+      role,
+      editable
+    };
+  });
 }
 
 /**

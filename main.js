@@ -45,7 +45,7 @@ import { DictationSession } from "./src/dictation-session.js";
 import * as vocab from "./src/vocab.js";
 import { createCorrectionWatcher } from "./src/correction-watch.js";
 import { looksLikeRetraction } from "./src/cleanup.js";
-import { captureForegroundWindow, restoreForegroundWindow, getWindowRect, isEditableFieldFocused, isForegroundWindow, readbackPasteTarget } from "./src/foreground.js";
+import { captureForegroundWindow, captureForegroundTarget, restoreForegroundWindow, getWindowRect, isEditableFieldFocused, isForegroundWindow, readbackPasteTarget } from "./src/foreground.js";
 import { initHistory, getHistory, getHistoryPath, recordTranscript } from "./src/history.js";
 import { computeStats } from "./src/stats.js";
 import { ensureWhisperServer, stopWhisperServer } from "./src/providers/whisper-local.js";
@@ -1079,10 +1079,18 @@ function startDictation(/** @type {number} */ maxHoldMs = MAX_HOLD_MS) {
     sessionId: dictation.id
   };
   savedForegroundHwnd = captureForegroundWindow();
-  dlog("press", { profile, hwnd: savedForegroundHwnd });
   debug("[main] dictation:start lang=" + profile.language + " (hwnd=" + savedForegroundHwnd + ")");
   showPillForWindow(savedForegroundHwnd);
   dictationWindow.webContents.send("dictation:start", profile);
+  // Where these words are meant to land — read again right before the paste, so
+  // text can't be fired into a window the user moved to while we transcribed.
+  // Read AFTER the mic has been told to start, never before: asking
+  // Accessibility about the focused app waits on that app to answer, and a busy
+  // one would hold the microphone shut for as long as it took. A millisecond
+  // later the answer is the same window; a clipped first word is not
+  // recoverable.
+  dictation.target = captureForegroundTarget();
+  dlog("press", { profile, hwnd: savedForegroundHwnd, target: dictation.target });
   // Self-heal a lost key-up: if the hold never reports a release, end it
   // the same way a real release would (commit + transcribe + re-open the
   // session) so a dropped event can't jam dictation until the next quit.
@@ -1189,11 +1197,16 @@ function openAccessibilitySettings() {
 // are worth keeping in history, but they must never land in whatever the user
 // is typing into now.
 //
+// `target` (live path only): the app, window and focused element captured at
+// press time. typeText re-reads them immediately before the clipboard write and
+// refuses to paste into anything else — the returned `copied` flag says the
+// text is sitting on the clipboard waiting for the user's own ⌘V.
+//
 // @param {string} transcript
 // @param {number | null} [restoreHwnd]
-// @param {{ deliver?: boolean }} [options]
-// @returns {Promise<{ text: string, pasted: boolean, verified: boolean | null, likelyMissed: boolean, notice: string } | null>}
-async function processTranscript(transcript, restoreHwnd = null, { deliver = true } = {}) {
+// @param {{ deliver?: boolean, target?: import("./src/foreground.js").ForegroundTarget | null }} [options]
+// @returns {Promise<{ text: string, pasted: boolean, copied?: boolean, verified: boolean | null, likelyMissed: boolean, notice: string } | null>}
+async function processTranscript(transcript, restoreHwnd = null, { deliver = true, target = null } = {}) {
   if (!transcript || !transcript.trim()) return null;
   let textToType = stripWhisperNoiseTokens(transcript.trim());
   if (!textToType) {
@@ -1293,11 +1306,22 @@ async function processTranscript(transcript, restoreHwnd = null, { deliver = tru
   // window to restore and the restore failed; or (macOS) no editable element
   // was focused, so ⌘V went nowhere.
   let typed = true;
+  /** @type {{ pasted: boolean, reason: string } | null} */
+  let delivery = null;
   try {
-    await typeText(textToType);
+    delivery = await typeText(textToType, { target });
   } catch (error) {
     typed = false;
     console.error("[main] typeText failed:", error && (error.stack || error.message));
+  }
+  // The destination changed while we were transcribing (or became unreadable),
+  // so nothing was pasted and the text is on the clipboard instead. Stop here:
+  // the read-back below would be measuring a window we never wrote to, and its
+  // verdict would be nonsense.
+  if (delivery && !delivery.pasted) {
+    dlog("paste-skipped", { reason: delivery.reason, len: textToType.length });
+    debug("[main] paste skipped — destination changed (" + delivery.reason + ")");
+    return { text: textToType, pasted: false, copied: true, verified: null, likelyMissed: false, notice: cleanupNotice };
   }
   let pasted =
     typed &&
@@ -1597,6 +1621,9 @@ function setupIpc() {
     // (after the rescue round trip) it could already be the next dictation's —
     // and if the transcript was already stale on arrival it was never ours.
     const targetHwnd = mineOnArrival ? savedForegroundHwnd : null;
+    // Same reasoning for the destination this press started in: read it now,
+    // while it is still ours. A press during the rescue round trip replaces it.
+    const targetDestination = mineOnArrival ? dictation.target : null;
     // finalize() stops the safety timer, which belongs to whichever press is
     // live. A transcript that arrived late must not disarm the anti-jam backstop
     // of the dictation the user is holding right now.
@@ -1680,7 +1707,10 @@ function setupIpc() {
       // there is nothing of ours in front of the user, and pasting would drop
       // these words into the middle of the dictation they are speaking right
       // now. Clean them up anyway and park them in history below.
-      const result = await processTranscript(text, targetHwnd, { deliver: mineOnArrival });
+      const result = await processTranscript(text, targetHwnd, {
+        deliver: mineOnArrival,
+        target: targetDestination
+      });
       // Only clear the global if this press still owns the session. Comparing
       // the VALUE instead would be wrong in the commonest case of all: two
       // dictations into the same app back to back capture the same window, so
@@ -1717,11 +1747,17 @@ function setupIpc() {
         // we couldn't read back, e.g. into a terminal or browser, still landed
         // almost every time and clears fast). Only a real miss shows Error, which
         // lingers so the text stays recoverable via Copy / the recording.
+        //
+        // Third case, `copied`: the user had moved to another window by the
+        // time the words were ready, so nothing was fired at their cursor and
+        // the text is waiting on the clipboard. Nothing went wrong, so no red
+        // dot — a green pill saying exactly what to press, held long enough to
+        // read it.
         showPillResult(
-          result.pasted ? "success" : "error",
+          result.pasted || result.copied ? "success" : "error",
           result.text,
           recordingPath,
-          {
+          result.copied ? { reason: "Ready to copy · ⌘V", holdMs: 8000 } : {
             // Only the hard-miss case gets an explanatory reason; a confirmed
             // success keeps the plain "Success" label — unless something happened
             // the user has to know about. Two of those, in priority order:
@@ -1744,13 +1780,17 @@ function setupIpc() {
         // Keep the last 50 dictations on disk and in the tray menu, so a
         // missed paste is recoverable — and listenable — even after the pill is
         // gone.
-        recordTranscript(result.text, result.pasted, recordingPath, { sessionId });
+        recordTranscript(result.text, result.pasted, recordingPath, { sessionId, copy: !!result.copied });
         rebuildTrayMenu();
         // Failed paste — or one that read back as missing from a field with
         // other text in it: leave the text on the clipboard so it's recoverable
         // with ⌘V even if the pill is missed. Delayed past typeText's 250ms
         // clipboard restore, which would otherwise overwrite it.
-        if (!result.pasted || result.likelyMissed) {
+        //
+        // Never on the copy path: typeText already put the text there and never
+        // armed a restore, so a second write would only risk stamping on
+        // something the user copied in the meantime.
+        if (!result.copied && (!result.pasted || result.likelyMissed)) {
           const lostText = result.text;
           setTimeout(() => { try { clipboard.writeText(lostText); } catch {} }, 450);
         }
@@ -2330,12 +2370,18 @@ function rebuildTrayMenu() {
     // Words whose press the user stopped on purpose. Also never pasted, but
     // their own key did it, so no warning triangle either.
     const cancelled = !!entry.cancelled && !!flat;
+    // Words the user moved away from mid-dictation: left on the clipboard on
+    // purpose rather than pasted into a window they had left. Nothing went
+    // wrong, so no warning triangle here either.
+    const copied = !!entry.copy && !!flat;
     /** @type {import("electron").MenuItemConstructorOptions[]} */
     const sub = [];
     // The ⚠ on the parent row needs a legend — say what it means right where
     // the user looks for the text.
     if (cancelled) {
       sub.push({ label: "Cancelled — never pasted", enabled: false });
+    } else if (copied) {
+      sub.push({ label: "You'd moved on — copied, not pasted", enabled: false });
     } else if (recovered) {
       sub.push({ label: "Recovered later — never pasted", enabled: false });
     } else if (!entry.pasted) {
@@ -2356,7 +2402,7 @@ function rebuildTrayMenu() {
       });
     }
     return {
-      label: `${time}${entry.pasted || recovered || cancelled ? "" : " ⚠"}  ${preview}`,
+      label: `${time}${entry.pasted || recovered || cancelled || copied ? "" : " ⚠"}  ${preview}`,
       submenu: sub
     };
   });

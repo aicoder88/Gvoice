@@ -98,6 +98,13 @@ export class DictationSession {
     // minted before a reload must never collide with a counter that restarted.
     /** @type {string | null} */
     this.id = null;
+    // Where the words are meant to go: the app, window and focused element that
+    // were in front of the user when this press started (src/foreground.js
+    // captureForegroundTarget). Set by main.js right after tryStart(), read
+    // again immediately before the paste. Cleared on every new press so a stale
+    // destination can never authorise a paste for the press after it.
+    /** @type {import("./foreground.js").ForegroundTarget | null} */
+    this.target = null;
     /** @type {number | null} */
     this.releaseAt = null;
     // Names of presses the user cancelled. Kept AFTER the session re-opens,
@@ -182,6 +189,9 @@ export class DictationSession {
     // Forget the previous session's release stamp, or finalize() on a session
     // that errors before release would report timings from the LAST dictation.
     this.releaseAt = null;
+    // Same reasoning for the destination: the caller sets it a line later, and
+    // an unset one must never look like the previous press's window.
+    this.target = null;
     return true;
   }
 

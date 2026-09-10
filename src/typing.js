@@ -1,7 +1,27 @@
 // @ts-check
-import { clipboard } from "electron";
 import { execFile } from "node:child_process";
 import { sendPasteShortcut } from "./foreground.js";
+import { checkDestination } from "./paste-guard.js";
+
+// Electron's clipboard, fetched on first use instead of at import time. The
+// destination check below has to be testable, and a top-level `import {
+// clipboard } from "electron"` makes this module unloadable outside the
+// Electron runtime. Inside the main process the import is already resolved, so
+// this costs nothing.
+/** @type {any} */
+let electronClipboard = null;
+async function realClipboard() {
+  if (!electronClipboard) electronClipboard = (await import("electron")).clipboard;
+  return electronClipboard;
+}
+
+// Where a paste would land right now. Imported lazily so a caller that passes
+// no press-time snapshot (the smoke test, the Windows path) never pulls the
+// macOS Accessibility bindings in.
+async function realForegroundTarget() {
+  const { captureForegroundTarget } = await import("./foreground.js");
+  return captureForegroundTarget();
+}
 
 const isWin = process.platform === "win32";
 
@@ -109,16 +129,49 @@ function pasteShortcut() {
  * shortcut, then restores the original clipboard 250ms later. Otherwise, types
  * each character via nut-js.
  *
+ * `target` is the destination captured when the hotkey went down (see
+ * src/foreground.js). If it is set, the destination is read AGAIN here — the
+ * last moment before the text leaves — and a paste only happens when the user
+ * is still in the same app, the same window, with the caret in something that
+ * takes typing. If they moved, the words are left on the clipboard and
+ * `{ pasted: false }` comes back so the caller can say "Ready to copy" instead
+ * of firing ⌘V into a stranger's window.
+ *
  * @param {string} text
- * @returns {Promise<void>}
+ * @param {object} [options]
+ * @param {import("./foreground.js").ForegroundTarget | null} [options.target]
+ * @param {() => any} [options.readTarget] destination reader (tests inject one)
+ * @param {any} [options.clipboard] clipboard (tests inject one)
+ * @param {() => Promise<void>} [options.paste] paste keystroke (tests inject one)
+ * @returns {Promise<{ pasted: boolean, reason: string }>}
  */
-export async function typeText(text) {
-  if (!text) return;
+export async function typeText(text, options = {}) {
+  if (!text) return { pasted: false, reason: "empty" };
+  const {
+    target = null,
+    readTarget = realForegroundTarget,
+    clipboard: injectedClipboard = null,
+    paste = pasteShortcut
+  } = options;
+  const clipboard = injectedClipboard || (await realClipboard());
 
   await sleep(RELEASE_DELAY_MS);
 
   const needsLeadingSpace = !/^[\s.,;:!?\-)\]"'`]/.test(text);
   const textToPaste = needsLeadingSpace ? " " + text : text;
+
+  // Last check before the words leave. Deliberately after the release delay and
+  // immediately before the clipboard write: every millisecond between the check
+  // and the keystroke is a millisecond the user could switch windows in.
+  const destination = await checkDestination(target, readTarget);
+  if (!destination.ok) {
+    // The one case where GVoice takes the clipboard and keeps it: the text has
+    // nowhere safe to land, so it waits there for the user's own ⌘V. No leading
+    // space — a hand-driven paste doesn't need one — and no restore timer, or
+    // the rescue would erase itself a quarter-second later.
+    clipboard.writeText(text);
+    return { pasted: false, reason: destination.reason };
+  }
 
   if (USE_CLIPBOARD) {
     const previousClipboard = clipboard.readText();
@@ -129,7 +182,7 @@ export async function typeText(text) {
     const previousImage = previousClipboard ? null : clipboard.readImage();
     clipboard.writeText(textToPaste);
     try {
-      await pasteShortcut();
+      await paste();
     } finally {
       setTimeout(() => {
         try {
@@ -138,9 +191,10 @@ export async function typeText(text) {
         } catch {}
       }, 250);
     }
-    return;
+    return { pasted: true, reason: destination.reason };
   }
 
   const { keyboard } = await nut();
   await keyboard.type(textToPaste);
+  return { pasted: true, reason: destination.reason };
 }
