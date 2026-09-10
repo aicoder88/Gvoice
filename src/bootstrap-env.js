@@ -95,8 +95,8 @@ if (process.platform === "darwin") {
 // GVOICE_NO_ENV=1 skips this entirely — offline checks (test:unit, test:parity,
 // test:pipeline-smoke) set it so a real key or provider setting sitting in a
 // developer's .env can never leak into a check that must pass on a bare clone.
+const envFile = join(HOME, ".env");
 if (process.env.GVOICE_NO_ENV !== "1") {
-  const envFile = join(HOME, ".env");
   if (existsSync(envFile)) dotenv.config({ path: envFile });
   else dotenv.config();
 }
