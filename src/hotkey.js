@@ -31,7 +31,7 @@
 
 import { createRequire } from "node:module";
 import { isCtrlDown, isShiftDown } from "./foreground.js";
-import { createHoldTracker, isCancelKey } from "./hotkey-logic.js";
+import { createHoldTracker, isCancelKey, createMouseBackGate } from "./hotkey-logic.js";
 
 const require = createRequire(import.meta.url);
 
@@ -112,7 +112,9 @@ function startHotkeyWindows({ onPress, onRelease }) {
     // kernel for the current key state on every tick, so it can't be "armed but
     // deaf" the way a global hook can — always answer yes so the caller's
     // deaf-hook watchdog never fires here.
-    sawEvent: () => true
+    sawEvent: () => true,
+    // Windows has no mouse-back trigger to gate — keyboard-only, untouched.
+    setMouseBackEnabled() {}
   };
 }
 
@@ -131,7 +133,7 @@ function startHotkeyWindows({ onPress, onRelease }) {
  *     a held Ctrl+Cmd keystroke triggers the chord path instead.
  *
  * @param {HotkeyCallbacks} callbacks
- * @returns {{ stop: () => void, sawEvent: () => boolean }}
+ * @returns {{ stop: () => void, sawEvent: () => boolean, setMouseBackEnabled: (enabled: boolean) => void }}
  */
 function startHotkeyUiohook({ onPress, onRelease, onCancel }) {
   // Lazy require so Windows builds don't choke if uiohook-napi isn't present
@@ -272,23 +274,24 @@ function startHotkeyUiohook({ onPress, onRelease, onCancel }) {
   // until the 90-second cutoff in main.js. Treat each report as a toggle — the
   // first starts talking, the next stops — and keep the real mouseup handler
   // for platforms and versions that get it right.
-  let mouseBackHeld = false;
+  // Step 12: a companion (Better Options) owns the button while it is
+  // connected, so this raw toggle must stop producing presses of its own —
+  // two things racing the same "start dictation" call is exactly the stuck-
+  // mic bug the socket in step 10 was built to end. Keyboard triggers are
+  // untouched; only the mouse path is gated. See createMouseBackGate for the
+  // up-edge-never-arrives quirk this also has to handle.
+  const mouseBackGate = createMouseBackGate({
+    onPress: () => pressSource("mouseBack"),
+    onRelease: () => releaseSource("mouseBack")
+  });
 
   const handleMouseDown = (/** @type {any} */ event) => {
     if (!event || event.button !== MOUSE_BACK_BUTTON) return;
-    if (mouseBackHeld) {
-      mouseBackHeld = false;
-      releaseSource("mouseBack");
-    } else {
-      mouseBackHeld = true;
-      pressSource("mouseBack");
-    }
+    mouseBackGate.down();
   };
   const handleMouseUp = (/** @type {any} */ event) => {
     if (!event || event.button !== MOUSE_BACK_BUTTON) return;
-    if (!mouseBackHeld) return;
-    mouseBackHeld = false;
-    releaseSource("mouseBack");
+    mouseBackGate.up();
   };
 
   uIOhook.on("input", markSeen);
@@ -327,6 +330,9 @@ function startHotkeyUiohook({ onPress, onRelease, onCancel }) {
       try { uIOhook.off("mouseup", handleMouseUp); } catch {}
       try { uIOhook.stop(); } catch {}
     },
-    sawEvent: () => sawEvent
+    sawEvent: () => sawEvent,
+    setMouseBackEnabled(enabled) {
+      mouseBackGate.setEnabled(enabled);
+    }
   };
 }

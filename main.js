@@ -1213,6 +1213,13 @@ async function startControlSocket() {
       cancel: (sessionId, reason) => {
         if (!dictation.owns(sessionId)) return;
         cancelDictation("companion:" + reason);
+      },
+      // Step 12: while a companion owns the button, the raw mouse-back toggle
+      // must stop firing its own presses — two triggers racing the same start
+      // call is the stuck-mic bug the socket exists to end. Re-enabled the
+      // instant the companion drops so the mouse still works standalone.
+      onCompanion: (connected) => {
+        try { hotkeyEngine?.setMouseBackEnabled?.(!connected); } catch {}
       }
     }
   });
