@@ -55,7 +55,8 @@ Both surfaces use the same relay (`realtime-relay.js`) and the same `/realtime` 
 
 ### `src/` (Electron-side helpers)
 
-- **`hotkey.js`** — Platform-split hotkey detector. Windows: polls physical key state via Win32 `GetAsyncKeyState` (~30 Hz) and fires on Ctrl+Shift (either side). macOS/Linux: `uiohook-napi` event stream; right Option, left Ctrl+Cmd chord, or the mouse back button all hold-to-talk. Right-Ctrl tap toggles language on both platforms.
+- **`hotkey.js`** — Platform-split hotkey detector. Windows: polls physical key state via Win32 `GetAsyncKeyState` (~30 Hz) and fires on Ctrl+Shift (either side). macOS/Linux: `uiohook-napi` event stream; right Option or the left Ctrl+Cmd chord hold-to-talk. Right-Ctrl tap toggles language on both platforms. The mouse back button also hold-to-talks by raw toggle, but stands down the moment a companion app is connected — see `control-socket.js`.
+- **`control-socket.js`** — Local Unix-socket server a companion app (Better Options) connects to instead of faking key presses. Exposes the same three calls the keyboard makes — start, stop, cancel — plus a status query, and disables the raw mouse-back toggle in `hotkey.js` for as long as it's connected so the two triggers can't race the same press.
 - **`hotkey-logic.js`** — Pure press/release/tap state machines shared by both hotkey backends, unit-tested with an injectable clock.
 - **`foreground.js`** — Win32 FFI helpers: capture/restore the focused window around a dictation, anchor the pill to it, and read raw key state for the Windows hotkey poll.
 - **`typing.js`** — Injects the final transcript into the focused field. Default path: write to clipboard, fire Cmd/Ctrl+V via `@nut-tree-fork/nut-js`, restore the previous clipboard after 250 ms. Fallback path (`TYPE_VIA_CLIPBOARD=false`): direct synthetic keystrokes.

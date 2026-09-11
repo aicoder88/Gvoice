@@ -7,7 +7,13 @@
 //
 // Provider subtests are skipped when their credentials / binaries are absent.
 
-import "dotenv/config";
+// GVOICE_NO_ENV=1 (set by test:unit and by default here via the offline
+// convention) skips loading a developer's real .env, so a stray key never
+// changes which provider subtests attempt a real call. Live-only subtests are
+// gated separately on GVOICE_LIVE below, and are also invoked through
+// `pnpm test:live` (scripts/run-live-tests.mjs), which refuses to run unless
+// GVOICE_LIVE=1 is set.
+if (process.env.GVOICE_NO_ENV !== "1") await import("dotenv/config");
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
@@ -196,6 +202,10 @@ test("parity: relay rejects a cross-origin upgrade, accepts loopback + no-origin
 });
 
 test("parity: openai transcription-only completes one utterance", async (t) => {
+  if (process.env.GVOICE_LIVE !== "1") {
+    t.skip("GVOICE_LIVE not set — run via `pnpm test:live` for real-provider checks");
+    return;
+  }
   if (!process.env.OPENAI_API_KEY) {
     t.skip("OPENAI_API_KEY not set");
     return;
@@ -247,6 +257,10 @@ test("parity: openai transcription-only completes one utterance", async (t) => {
 // every fresh clone actually uses uncovered. A revoked baked key shows up as a
 // skip with the upstream's own message, which names the cause.
 test("parity: deepgram completes one utterance", async (t) => {
+  if (process.env.GVOICE_LIVE !== "1") {
+    t.skip("GVOICE_LIVE not set — run via `pnpm test:live` for real-provider checks (this one uses the baked-in fallback key)");
+    return;
+  }
   const relay = await bootRelay();
   t.after(() => relay.close());
 
@@ -350,6 +364,10 @@ test("parity: openai bad-key surfaces as observable failure", async (t) => {
   // local.error from forwardUnexpectedResponse) or after the upgrade
   // completes (WS close with reason → local.status closed). Either form
   // satisfies the contract.
+  if (process.env.GVOICE_LIVE !== "1") {
+    t.skip("GVOICE_LIVE not set — run via `pnpm test:live` for real-provider checks");
+    return;
+  }
   if (!process.env.OPENAI_API_KEY) {
     t.skip("OPENAI_API_KEY required (test overrides it before booting)");
     return;

@@ -21,7 +21,8 @@
     "test:cleanup-quality": "node scripts/cleanup-quality-test.js",
     "compare:speech": "node scripts/compare-transcribers.js",
     "test:unit": "node --test scripts/unit/*.test.js",
-    "test:pipeline-smoke": "node --experimental-test-module-mocks --test scripts/smoke/pipeline-smoke.test.js"
+    "test:pipeline-smoke": "node --experimental-test-module-mocks --test scripts/smoke/pipeline-smoke.test.js",
+    "test:live": "node scripts/run-live-tests.mjs"
   },
   "dependencies": {
     "@nut-tree-fork/nut-js": "^4.2.6",

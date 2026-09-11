@@ -126,6 +126,7 @@
       <div class="brand"><div class="dot"></div><h1>GVoice</h1></div>
       <nav class="nav">
         <button class="active" data-sec="speech"><span class="ic">🎙</span> Speech engine</button>
+        <button data-sec="mic"><span class="ic">🎚</span> Microphone</button>
         <button data-sec="ai"><span class="ic">✨</span> AI cleanup</button>
         <button data-sec="dict"><span class="ic">📖</span> Dictionary</button>
         <button data-sec="activity"><span class="ic">📊</span> Activity</button>
@@ -187,6 +188,25 @@
         </div>
 
         <div class="savebar"><button class="btn primary saveBtn" type="button">Save</button><span class="status statusEl"></span></div>
+      </section>
+
+      <!-- MICROPHONE -->
+      <section class="sec" id="mic">
+        <h2>Microphone</h2>
+        <p class="subtitle">Which microphone GVoice listens to, and how ready it keeps it.</p>
+        <div class="card">
+          <div class="row top"><div class="lbl">Keep the microphone ready<small>Ready means your first word is caught even if you start talking as you press.</small></div>
+            <select id="micMode">
+              <option value="always">Always</option>
+              <option value="balanced">For two minutes after I dictate</option>
+              <option value="hold">Only while I hold the key</option>
+            </select></div>
+          <div class="row top"><div class="lbl">Use this microphone<small>Unplug it and GVoice uses the computer's own microphone until it is back.</small></div>
+            <select id="micDevice"><option value="">Whatever the computer is set to</option></select></div>
+          <div class="row"><div class="lbl">Right now</div><span id="micActive" style="color:#8497a8">Checking…</span></div>
+        </div>
+        <div class="savebar"><button class="btn accent" id="micRefresh" type="button">Look again</button><span class="status statusEl"></span></div>
+        <div class="hint">Nothing is recorded or sent anywhere between dictations. Keeping it ready only means the microphone is open, which is why macOS shows its orange dot.</div>
       </section>
 
       <!-- AI -->
@@ -259,9 +279,10 @@
         <p class="subtitle">How you trigger and control dictation.</p>
         <div class="card">
           <div class="row top"><div class="lbl">Hold to dictate</div><span id="scPrimary"><kbd>right Option</kbd></span></div>
-          <div class="row"><div class="lbl">Also works</div><span style="color:#8497a8" id="scAlt">left Ctrl+Cmd · mouse back button</span></div>
+          <div class="row"><div class="lbl">Also works</div><span style="color:#8497a8" id="scAlt">left Ctrl+Cmd · mouse back button (via Better Options, when it's running)</span></div>
+          <div class="row"><div class="lbl">Cancel</div><span style="color:#8497a8"><kbd>Escape</kbd> — stops the dictation without pasting it</span></div>
         </div>
-        <div class="hint">Hold the key, speak, release — the words paste into whatever you're typing in.</div>
+        <div class="hint">Hold the key, speak, release — the words paste into whatever you're typing in. If you switch windows mid-dictation, GVoice won't paste into the wrong app — it shows a "Ready to copy" pill instead; grab the words from the tray's <b>Copy last result</b>.</div>
       </section>
     </main>
 
@@ -278,6 +299,7 @@
           el(b.dataset.sec).classList.add("active");
           if (b.dataset.sec === "activity") loadStats();
           if (b.dataset.sec === "dict") loadDict();
+          if (b.dataset.sec === "mic") loadMic();
         });
       });
 
@@ -320,6 +342,79 @@
           setStatus("Couldn't save — try again.", false);
         }
       }));
+
+      // ---- microphone (saved in preferences.json, not the .env above) ----
+      // Saves the moment you change it: there is nothing to review, and a mic
+      // choice that needed a second click would look broken.
+      let micLoading = false;
+      function micName(id, label) {
+        if (!id) return "the computer's own choice";
+        if (label) return label;
+        return "microphone " + String(id).slice(0, 6) + "…";
+      }
+      function renderMic(res) {
+        if (!res || res.error) { setStatus(res && res.error ? res.error : "Couldn't read your microphones.", false); return; }
+        const prefs = res.prefs || {};
+        const state = res.state || {};
+        el("micMode").value = prefs.micMode || "always";
+        const sel = el("micDevice");
+        const devices = Array.isArray(state.devices) ? state.devices : [];
+        sel.innerHTML = "";
+        const none = document.createElement("option");
+        none.value = ""; none.textContent = "Whatever the computer is set to";
+        sel.appendChild(none);
+        const seen = new Set();
+        for (const d of devices) {
+          if (!d || !d.id || seen.has(d.id)) continue;
+          seen.add(d.id);
+          const o = document.createElement("option");
+          o.value = d.id;
+          o.textContent = d.label || micName(d.id, "");
+          sel.appendChild(o);
+        }
+        // The chosen mic can be unplugged right now – keep it in the list so
+        // the choice does not silently reset itself to the computer's own.
+        if (prefs.preferredMicId && !seen.has(prefs.preferredMicId)) {
+          const o = document.createElement("option");
+          o.value = prefs.preferredMicId;
+          o.textContent = (prefs.preferredMicLabel || micName(prefs.preferredMicId, "")) + " (not plugged in)";
+          sel.appendChild(o);
+        }
+        sel.value = prefs.preferredMicId || "";
+        const preferred = micName(prefs.preferredMicId, prefs.preferredMicLabel);
+        const active = state.open
+          ? micName(state.activeId, state.activeLabel)
+          : "not open (GVoice opens it when you dictate)";
+        const note = state.source === "fallback" ? " – yours isn't plugged in" : "";
+        el("micActive").textContent = "Preferred: " + preferred + " · Active: " + active + note;
+      }
+      async function loadMic() {
+        micLoading = true;
+        try { renderMic(await window.settingsBridge.micGet()); }
+        catch { setStatus("Couldn't read your microphones.", false); }
+        finally { micLoading = false; }
+      }
+      async function saveMic() {
+        if (micLoading) return;
+        const sel = el("micDevice");
+        const opt = sel.options[sel.selectedIndex];
+        setStatus("Saving…", false);
+        try {
+          const res = await window.settingsBridge.micSet({
+            micMode: el("micMode").value,
+            preferredMicId: sel.value,
+            preferredMicLabel: sel.value ? (opt ? opt.textContent.replace(" (not plugged in)", "") : "") : ""
+          });
+          if (res && res.error) { setStatus(res.error, false); return; }
+          micLoading = true;
+          renderMic(res);
+          micLoading = false;
+          setStatus("Saved.", true);
+        } catch { setStatus("Couldn't save – try again.", false); }
+      }
+      el("micMode").addEventListener("change", saveMic);
+      el("micDevice").addEventListener("change", saveMic);
+      el("micRefresh").addEventListener("click", loadMic);
 
       for (const btn of document.querySelectorAll(".reveal")) {
         btn.addEventListener("click", () => {
@@ -530,6 +625,7 @@
 
       // ---- boot ----
       window.settingsBridge.get().then(fill);
+      loadMic();
       initEnginePanel();
     </script>
   </body>

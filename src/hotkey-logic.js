@@ -35,3 +35,80 @@ export function createHoldTracker({ onPress, onRelease } = {}) {
     }
   };
 }
+
+// Escape gives up on the dictation that is running right now: the mic closes
+// and whatever was said is never pasted (see DictationSession.cancel). uiohook
+// reports Escape as keycode 1 on every platform it supports; UiohookKey.Escape
+// is read first so a future table change still works, and the raw number is the
+// fallback for builds whose table is missing it.
+//
+// Nothing is swallowed: the app in front still receives its own Escape. The
+// only reason this is safe to watch globally is that main.js ignores it unless
+// a dictation is actually in flight.
+const ESCAPE_KEYCODE = 1;
+
+/**
+ * Is this keycode the cancel key?
+ *
+ * @param {unknown} code the uiohook keycode from a keydown event
+ * @param {{ Escape?: number }} [keyTable] uiohook's UiohookKey, when available
+ * @returns {boolean}
+ */
+export function isCancelKey(code, keyTable = {}) {
+  if (typeof code !== "number") return false;
+  const named = keyTable && typeof keyTable.Escape === "number" ? keyTable.Escape : null;
+  return code === ESCAPE_KEYCODE || (named !== null && code === named);
+}
+
+/**
+ * Gates the mouse "back" button trigger so a connected companion (Better
+ * Options, step 10) can own the button without the raw toggle here also
+ * firing a press — two triggers racing the same "start dictation" call is
+ * the stuck-mic bug the control socket exists to end.
+ *
+ * uiohook-napi's macOS layer reports LETTING GO of buttons 4/5 as another
+ * press, never a release, so the raw down-edges are treated as a toggle
+ * (first press starts, next press stops) rather than true hold-to-talk —
+ * see src/hotkey.js for the platform note. This wrapper adds only the
+ * enable/disable gate on top of that existing toggle.
+ *
+ * @param {{ onPress?: () => void, onRelease?: () => void }} [callbacks]
+ */
+export function createMouseBackGate({ onPress, onRelease } = {}) {
+  let held = false;
+  let enabled = true;
+  return {
+    /** A raw button-4 down edge arrived. No-op while disabled. */
+    down() {
+      if (!enabled) return;
+      if (held) {
+        held = false;
+        onRelease?.();
+      } else {
+        held = true;
+        onPress?.();
+      }
+    },
+    /** A raw button-4 up edge arrived (platforms/versions that report it). */
+    up() {
+      if (!held) return;
+      held = false;
+      onRelease?.();
+    },
+    /**
+     * Enable or disable the gate. Disabling while the button is physically
+     * down releases the held state too, so dictation can't get stuck open
+     * when a companion connects mid-press.
+     */
+    setEnabled(/** @type {boolean} */ value) {
+      enabled = !!value;
+      if (!enabled && held) {
+        held = false;
+        onRelease?.();
+      }
+    },
+    isHeld() {
+      return held;
+    }
+  };
+}

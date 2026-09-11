@@ -45,3 +45,5 @@ backups/
 .claude/worktrees/
 # Screenshots and other proof captured during a verification run
 .verification/
+# Data folder for scripts/dev-isolated.sh (a dev launch keeps its own).
+.dev-userdata/
