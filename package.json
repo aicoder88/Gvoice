@@ -18,6 +18,8 @@
     "test": "pnpm run test:unit && pnpm run test:parity",
     "test:parity": "node --test --test-force-exit scripts/parity/dictation-flow.test.js",
     "test:cleanup": "node scripts/cleanup-test.js",
+    "test:cleanup-quality": "node scripts/cleanup-quality-test.js",
+    "compare:speech": "node scripts/compare-transcribers.js",
     "test:unit": "node --test scripts/unit/*.test.js",
     "test:pipeline-smoke": "node --experimental-test-module-mocks --test scripts/smoke/pipeline-smoke.test.js"
   },

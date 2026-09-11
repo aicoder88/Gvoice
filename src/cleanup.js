@@ -25,14 +25,10 @@ const GROQ_FALLBACK_KEY = [
 
 /** @type {Record<string, ProviderConfig>} */
 const PROVIDER_DEFAULTS = {
-  // Was llama-4-scout-17b until Groq retired it (2026) — every cleanup call
-  // started 404ing and dictation silently pasted raw text for weeks. Re-picked
-  // 2026-07-27 by running scripts/cleanup-test.js against every model the
-  // shipped key can reach: 70b-versatile scored highest, and at 12k TPM it has
-  // the highest free-tier token limit of the usable candidates (8k for the
-  // gpt-oss/qwen tier, 6k for 8b-instant, which also botches list formatting).
-  // If this 404s again, rerun that harness rather than guessing a successor.
-  groq: { kind: "openai", url: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.3-70b-versatile", keyEnv: "GROQ_API_KEY", fallbackKey: GROQ_FALLBACK_KEY },
+  // 2026-08-25: Groq retired both previous defaults. GPT-OSS 120B preserved
+  // the sample wording and returned in 674ms with the compact prompt below.
+  // GPT-OSS 20B was faster but dropped meaningful words; Qwen timed out.
+  groq: { kind: "openai", url: "https://api.groq.com/openai/v1/chat/completions", model: "openai/gpt-oss-120b", keyEnv: "GROQ_API_KEY", fallbackKey: GROQ_FALLBACK_KEY },
   openai: { kind: "openai", url: "https://api.openai.com/v1/chat/completions", model: "gpt-4.1-mini", keyEnv: "OPENAI_API_KEY" },
   anthropic: { kind: "anthropic", url: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4-5", keyEnv: "ANTHROPIC_API_KEY" },
   google: { kind: "google", url: "https://generativelanguage.googleapis.com/v1beta/models", model: "gemini-2.5-flash-lite", keyEnv: "GOOGLE_AI_KEY" }
@@ -41,10 +37,24 @@ const PROVIDER_DEFAULTS = {
 // Resolve provider/model from the CURRENT env on each call (not at module load),
 // so changing the cleanup engine in Settings applies to the next dictation
 // instead of needing a restart. Defaults to groq (we ship a working free key).
+const RETIRED_GROQ_MODELS = new Set([
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "llama-3.3-70b-versatile"
+]);
+
 function resolveProvider() {
   const name = (process.env.CLEANUP_PROVIDER || "groq").toLowerCase();
   const provider = PROVIDER_DEFAULTS[name] || PROVIDER_DEFAULTS.openai;
-  return { name, provider, model: process.env.CLEANUP_MODEL || provider.model };
+  const configured = process.env.CLEANUP_MODEL || "";
+  const belongsToAnotherProvider = Object.entries(PROVIDER_DEFAULTS)
+    .some(([providerName, settings]) => providerName !== name && settings.model === configured);
+  // Heal existing installs whose private settings still name a retired Groq
+  // model. Also refuse to carry one provider's built-in model into another
+  // provider when Settings changes the provider but leaves CLEANUP_MODEL alone.
+  const model = RETIRED_GROQ_MODELS.has(configured) || belongsToAnotherProvider
+    ? provider.model
+    : (configured || provider.model);
+  return { name, provider, model };
 }
 
 // 2.5s ceiling: cleanup is a fast formatting pass, not a long generation. A call
@@ -52,114 +62,21 @@ function resolveProvider() {
 // old 6s just freezes the paste. On timeout we fall back to the raw transcript.
 const TIMEOUT_MS = Number(process.env.CLEANUP_TIMEOUT_MS || 2500);
 
-// Built per-call so SELF_CORRECTION can omit the self-correction section
-// entirely (a trailing "ignore that section" override isn't reliable — the
-// detailed examples outweigh it for a small model, so the section must actually
-// not be present when the feature is off).
+// Compact on purpose. The previous prompt was 1,315 words and explicitly
+// invited semicolons/dashes. On the same GPT-OSS 120B model it took 2,383ms;
+// this version took 674ms and produced lighter punctuation.
 function buildSystemPrompt(selfCorrectionOn) {
-  return `OUTPUT FORMAT — CRITICAL, READ FIRST:
-Output ONLY the cleaned transcript text. Nothing before it. Nothing after it. No "Here is the cleaned text:", no preamble, no commentary, no thinking, no explanation. Your entire response must be the transcript itself, nothing else. If you produce anything other than the cleaned transcript, it corrupts the user's document.
+  return `Format raw dictation. Return only the finished transcript.
 
-You add punctuation, capitalization, and structure to raw dictation transcripts. You are a transcriptionist, NOT an editor or rewriter. The words are the speaker's; your job is to format them, never to improve them.
-
-PRESERVE THE SPEAKER'S WORDS (this rule outranks every rule below except the list/paragraph layout${selfCorrectionOn ? " and the spoken self-corrections" : ""} described later):
-- Keep the speaker's exact words in the exact order. Do NOT paraphrase, swap in synonyms, or "improve" phrasing to read more smoothly. The only words you may remove are fillers, stutters${selfCorrectionOn ? ", and spans the speaker explicitly retracts (see SPOKEN SELF-CORRECTIONS)" : ""}; the only words you may change are obvious transcription errors. Everything else is verbatim.
-- Never change grammatical voice: active stays active. "Write a prompt to fix this" must stay "Write a prompt to fix this", NEVER "A prompt should be written to fix this".
-- Never change a sentence's mood: a command stays a command, a question stays a question. Do NOT soften "Send the file" into "The file should be sent" or "Could you send the file".
-- Layout exception: turning an enumeration the speaker actually dictated into a numbered or bulleted list (per the rules below) is a formatting change and is allowed, even though it drops the spoken "one/two/three" markers. ${selfCorrectionOn ? "That and a spoken self-correction (see SPOKEN SELF-CORRECTIONS) are the only cases where you may drop or reorder words." : "That is the ONLY case where you may drop or reorder words."}
-
-"Be assertive about structure" below means layout only: punctuation, paragraph breaks, and lists. It NEVER licenses rewriting the speaker's phrasing.
-
-PARAGRAPH BREAKS — use lightly, only when needed:
-- DEFAULT to keeping the output as flowing prose in a single paragraph.
-- Only insert a blank-line paragraph break at a CLEAR topic shift — when the speaker pivots to a different subject, not just adds a related thought.
-- Conjunctions like "But", "However", "Also", "And" rarely justify a new paragraph by themselves — they usually continue the same thought. Only break if the conjunction introduces a genuinely new topic.
-- A long single paragraph (5+ sentences on one topic) is fine. Wall-of-text is only wrong when topics actually change.
-
-BULLET LISTS — use them when the speaker explicitly enumerates with numbers or sequence words:
-
-ALWAYS use a NUMBERED list ("1. ", "2. ", "3. ") when the speaker says any of these enumeration markers, whether the items are full sentences OR inline phrases within one sentence:
-- "one... two... three..." (with or without intervening words)
-- "first... second... third..." (or fourth, fifth, etc.)
-- "step one... step two... step three..."
-- "number one... number two... number three..."
-- "the first thing is... the second thing is... the third thing is..."
-
-CRITICAL: inline enumeration counts too. Patterns like "you're one faster, two better, three more organized" are enumerations and MUST become a numbered list of items "faster", "better", "more organized" — even though the words "one/two/three" appear inline with the items in a single sentence.
-
-ALWAYS use a BULLETED list ("- ") when 3+ concrete items of the same kind are listed in one sentence separated by commas. The introducing sentence ends with a colon, then bullets follow.
-
-Examples that SHOULD become a numbered list:
-- "I wanted a list: one, the first thing; two, the other thing; three, the fourth thing."
-  →
-  "I wanted a list:\\n\\n1. the first thing\\n2. the other thing\\n3. the fourth thing"
-- "Step one, do X. Step two, do Y. Step three, do Z."
-  →
-  "1. do X\\n2. do Y\\n3. do Z"
-- "You think you're one faster, two better, three more organized, and able to finally make a decision."
-  →
-  "You think you're:\\n\\n1. faster\\n2. better\\n3. more organized\\n\\nand able to finally make a decision."
-
-Examples that SHOULD become a bulleted list:
-- "We need eggs, milk, bread, and butter."
-  →
-  "We need:\\n\\n- eggs\\n- milk\\n- bread\\n- butter"
-
-Examples that should STAY AS PROSE (no bullets):
-- "It should have cleaned it, should have put it into sentences, and should have given me a space." — compound clause about one complaint, NOT enumeration.
-- "I think the tool should separate paragraphs, create bullet points, and maybe prompt for follow-up." — a single suggestion with multiple parts.
-
-If a sentence or clause comes AFTER the enumerated list to wrap up or summarize (e.g. "...and then finally give me an output sentence", or "...and able to finally make a decision"), the wrap-up MUST appear on its own line as a fresh paragraph after a blank line. Do NOT append the wrap-up clause onto the last list item. The last list item ends cleanly with no trailing prose attached.
-
-CONCRETE: if the speaker dictates "...one X, two Y, three Z, and then a wrap-up clause", the output structure is:
-
-  Lead-in sentence:
-
-  1. X
-  2. Y
-  3. Z
-
-  Wrap-up clause as its own paragraph.
-
-Note the blank line between item 3 and the wrap-up. Item 3 ends with just "Z", never "Z, and then a wrap-up clause".
-
-If unsure whether something is enumeration or prose, look for explicit number/sequence words. With them → list. Without them → prose.
-
-PUNCTUATION:
-- Add full punctuation: periods, commas at natural pauses, question marks for questions, colons before lists, semicolons or em-dashes for compound clauses.
-- Capitalize sentence starts, proper nouns, "I", and acronyms (PowerPoint, AI, etc.).
-
-FILLER + STUTTER:
-- Remove fillers: "um", "uh", "uhh", "er", "like" (when filler), "you know" (when filler), "sort of" (when filler).
-- Collapse stuttered repetitions ("I I I think" → "I think").
-- Fix obvious transcription mistakes when context makes them clear.
-
-${selfCorrectionOn ? `SPOKEN SELF-CORRECTIONS (the ONE case where you drop content words):
-- When the speaker corrects themselves mid-thought, keep ONLY the corrected version and drop what they retracted. This is the single exception to "preserve every word/sentence" below.
-- Retraction cues: "no wait", "wait no", "no no", "scratch that", "strike that", "I mean", "or rather", "never mind", "nevermind", "sorry" (when fixing, not apologizing), "oops", "let me rephrase", "correction", and "actually"/"no" ONLY when they reverse what was just said.
-- Drop the retracted span, keep the replacement:
-  - "buy milk no wait buy water" → "Buy water."
-  - "tell John, actually tell Sarah" → "Tell Sarah."
-  - "the price is fifty, no, sixty dollars" → "The price is sixty dollars."
-  - "meet at three, sorry, four o'clock" → "Meet at four o'clock."
-- Apply this ONLY when the speaker is clearly replacing what they just said. When the cue is part of the content, keep it verbatim — it is NOT a correction:
-  - "just tell him no" / "the answer is no" → keep "no".
-  - "I actually agree with that" → keep "actually".
-  - "I'm sorry for the delay" → keep "sorry".
-  When unsure whether a phrase is a retraction or content, treat it as content and keep it.
-
-` : ""}PRESERVATION (strict):
-- Preserve the speaker's exact wording, grammatical voice, and sentence mood (see the top rule). Reformatting layout is allowed; rewriting words is not.
-- Preserve the original language. Never translate.
-- Preserve EVERY sentence the speaker dictated${selfCorrectionOn ? ", EXCEPT spans they explicitly retract (see SPOKEN SELF-CORRECTIONS)" : ""}. Do NOT drop, summarize, or omit ${selfCorrectionOn ? "any other" : "ANY"} sentence — even meta-commentary about transcription mistakes. If the speaker said it${selfCorrectionOn ? " and did not take it back" : ""}, keep it.
-- Preserve meaning and intent. Do not add new information, examples, or commentary of your own.
-- Do not add greetings, sign-offs, or framing like "Here is the cleaned text".
-- It is better to leave a sentence rough than to delete it.
-
-OUTPUT:
-- Output the cleaned text only. No quotes around it. No preamble. No explanation. Use real newlines, not literal \\n.`;
+- Keep every spoken word in the same order. Never rewrite, paraphrase, translate, improve grammar, or change a command into a suggestion.
+- Keep spoken number words as words. Never turn them into digits, currency signs, or other symbols.
+- Add minimal, natural punctuation and capitalization. Use the final comma in a list of three or more items. Do not put a comma before and when it joins two thoughts. Use a comma before but or ali when they join complete thoughts. Do not add semicolons or dashes. Keep one paragraph unless the topic clearly changes.
+- Remove only um, uh, uhh, er, erm, and repeated stutters. Keep like, you know, sort of, okay, and so.
+${selfCorrectionOn ? "- When the speaker clearly replaces earlier words, keep only the correction: 'buy milk, no wait, buy water' becomes 'Buy water.' 'The price is fifty, sorry, sixty dollars' becomes 'The price is sixty dollars.' 'Use red, scratch that, use blue' becomes 'Use blue.' Keep no, actually, and sorry when they are ordinary content.\n" : ""}- Always make a numbered list when the speaker explicitly gives at least three ordered items such as first/second/third or one/two/three. Remove only those spoken markers. Keep every lead-in and wrap-up word, and put the wrap-up after the list in its own paragraph. Otherwise keep prose.
+- Example: 'I need one speed, two accuracy, three polish, and then send it' becomes 'I need:\n\n1. speed\n2. accuracy\n3. polish\n\nAnd then send it.'
+- Preserve the original language, exact wording, and sentence mood. When unsure, change less.
+- Output the transcript only. No preamble, quotes, notes, or code fences.`;
 }
-
 // Unambiguous, multi-word spoken-retraction cues. The prompt judges the subtle
 // cases (a bare "no"/"actually" in context); this is only the routing gate —
 // when a cue here appears, main.js runs cleanup even on a short/clean utterance
@@ -179,6 +96,145 @@ export function looksLikeRetraction(text) {
   return typeof text === "string" && RETRACTION_CUES.test(text);
 }
 
+const SAFE_FILLERS = new Set(["um", "uh", "uhh", "er", "erm"]);
+const ORDER_WORDS = new Map([
+  ["one", 1], ["first", 1],
+  ["two", 2], ["second", 2],
+  ["three", 3], ["third", 3],
+  ["four", 4], ["fourth", 4],
+  ["five", 5], ["fifth", 5]
+]);
+const CORRECTION_PATTERNS = [
+  ["let", "me", "rephrase"],
+  ["scratch", "that"],
+  ["strike", "that"],
+  ["never", "mind"],
+  ["no", "wait"],
+  ["wait", "no"],
+  ["i", "mean"],
+  ["or", "rather"],
+  ["no", "no"],
+  ["actually"],
+  ["sorry"],
+  ["oops"],
+  ["correction"]
+];
+
+function words(text) {
+  return String(text || "")
+    .normalize("NFKC")
+    .replace(/[‘’]/g, "'")
+    .toLocaleLowerCase()
+    .match(/[\p{L}\p{N}]+(?:'[\p{L}\p{N}]+)*/gu) || [];
+}
+
+function withoutListMarkers(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, ""))
+    .join("\n");
+}
+
+function isSubsequence(whole, part) {
+  let j = 0;
+  for (const token of whole) if (token === part[j]) j += 1;
+  return j === part.length;
+}
+
+function strictWordMatch(source, output, cleanedText) {
+  const optional = new Set();
+  for (let i = 0; i < source.length; i += 1) {
+    if (SAFE_FILLERS.has(source[i])) optional.add(i);
+    if (source[i] === source[i - 1] || source[i] === source[i + 1]) optional.add(i);
+  }
+
+  // Spoken one/two/three markers may disappear only when the result really is
+  // a visible list. Two-item counts remain ordinary content and are required.
+  const madeList = /^\s*(?:[-*•]|\d+[.)])\s+/m.test(cleanedText);
+  if (madeList) {
+    const ordered = source
+      .map((token, index) => ({ index, n: ORDER_WORDS.get(token) || 0 }))
+      .filter((item) => item.n > 0);
+    let run = [];
+    for (const item of ordered) {
+      if (item.n === 1) run = [item];
+      else if (run.length && item.n === run[run.length - 1].n + 1) run.push(item);
+      if (run.length >= 3) for (const entry of run) optional.add(entry.index);
+    }
+  }
+
+  let j = 0;
+  for (let i = 0; i < source.length; i += 1) {
+    if (source[i] === output[j]) {
+      j += 1;
+      continue;
+    }
+    if (!optional.has(i)) return false;
+  }
+  return j === output.length;
+}
+
+function correctionCue(tokens) {
+  let found = null;
+  for (const pattern of CORRECTION_PATTERNS) {
+    for (let i = 0; i <= tokens.length - pattern.length; i += 1) {
+      if (!pattern.every((token, offset) => tokens[i + offset] === token)) continue;
+      const hasEarlierWords = i > 0;
+      const canStartThought = pattern[0] === "scratch" || pattern[0] === "strike" || pattern[0] === "correction";
+      const hasReplacement = i + pattern.length < tokens.length;
+      // "I actually agree" and "I'm sorry for the delay" are content, not
+      // corrections. A one-word cue needs a real clause before and after it.
+      const singleLooksLikeCorrection = pattern.length > 1 || (i >= 2 && hasReplacement);
+      if ((hasEarlierWords || canStartThought) && hasReplacement && singleLooksLikeCorrection) {
+        found = { start: i, end: i + pattern.length };
+      }
+    }
+  }
+  return found;
+}
+
+/**
+ * Refuse a polished result that adds, replaces, translates, or rearranges the
+ * speaker's words. Punctuation/case/layout are free. Only clear fillers,
+ * stutters, list markers, and a bounded spoken correction may disappear.
+ * @param {string} rawText
+ * @param {string} cleanedText
+ * @param {boolean} [selfCorrectionOn]
+ */
+export function preservesSpeakerWords(rawText, cleanedText, selfCorrectionOn = true) {
+  const source = words(rawText);
+  const output = words(withoutListMarkers(cleanedText));
+  if (!source.length || !output.length) return source.length === output.length;
+  if (strictWordMatch(source, output, cleanedText)) return true;
+  if (!selfCorrectionOn || !isSubsequence(source, output)) return false;
+
+  const cue = correctionCue(source);
+  if (!cue) return false;
+  const tail = source.slice(cue.end).filter((token) => !SAFE_FILLERS.has(token));
+  if (!tail.length || !isSubsequence(output, tail)) return false;
+  if (cue.start > 0 && output[0] !== source[0]) return false;
+
+  // Prevent a model from calling a one-word replacement an excuse to discard
+  // the rest of a long dictation. Genuine short corrections still pass:
+  // "buy milk no wait buy water" retains 2 of 4 non-cue words.
+  const nonCueCount = source.length - (cue.end - cue.start);
+  return output.length / Math.max(1, nonCueCount) >= 0.45;
+}
+
+/**
+ * Minimum useful polish when the model's proposed wording is unsafe. This is
+ * deliberately local and word-preserving: trim, capitalize the first letter,
+ * and give an unfinished statement a final period.
+ * @param {string} rawText
+ */
+export function formatRawFallback(rawText) {
+  const trimmed = String(rawText || "").trim();
+  if (!trimmed) return trimmed;
+  const capitalized = trimmed.replace(/\p{L}/u, (letter) => letter.toLocaleUpperCase());
+  if (/[.!?…]$/.test(capitalized)) return capitalized;
+  return capitalized.replace(/[,:;]+$/, "") + ".";
+}
+
 // Why this exists: polishTranscript never throws — it logs and hands back the
 // raw text. That is the right runtime behaviour (a dead cleanup engine must not
 // cost you the dictation), but it made a TOTAL outage invisible: when Groq
@@ -194,11 +250,11 @@ let lastCleanupError = null;
 let transientFailures = 0;
 const TRANSIENT_FAILURES_BEFORE_WARNING = 3;
 
-// Shown when the free tier's per-minute cap sends back a 429. Plain words, and
-// short enough to fit the pill: the shipped Groq key allows ~12k tokens/minute
-// and one cleanup costs ~2.2k, so about five dictations a minute. Past that the
-// text is pasted exactly as spoken until the minute rolls over.
+// Shown when the free tier's per-minute cap sends back a 429. Plain words and
+// short enough to fit the pill. The compact prompt makes many more calls fit
+// than the former 1,315-word version, but a rapid burst can still hit the cap.
 export const FREE_LIMIT_MESSAGE = "Hit the free tidy-up limit — typed as you said it. Clears in a minute.";
+export const FREE_DAILY_LIMIT_MESSAGE = "Today's free tidy-up allowance is used — typed as you said it. Try again after the daily reset.";
 
 // Shown when the engine is actually broken (model retired, key revoked) rather
 // than rate-limited. This string goes on the pill and into a system
@@ -228,8 +284,9 @@ export function resetCleanupFailureStreak() {
 
 /**
  * Send `rawText` to the configured cleanup provider with the system prompt.
- * Returns the cleaned text on success, the original on any failure (missing
- * API key, network error, timeout, non-2xx). Never throws.
+ * Returns the cleaned text on success, the original on a service failure, and
+ * a word-preserving minimum polish when an unsafe model result is rejected.
+ * Never throws.
  *
  * @param {string} rawText
  * @returns {Promise<string>}
@@ -274,12 +331,13 @@ export async function polishTranscript(rawText) {
     rawText +
     "\n<<<END>>>";
 
-  const req = buildRequest(provider, apiKey, model, systemPrompt + vocabHint, userContent);
+  const maxOutputTokens = Math.min(4096, Math.max(256, Math.ceil(rawText.length / 2)));
+  const req = buildRequest(provider, apiKey, model, systemPrompt + vocabHint, userContent, maxOutputTokens);
 
   // One quick retry on a transient hiccup (5xx, dropped connection) so a single
   // bad moment doesn't silently fall back to the raw, unformatted transcript.
-  // A 429 is the exception: the shared free key's rate limit resets per MINUTE,
-  // so an immediate retry just 429s again — pure wasted latency the user feels.
+  // A 429 is the exception: minute and daily limits never clear during an
+  // immediate retry, so a second call is pure wasted latency the user feels.
   // Fail fast on 429 (fall back to raw); still retry 5xx/408/network errors.
   // Each attempt gets its own timeout budget; an abort (the request genuinely ran
   // out of time) is NOT retried — retrying would only double the wait.
@@ -315,21 +373,35 @@ export async function polishTranscript(rawText) {
     );
     const cleaned = parseResponse(provider, data);
     transientFailures = 0;
-    return (cleaned && cleaned.trim()) || rawText;
+    const candidate = (cleaned && cleaned.trim()) || "";
+    if (!candidate) return rawText;
+    const selfCorrectionOn = process.env.SELF_CORRECTION !== "false";
+    let dictionaryCorrected = rawText;
+    try { dictionaryCorrected = vocab.correctTranscript(rawText); } catch {}
+    const wordsAreSafe =
+      preservesSpeakerWords(rawText, candidate, selfCorrectionOn) ||
+      (dictionaryCorrected !== rawText && preservesSpeakerWords(dictionaryCorrected, candidate, selfCorrectionOn));
+    if (!wordsAreSafe) {
+      console.error(`Cleanup changed speaker wording (${providerName}/${model}); using original text`);
+      return formatRawFallback(rawText);
+    }
+    return candidate;
   } catch (error) {
     if (error instanceof RetryableHttpError || error instanceof HttpError) {
       console.error(`Cleanup HTTP ${error.status} (${providerName}/${model}): ${error.body}`);
       // A 404/401 is the engine actually broken (model retired, key revoked) and
-      // stays broken. A 429 is the free key's per-minute cap — it clears on its
-      // own, but the dictation it hit is ALREADY pasted unformatted, and the user
+      // stays broken. A 429 is a free minute/day cap — it clears on its own,
+      // but the dictation it hit is ALREADY pasted unformatted, and the user
       // asked to be told each time that happens rather than have it swallowed.
-      // Reported on the first hit (the pill carries it; main.js still limits the
+      // Reported on every hit (the pill carries it; main.js still limits the
       // system notification to once per run).
       if (error.status !== 429) {
         lastCleanupError = ENGINE_DOWN_MESSAGE;
       } else {
         transientFailures += 1;
-        lastCleanupError = FREE_LIMIT_MESSAGE;
+        lastCleanupError = /per day|\bTPD\b/i.test(error.body || "")
+          ? FREE_DAILY_LIMIT_MESSAGE
+          : FREE_LIMIT_MESSAGE;
       }
     } else {
       console.error("Cleanup error:", error && error.message);
@@ -348,9 +420,10 @@ export async function polishTranscript(rawText) {
  * @param {string} model
  * @param {string} systemPrompt
  * @param {string} userText
+ * @param {number} maxOutputTokens
  * @returns {{ url: string, headers: Record<string, string>, body: string }}
  */
-function buildRequest(provider, apiKey, model, systemPrompt, userText) {
+function buildRequest(provider, apiKey, model, systemPrompt, userText, maxOutputTokens) {
   if (provider.kind === "anthropic") {
     return {
       url: provider.url,
@@ -379,20 +452,30 @@ function buildRequest(provider, apiKey, model, systemPrompt, userText) {
       })
     };
   }
+  /** @type {Record<string, any>} */
+  const body = {
+    model,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userText }
+    ],
+    temperature: 0
+  };
+  if (provider.url.includes("api.groq.com") && model.startsWith("openai/gpt-oss-")) {
+    body.reasoning_effort = "low";
+    body.max_completion_tokens = maxOutputTokens;
+    // Groq makes a best effort to repeat the same result for the same seed.
+    // That stops harmless but distracting punctuation/capitalization drift
+    // between identical dictations.
+    body.seed = 1;
+  }
   return {
     url: provider.url,
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userText }
-      ],
-      temperature: 0
-    })
+    body: JSON.stringify(body)
   };
 }
 

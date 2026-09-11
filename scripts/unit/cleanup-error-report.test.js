@@ -62,9 +62,8 @@ test("the report is consumed once, so one outage isn't announced every utterance
   assert.equal(takeCleanupError(), null, "second read is empty until it fails again");
 });
 
-// The free tier is ~12k tokens/minute and one cleanup costs ~2.2k, so about
-// five dictations a minute. Every 429 past that is a dictation that went in
-// unformatted — the user asked to be told each time, so it is reported on the
+// Every 429 is a dictation that went in unformatted. The user asked to be told
+// each time, so it is reported on the
 // FIRST hit. main.js puts it on that dictation's pill and deliberately does NOT
 // raise a system notification for it: the cap clears itself within the minute.
 test("a 429 is reported on the first hit — that dictation went in unformatted", async () => {
@@ -76,6 +75,17 @@ test("a 429 is reported on the first hit — that dictation went in unformatted"
   assert.match(String(takeCleanupError()), /free tidy-up limit/i);
 });
 
+test("a daily 429 identifies the daily reset, not a minute", async () => {
+  useGroq();
+  stubFetch(429, '{"error":{"message":"Rate limit on tokens per day (TPD)"}}');
+
+  assert.equal(await polishTranscript(SAMPLE), SAMPLE);
+  const warning = String(takeCleanupError());
+  assert.match(warning, /today's free tidy-up allowance/i);
+  assert.match(warning, /daily reset/i);
+  assert.doesNotMatch(warning, /minute/i);
+});
+
 test("every later 429 is reported too, one per dictation", async () => {
   useGroq();
   stubFetch(429, '{"error":{"message":"Rate limit reached"}}');
@@ -84,6 +94,21 @@ test("every later 429 is reported too, one per dictation", async () => {
   takeCleanupError();
   await polishTranscript(SAMPLE);
   assert.match(String(takeCleanupError()), /free tidy-up limit/i);
+});
+
+test("100 rapid limit failures all preserve the dictation and report the problem", async () => {
+  useGroq();
+  stubFetch(429, '{"error":{"message":"Rate limit reached"}}');
+  const realError = console.error;
+  console.error = () => {};
+  try {
+    for (let i = 0; i < 100; i += 1) {
+      assert.equal(await polishTranscript(SAMPLE), SAMPLE);
+      assert.match(String(takeCleanupError()), /free tidy-up limit/i);
+    }
+  } finally {
+    console.error = realError;
+  }
 });
 
 // A single blip must stay quiet. A 2.5s timeout is not an outage, and the pill
@@ -123,10 +148,10 @@ test("a success in between clears the streak, so scattered blips stay quiet", as
 
 test("a successful pass reports nothing", async () => {
   useGroq();
-  stubFetch(200, JSON.stringify({ choices: [{ message: { content: "So I think we should ship this tomorrow." } }] }));
+  stubFetch(200, JSON.stringify({ choices: [{ message: { content: "So, like, I think we should ship this thing tomorrow." } }] }));
 
   const out = await polishTranscript(SAMPLE);
-  assert.equal(out, "So I think we should ship this tomorrow.");
+  assert.equal(out, "So, like, I think we should ship this thing tomorrow.");
   assert.equal(takeCleanupError(), null);
 });
 
@@ -158,4 +183,41 @@ test("the custom dictionary rides on the system prompt, never the user message",
   assert.match(system.content, /Debezium/, "the dictionary belongs in the system prompt");
   assert.doesNotMatch(user.content, /Debezium/, "and nowhere near the transcript");
   assert.match(user.content, /<<<TRANSCRIPT>>>/);
+});
+
+test("an approved dictionary spelling can pass the word safety check", async () => {
+  useGroq();
+  const { init: initVocab, addTerm } = await import("../../src/vocab.js");
+  const store = join(tmpdir(), `gvoice-vocab-guard-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  initVocab(store);
+  addTerm("Debezium");
+  stubFetch(200, JSON.stringify({ choices: [{ message: { content: "Debezium is ready." } }] }));
+
+  const out = await polishTranscript("Debezum is ready");
+  rmSync(store, { force: true });
+  assert.equal(out, "Debezium is ready.");
+});
+
+test("switching cleanup providers never carries the other provider's built-in model", async () => {
+  process.env.CLEANUP_PROVIDER = "openai";
+  process.env.CLEANUP_MODEL = "openai/gpt-oss-120b";
+  process.env.OPENAI_API_KEY = "test-key-not-real";
+  let sent = null;
+  globalThis.fetch = async (url, init) => {
+    sent = { url: String(url), body: JSON.parse(String(init.body)) };
+    return new Response(JSON.stringify({ choices: [{ message: { content: "So, like, I think we should ship this thing tomorrow." } }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  await polishTranscript(SAMPLE);
+  assert.match(sent.url, /api\.openai\.com/);
+  assert.equal(sent.body.model, "gpt-4.1-mini");
+
+  process.env.CLEANUP_PROVIDER = "groq";
+  process.env.CLEANUP_MODEL = "gpt-4.1-mini";
+  await polishTranscript(SAMPLE);
+  assert.match(sent.url, /api\.groq\.com/);
+  assert.equal(sent.body.model, "openai/gpt-oss-120b");
 });

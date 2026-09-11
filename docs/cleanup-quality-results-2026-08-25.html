@@ -1,0 +1,15 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>GVoice cleanup quality results</title>
+<style>body{font:16px/1.55 system-ui;max-width:850px;margin:40px auto;padding:0 20px;color:#1c1c1c}section{border-top:1px solid #ccc;padding:20px 0}.good{color:#1f6f43}.risk{color:#9b2c2c}h1,h2{line-height:1.2}li{margin:8px 0}</style></head><body>
+<h1>GVoice cleanup quality results - 25 August 2026</h1>
+<p class="risk"><strong>Final 120-call run incomplete:</strong> repeated tuning used the free account's 200,000-piece daily allowance. Seventeen final cases completed before the daily ceiling. The app preserved every affected sentence and showed a warning.</p>
+<section><h2>Strong evidence</h2><ul>
+<li class="good">The 13-case live behavior check passed 13 of 13. Average wait: 560 ms.</li>
+<li>A complete earlier 40-case, three-try run passed 39 of 40. The slowest 5% took 754 ms. The only miss was an optional comma in mixed Croatian and English.</li>
+<li>The added comma rule then passed that mixed-language case three times.</li>
+<li>After the final style rules, grocery prose and customer prose each repeated identically across ten tries. Their slowest runs were 545 ms and 540 ms.</li>
+<li>Correction, list-wrap, Croatian, and mixed-language fixes passed their focused repeats.</li>
+<li>All 177 local checks pass. One check sends 100 rapid free-limit failures and confirms every sentence survives with a visible warning.</li>
+</ul></section>
+<section><h2>Coverage</h2><p>The reusable set contains exactly 40 examples: 15 prose, 8 questions or commands, 6 spoken corrections, 5 numbered lists, 3 Croatian, and 3 mixed Croatian and English.</p></section>
+<section><h2>Decision still needed</h2><p>The 40 examples are representative but synthetic. The owner must approve their punctuation choices before they can honestly be called owner-approved. Rerun <code>pnpm run test:cleanup-quality</code> after the daily allowance resets to produce one uninterrupted final result.</p></section>
+</body></html>

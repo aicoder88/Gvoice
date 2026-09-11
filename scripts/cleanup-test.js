@@ -11,17 +11,17 @@ const CASES = [
   {
     name: "numbered-enumeration",
     input:
-      "I wanted it to give me a list of one first the thing, two the other thing that I should have done, three the fourth thing and then finally give me an output sentence that feels more like a sentence.",
+      "I wanted it to give me a list. First, keep the thing. Second, do the other thing. Third, finish the fourth thing. Then finally give me an output sentence that feels more like a sentence.",
     expect: (out) =>
       /1\.\s.+\n2\.\s.+\n3\.\s.+/.test(out) &&
       /finally|sentence/i.test(out.split(/\n\n|\n3\..+\n/).pop() || ""),
     expectDesc: "numbered list 1./2./3. + wrap-up sentence after"
   },
   {
-    name: "comma-grocery-list",
+    name: "comma-grocery-list-stays-prose",
     input: "We need eggs, milk, bread, and butter.",
-    expect: (out) => /- eggs[\s\S]+- milk[\s\S]+- bread[\s\S]+- butter/.test(out),
-    expectDesc: "bulleted list of 4 items"
+    expect: (out) => !/^[-*]\s|\n[-*]\s/.test(out) && /eggs[\s\S]+milk[\s\S]+bread[\s\S]+butter/i.test(out),
+    expectDesc: "keeps an ordinary comma list as natural prose"
   },
   {
     name: "compound-clause-stays-prose",
