@@ -80,7 +80,7 @@ GVoice side and can start right after 1.
 
 ## Steps
 
-### 1. Worktree, packages, honest baseline count [gpt-6-astra/low]
+### 1. Worktree, packages, honest baseline count [gpt-6-astra/low] DONE
 
 In `/Users/macmini/dev/voice`: `git worktree add .claude/worktrees/daily-use -b worktree-daily-use`
 off local `main` (do not pull; the two remote commits are docs). Leave the uncommitted
@@ -92,7 +92,7 @@ Add a `## Claims` line to this plan naming the worktree.
 -> verify: `pnpm test:unit` in the worktree exits 0, or the report names every failing file
 and the failure is not `ERR_MODULE_NOT_FOUND`. `swift build` exits 0.
 
-### 2. Isolate a dev launch from the installed app [gpt-6-astra/medium]
+### 2. Isolate a dev launch from the installed app [gpt-6-astra/medium] DONE
 
 Add `GVOICE_USER_DATA` (absolute path). When set, `main.js` calls
 `app.setPath("userData", …)` before `ready` and every derived path (recordings, history,
@@ -105,7 +105,7 @@ start time and userData path all match. Add `scripts/dev-isolated.sh` that launc
 whisper-server` shows two engines, and the installed app's engine pid from before the launch
 is still alive after the dev app quits. Unit test covers the three-field ownership match.
 
-### 3. Offline checks never touch keys or provider allowances [gpt-6-astra/low]
+### 3. Offline checks never touch keys or provider allowances [gpt-6-astra/low] DONE
 
 Make `pnpm test:unit`, `test:parity` and `test:pipeline-smoke` run with `.env` ignored
 (`GVOICE_NO_ENV=1` honoured in `src/bootstrap-env.js`) and with every network provider
@@ -114,7 +114,7 @@ unless `GVOICE_LIVE=1` is set. Document both in `SETUP.md`.
 -> verify: `env -i PATH=$PATH HOME=$HOME pnpm test:unit` passes with `.env` renamed away
 (rename back after). `pnpm test:live` without `GVOICE_LIVE=1` exits 0 with "skipped".
 
-### 4. Measure before changing anything [gpt-6-astra/medium]
+### 4. Measure before changing anything [gpt-6-astra/medium] DONE
 
 Using `scripts/verify-warm-standby.mjs`, `src/benchmark-run.js` and the fixture audio in
 `scripts/parity/fixtures/` through the local Whisper engine (`ggml-small.en-q5_1.bin`),
@@ -123,7 +123,7 @@ Then five minutes idle: CPU (`ps -o %cpu`), RSS, number of live capture graphs, 
 uploaded (must be 0). Append the medians to `docs/reports/daily-use-baseline-2026-09-10.md`.
 -> verify: the report has all five medians with the command that produced each one.
 
-### 5. One session ID from press to paste [gpt-6-astra/high]
+### 5. One session ID from press to paste [gpt-6-astra/high] DONE
 
 `DictationSession` gets an immutable `id` (monotonic, plus a random suffix) issued by
 `tryStart()`. Every renderer event (`transcript`, `error`, `mic-warning`, `partial`) and
@@ -136,7 +136,7 @@ pasted.
 deliver A's transcript → history entry, no paste; B's transcript pastes. Renderer test
 asserts every emitted event carries `sessionId`.
 
-### 6. Session state machine with idempotent stop and cancel [gpt-6-astra/high]
+### 6. Session state machine with idempotent stop and cancel [gpt-6-astra/high] DONE
 
 States: `idle → recording → processing → (completed | cancelled | failed) → idle`. One
 transition function; illegal transitions log and return false. `release()` twice is a
@@ -146,7 +146,7 @@ bare `busy = false`.
 -> verify: unit tests for every legal and illegal transition, duplicate stop, cancel
 during cleanup (transcript arrives after cancel → no paste, history "cancelled").
 
-### 7. Check the destination again before pasting [gpt-6-astra/high]
+### 7. Check the destination again before pasting [gpt-6-astra/high] DONE
 
 At press, `src/foreground.js` (macOS branch) records the frontmost app's bundle id, pid,
 window number and, when Accessibility allows, the focused element's role. Store it on the
@@ -158,7 +158,7 @@ the text on the clipboard, show the pill "Ready to copy · ⌘V", add a history 
 clipboard holds text, no paste call, history entry present. Manual: hold, switch windows
 during "Transcribing…", see the pill and paste by hand.
 
-### 8. Clipboard as one serialised transaction [gpt-6-astra/medium]
+### 8. Clipboard as one serialised transaction [gpt-6-astra/medium] DONE
 
 In `src/typing.js`: a single queue so two deliveries never interleave. Snapshot the
 clipboard (text, image, and RTF/HTML when present via `clipboard.availableFormats()`).
@@ -167,7 +167,7 @@ copy in between wins and is never overwritten. Remove the bare 250 ms timer.
 -> verify: unit test with a fake clipboard: (a) restore happens when unchanged, (b) restore
 is skipped when the user copied "other" mid-paste, (c) an image survives a dictation.
 
-### 9. Cancel and Copy last result [gpt-6-astra/medium]
+### 9. Cancel and Copy last result [gpt-6-astra/medium] DONE
 
 Escape while the pill shows recording/processing, and a click on the pill, call
 `cancel()` (step 6). Tray menu gains "Copy last result" (reads the newest history entry).
@@ -177,7 +177,7 @@ are off.
 "Cancelled"; "Copy last result" puts the last text on the clipboard. Unit test: cancel
 sets `cancelled` and delivery is skipped.
 
-### 10. GVoice control socket for the companion [gpt-6-astra/high]
+### 10. GVoice control socket for the companion [gpt-6-astra/high] DONE
 
 `src/control-socket.js`: `net.createServer` on `<userData>/control/gvoice.sock`, directory
 mode 0700, socket unlinked on start and quit. Protocol v1, newline-delimited JSON, frames
@@ -192,7 +192,7 @@ as in `main.js` (`MAX_HOLD_MS`). Unknown version → `refuse {reason: "version"}
 malformed frame, oversize frame, heartbeat timeout ending a recording, start/stop with
 session IDs. `ls -ld <userData>/control` shows `drwx------`.
 
-### 11. Better Options talks to the socket [gpt-6-astra/high]
+### 11. Better Options talks to the socket [gpt-6-astra/high] DONE
 
 Replace the body of `GVoiceIntegration.swift`: an `NWConnection` to
 `NWEndpoint.unix(path:)` at `~/Library/Application Support/GVoice/control/gvoice.sock`
@@ -209,7 +209,7 @@ side button: the socket log shows `start`, release shows `stop`, and no `flagsCh
 events appear in `log stream --predicate 'process == "BetterOptions"'`. Kill GVoice
 mid-hold: menu flips to "not running" and the next press passes through.
 
-### 12. Retire the raw mouse toggle while a companion owns the button [gpt-6-astra/low]
+### 12. Retire the raw mouse toggle while a companion owns the button [gpt-6-astra/low] DONE
 
 In `src/hotkey.js`, expose `setMouseBackEnabled(bool)`. `main.js` disables it while a
 companion is connected (step 10) and re-enables on disconnect. Keyboard triggers unchanged.
@@ -218,7 +218,7 @@ Windows path untouched.
 `hotkey-mouse-gate.test.js`: with the gate off, mouse button 4 events produce no press.
 Manual: with Better Options connected, one button press starts exactly one recording.
 
-### 13. Better Options control faults: confirm, then fix [gpt-6-astra/high]
+### 13. Better Options control faults: confirm, then fix [gpt-6-astra/high] DONE
 
 For each claim below, first reproduce it in code or on the running app; fix only what
 reproduces and log the rest as "not reproduced" in `docs/reports/daily-use-better-options-2026-09-10.md`
@@ -232,7 +232,7 @@ released on disconnect, permission loss, remap change, disable, sleep or quit.
 lists each of (a)–(e) as fixed-with-repro or not-reproduced. Manual: quit with remapping
 off, relaunch, menu shows off.
 
-### 14. Better Options settings: per-device reset, visible save failures, wheel controls [gpt-6-astra/medium]
+### 14. Better Options settings: per-device reset, visible save failures, wheel controls [gpt-6-astra/medium] DONE
 
 `resetToDefaults(deviceID:)` replaces only that device's bindings; keyboard reset restores
 pass-through, mouse reset restores the existing defaults. `persist()` failure shows an
@@ -244,7 +244,7 @@ defaults equal to today's behaviour.
 with two devices: reset one, the other's bindings are unchanged (settings-check case).
 Manual: make the settings file read-only, change a binding, see the alert.
 
-### 15. Microphone modes, preferred mic, and calm recovery [gpt-6-astra/high]
+### 15. Microphone modes, preferred mic, and calm recovery [gpt-6-astra/high] DONE
 
 New preferences file `<userData>/preferences.json` (never `.env`): `micMode`
 (`always` | `balanced` | `hold`), `preferredMicId`, `preferredMicLabel`. `public/dictation.js`
@@ -259,7 +259,7 @@ promise; quiet audio alone never triggers a device switch or a renderer reload.
 fallback/return rule. Manual on the isolated dev app: pick the Anker mic, quit, relaunch,
 settings show it selected and `currentDeviceId` matches it in the debug log.
 
-### 16. One status line each, and current wording [gpt-6-astra/low]
+### 16. One status line each, and current wording [gpt-6-astra/low] DONE
 
 Settings page and tray show four lines: Microphone, Engine, Companion (Better Options),
 Permissions, each with one action button when something is wrong ("Open Accessibility",
@@ -270,7 +270,7 @@ Copy last result; mic modes).
 public/settings.html` returns only the keyboard-chord description. Screenshot of the
 settings page saved to `.verification/`.
 
-### 17. Regression bundle and before/after numbers [gpt-6-astra/medium]
+### 17. Regression bundle and before/after numbers [gpt-6-astra/medium] DONE
 
 Run the full offline set: `pnpm test:unit`, `pnpm test:parity`, `pnpm test:pipeline-smoke`,
 plus the new socket, session, clipboard and mic tests. Repeat step 4's measurements on the
@@ -281,7 +281,7 @@ idle shows one capture graph, flat RSS (±10 MB) and 0 bytes uploaded.
 -> verify: every command exits 0 and the results report has the before/after table with
 each target marked met or not met.
 
-### 18. Build both apps, keep rollback copies, replace the installed ones, prove it live [gpt-6-astra/high] GATED
+### 18. Build both apps, keep rollback copies, replace the installed ones, prove it live [gpt-6-astra/high] GATED - APPROVED AND DONE 2026-09-11
 
 Build `dist/mac-arm64/GVoice.app` (`pnpm build`) and `dist/BetterOptions.app`
 (`scripts/build_app_bundle.sh`). Copy the current `/Applications/GVoice.app` and
@@ -315,6 +315,12 @@ times; the results report has every check above marked seen or unverified.
 
 ## Claims
 
+- 2026-09-11, Mac mini, Claude session (.claude-ulix): step 18 approved by Drago and DONE.
+  Both apps rebuilt, old ones copied to `backups/installed-2026-09-10/` in each repo, and
+  replaced in `/Applications`. Both relaunched and talking over the socket. Physical checks
+  still open - see the run report.
+- 2026-09-10, Mac mini, Claude session (.claude-ulix): FINISHED steps 1-17 via `/tier`. 15 local commits on `worktree-daily-use`, nothing pushed.
+  Results: `docs/reports/daily-use-run-2026-09-10.md`. Hands-on checks still open - see it.
 - 2026-09-10, Mac mini, Claude session (.claude-ulix): started this plan via `/tier`.
   Running steps 1-17 in the worktree `/Users/macmini/dev/voice/.claude/worktrees/daily-use`
   (branch `worktree-daily-use`) and in `/Users/macmini/dev/better-options` on `main`.
