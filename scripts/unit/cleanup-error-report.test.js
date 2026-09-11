@@ -92,18 +92,43 @@ test("a rate-limited fallback is NOT remembered — the next dictation retries t
   ]);
 });
 
-test("an explicit cleanup model never silently falls back", async () => {
+test("an explicit cleanup model is never swapped for being busy", async () => {
   useGroq();
   process.env.CLEANUP_MODEL = "my-pinned-model";
   const requestedModels = [];
   globalThis.fetch = async (_url, init) => {
     requestedModels.push(JSON.parse(String(init.body)).model);
-    return new Response('{"error":{"message":"model_not_found"}}', { status: 404 });
+    return new Response('{"error":{"message":"rate limit"}}', { status: 429 });
   };
 
   assert.equal(await polishTranscript(SAMPLE), SAMPLE);
   assert.deepEqual(requestedModels, ["my-pinned-model"]);
-  assert.match(String(takeCleanupError()), /tidy-up isn't working/i);
+});
+
+// A pinned model that the provider has retired is a dead pointer, not a
+// choice: honouring it left this app pasting unformatted text for weeks. It
+// falls over to the built-in models, says so once, and skips the dead name on
+// every later dictation.
+test("a retired pinned model falls over to the built-in one and says so", async () => {
+  useGroq();
+  process.env.CLEANUP_MODEL = "my-pinned-model";
+  const requestedModels = [];
+  globalThis.fetch = async (_url, init) => {
+    const model = JSON.parse(String(init.body)).model;
+    requestedModels.push(model);
+    return model === "my-pinned-model"
+      ? new Response('{"error":{"message":"model_not_found"}}', { status: 404 })
+      : new Response('{"choices":[{"message":{"content":"Cleaned by the built-in one."}}]}', { status: 200 });
+  };
+
+  assert.equal(await polishTranscript(SAMPLE), "Cleaned by the built-in one.");
+  assert.deepEqual(requestedModels, ["my-pinned-model", "openai/gpt-oss-120b"]);
+  assert.match(String(takeCleanupError()), /chosen tidy-up engine is gone/i);
+
+  // Second dictation: the dead name is not tried again.
+  requestedModels.length = 0;
+  assert.equal(await polishTranscript(SAMPLE), "Cleaned by the built-in one.");
+  assert.deepEqual(requestedModels, ["openai/gpt-oss-120b"]);
 });
 
 test("a rate-limited default model uses the backup model's separate quota", async () => {

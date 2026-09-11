@@ -65,7 +65,9 @@ export async function requestVoiceEdit(
       let request, response;
       // A retired model (404) or a full token bucket (429) means try the next
       // vetted model on the same provider, exactly as dictation cleanup does.
-      // Anything else is a real failure and stops here.
+      // Anything else is a real failure and stops here. A model the user pinned
+      // is the one exception: it moves on only when the provider says it is
+      // gone, never because it is busy this minute.
       for (let attempt = 0; ; attempt++) {
         try { request = requestFactory(SYSTEM_PROMPT, body, { attempt }); }
         catch { throw fail("CONFIGURATION", "Configure a text provider before editing."); }
@@ -73,7 +75,9 @@ export async function requestVoiceEdit(
           method: "POST", headers: request.headers, body: request.body, signal: controller.signal
         });
         if (response.ok) break;
-        const canFailover = (response.status === 404 || response.status === 429) && attempt + 1 < (request.attempts || 1);
+        const failoverStatus = response.status === 404 ||
+          (response.status === 429 && !request.pinnedModel);
+        const canFailover = failoverStatus && attempt + 1 < (request.attempts || 1);
         if (!canFailover) throw fail("PROVIDER_ERROR", `Text editing failed (HTTP ${response.status}). Try again.`);
       }
       const replacement = readReplacement(request.kind, await response.json());

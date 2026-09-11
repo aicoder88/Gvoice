@@ -49,7 +49,7 @@ import { LatencyTracker } from "./src/latency.js";
 import { DictationSession } from "./src/dictation-session.js";
 import * as vocab from "./src/vocab.js";
 import { createCorrectionWatcher } from "./src/correction-watch.js";
-import { looksLikeRetraction } from "./src/cleanup.js";
+import { looksLikeRetraction, looksOverPunctuated } from "./src/cleanup.js";
 import { captureForegroundApp, captureForegroundWindow, restoreForegroundWindow, getWindowRect, isEditableFieldFocused, isForegroundWindow, readbackPasteTarget } from "./src/foreground.js";
 import { assessPasteOutcome, decidePasteOwnership } from "./src/paste-confidence.js";
 import { RESTORE_DELAY_MS, VERIFY_HOLD_MS } from "./src/clipboard-lease.js";
@@ -1231,17 +1231,25 @@ async function processTranscript(transcript, restoreHwnd = null, { canPaste = ()
   // context) — when one appears, always run cleanup so the retraction is dropped.
   // Gated by the Settings toggle (SELF_CORRECTION); off → don't force-route.
   const hasRetraction = process.env.SELF_CORRECTION !== "false" && looksLikeRetraction(textToType);
+  // The streaming engine ends a chunk at every pause and puts a period there,
+  // so a thinking pause in the middle of a sentence comes back as two clipped
+  // "sentences". That text is short and already ends in a period, so the
+  // heuristics below would skip cleanup and paste the chopped version. When it
+  // looks chopped, always run cleanup: the LLM is the only thing that can tell
+  // a real sentence end from a breath.
+  const hasChoppedSentences = looksOverPunctuated(textToType);
   // Short, clean utterances skip LLM cleanup — they need only a trailing period,
   // not restructuring. The LLM adds value on long or messy dictations; sending
   // short clear phrases to it causes unneeded rewriting.
   const needsCleanup =
-    (textToType.length >= 40 || hasFiller || hasOrdinal || commaCount >= 4 || hasRetraction) &&
+    (textToType.length >= 40 || hasFiller || hasOrdinal || commaCount >= 4 || hasRetraction || hasChoppedSentences) &&
     (textToType.length > 120 ||
      hasFiller ||
      !/[.!?…]$/.test(textToType) ||
      hasOrdinal ||
      commaCount >= 4 ||
-     hasRetraction);
+     hasRetraction ||
+     hasChoppedSentences);
   // Set when the cleanup pass gave up and the raw transcript went through
   // instead — most often the free tier's per-minute cap. Carried out to the
   // success pill so the user SEES which dictations were typed unformatted; the
