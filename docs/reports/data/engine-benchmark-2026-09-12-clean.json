@@ -1,0 +1,1458 @@
+{
+  "when": "2026-09-12T16:46:51.614Z",
+  "clipsDir": "/tmp/bench-clips",
+  "results": {
+    "large-v3-q5_0": [
+      {
+        "clip": "clip-01-en.wav",
+        "lang": "en",
+        "ms": 3637,
+        "text": "Not going to get it quite right.",
+        "errors": 0,
+        "words": 7
+      },
+      {
+        "clip": "clip-02-en.wav",
+        "lang": "en",
+        "ms": 3694,
+        "text": "Open the shipment dashboard and check the tracking numbers for the purify orders.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-03-en.wav",
+        "lang": "en",
+        "ms": 3767,
+        "text": "Send Nia the invoice for last month and ask her to confirm the terms.",
+        "errors": 0,
+        "words": 14
+      },
+      {
+        "clip": "clip-04-en.wav",
+        "lang": "en",
+        "ms": 3929,
+        "text": "I need three things. First, speed. Second, accuracy. Third, the cost per month.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-05-en.wav",
+        "lang": "en",
+        "ms": 3640,
+        "text": "The Anker microphone keeps dropping out when the Mac wakes up from sleep.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-06-en.wav",
+        "lang": "en",
+        "ms": 3552,
+        "text": "Tell the supplier we need the pallet delivered before Friday afternoon.",
+        "errors": 0,
+        "words": 11
+      },
+      {
+        "clip": "clip-07-en.wav",
+        "lang": "en",
+        "ms": 3562,
+        "text": "What is the word error rate on the small model compared to the large one?",
+        "errors": 0,
+        "words": 15
+      },
+      {
+        "clip": "clip-08-en.wav",
+        "lang": "en",
+        "ms": 3608,
+        "text": "Remind me to call the accountant about the quarterly filing on Monday.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-09-hr.wav",
+        "lang": "hr",
+        "ms": 3691,
+        "text": "Stranica je spremna, ali cijenu treba još jednom provjeriti .",
+        "errors": 0,
+        "words": 9
+      },
+      {
+        "clip": "clip-10-hr.wav",
+        "lang": "hr",
+        "ms": 4014,
+        "text": "Pošalji mi račun za prošli mjesec i potvrdi uvijete plać anja.",
+        "errors": 3,
+        "words": 10
+      },
+      {
+        "clip": "clip-11-en.wav",
+        "lang": "en",
+        "ms": 3634,
+        "text": "The purify order number is 4821 and it ships from the Montreal warehouse.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-12-en.wav",
+        "lang": "en",
+        "ms": 3646,
+        "text": "Nia said the deposit cleared on the 9th so we can release the pallet.",
+        "errors": 1,
+        "words": 14
+      },
+      {
+        "clip": "clip-13-en.wav",
+        "lang": "en",
+        "ms": 3626,
+        "text": "Book the flight for October 14 and put the receipt in the folder.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-14-en.wav",
+        "lang": "en",
+        "ms": 3677,
+        "text": "The small model runs at 440 milliseconds and the large one takes three times that.",
+        "errors": 0,
+        "words": 15
+      },
+      {
+        "clip": "clip-15-en.wav",
+        "lang": "en",
+        "ms": 3687,
+        "text": "Ask Deke Graham support why the connection drops after 90 seconds of silence.",
+        "errors": 3,
+        "words": 12
+      },
+      {
+        "clip": "clip-16-en.wav",
+        "lang": "en",
+        "ms": 3648,
+        "text": "We sold 312 units last quarter and the refund rate stayed under 2%.",
+        "errors": 2,
+        "words": 14
+      },
+      {
+        "clip": "clip-17-en.wav",
+        "lang": "en",
+        "ms": 3763,
+        "text": "The Anker PowerConf sits on the desk next to the second monitor.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-18-en.wav",
+        "lang": "en",
+        "ms": 3683,
+        "text": "Forward the packing slip to the customer and copy me on the message.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-19-en.wav",
+        "lang": "en",
+        "ms": 3706,
+        "text": "Our margin on the 140 gram bag is thinner than the 300 gram one.",
+        "errors": 0,
+        "words": 14
+      },
+      {
+        "clip": "clip-20-en.wav",
+        "lang": "en",
+        "ms": 3742,
+        "text": "Schedule the call with the accountant for Tuesday at half past nine.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-21-en.wav",
+        "lang": "en",
+        "ms": 3778,
+        "text": "The tracking number starts with CA and ends in 773.",
+        "errors": 3,
+        "words": 12
+      },
+      {
+        "clip": "clip-22-en.wav",
+        "lang": "en",
+        "ms": 3761,
+        "text": "Tell Drago the invoice terms changed to net 30 starting in August.",
+        "errors": 1,
+        "words": 12
+      },
+      {
+        "clip": "clip-23-en.wav",
+        "lang": "en",
+        "ms": 3708,
+        "text": "Move the meeting to Thursday because the supplier is closed on Wednesday.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-24-en.wav",
+        "lang": "en",
+        "ms": 3729,
+        "text": "The G voice hot is the right option key and it should never conflict.",
+        "errors": 3,
+        "words": 13
+      },
+      {
+        "clip": "clip-25-en.wav",
+        "lang": "en",
+        "ms": 3771,
+        "text": "Check whether the 25-kilogram box costs less by ground than by air.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-26-en.wav",
+        "lang": "en",
+        "ms": 3796,
+        "text": "I paid $68 for the domain and $12 a month for the host.",
+        "errors": 2,
+        "words": 15
+      },
+      {
+        "clip": "clip-27-hr.wav",
+        "lang": "hr",
+        "ms": 3863,
+        "text": "Molim te pošalji ponudu do petka jer klijen čeka odgovor.",
+        "errors": 1,
+        "words": 10
+      },
+      {
+        "clip": "clip-28-hr.wav",
+        "lang": "hr",
+        "ms": 3810,
+        "text": "Račun broj 4821 je plaćen ali dostava kasni 3 dana.",
+        "errors": 1,
+        "words": 10
+      },
+      {
+        "clip": "clip-29-hr.wav",
+        "lang": "hr",
+        "ms": 3905,
+        "text": "Nazovi nju u 9 sati i potvrdi cijenu za veliku kutiju.",
+        "errors": 2,
+        "words": 11
+      },
+      {
+        "clip": "clip-30-hr.wav",
+        "lang": "hr",
+        "ms": 3926,
+        "text": "Trebamo još 20 komada prije kraja mjeseca, inače gubimo nar učbu.",
+        "errors": 3,
+        "words": 10
+      }
+    ],
+    "large-v3-turbo-q5_0": [
+      {
+        "clip": "clip-01-en.wav",
+        "lang": "en",
+        "ms": 3164,
+        "text": "Not going to get it quite right.",
+        "errors": 0,
+        "words": 7
+      },
+      {
+        "clip": "clip-02-en.wav",
+        "lang": "en",
+        "ms": 3268,
+        "text": "Open the shipment dashboard and check the tracking numbers for the Purify orders.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-03-en.wav",
+        "lang": "en",
+        "ms": 3320,
+        "text": "Send Nia the invoice for last month and ask her to confirm the terms.",
+        "errors": 0,
+        "words": 14
+      },
+      {
+        "clip": "clip-04-en.wav",
+        "lang": "en",
+        "ms": 3271,
+        "text": "I need 3 things first speed second accuracy third the cost per month.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-05-en.wav",
+        "lang": "en",
+        "ms": 3248,
+        "text": "The anchor microphone keeps dropping out when the Mac wakes up from sleep.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-06-en.wav",
+        "lang": "en",
+        "ms": 3315,
+        "text": "Tell the supplier we need the pallet delivered before Friday afternoon.",
+        "errors": 0,
+        "words": 11
+      },
+      {
+        "clip": "clip-07-en.wav",
+        "lang": "en",
+        "ms": 3351,
+        "text": "What is the word error rate on the small model compared to the large one?",
+        "errors": 0,
+        "words": 15
+      },
+      {
+        "clip": "clip-08-en.wav",
+        "lang": "en",
+        "ms": 3260,
+        "text": "Remind me to call the accountant about the quarterly filing on Monday.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-09-hr.wav",
+        "lang": "hr",
+        "ms": 3343,
+        "text": "Stranica je spremna ali cijenu treba još jednom provjeriti.",
+        "errors": 0,
+        "words": 9
+      },
+      {
+        "clip": "clip-10-hr.wav",
+        "lang": "hr",
+        "ms": 3501,
+        "text": "Pošalji mi račun za prošli mjesec i potvrdi uvijete plać anja.",
+        "errors": 3,
+        "words": 10
+      },
+      {
+        "clip": "clip-11-en.wav",
+        "lang": "en",
+        "ms": 3316,
+        "text": "The Purify order number is 4821 and it ships from the Montreal warehouse.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-12-en.wav",
+        "lang": "en",
+        "ms": 3256,
+        "text": "Nia said the deposit cleared on the 9th so we can release the pallet.",
+        "errors": 1,
+        "words": 14
+      },
+      {
+        "clip": "clip-13-en.wav",
+        "lang": "en",
+        "ms": 3287,
+        "text": "Book the flight for October 14 and put the receipt in the folder.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-14-en.wav",
+        "lang": "en",
+        "ms": 3284,
+        "text": "The small model runs at 440 milliseconds and the large one takes three times that.",
+        "errors": 0,
+        "words": 15
+      },
+      {
+        "clip": "clip-15-en.wav",
+        "lang": "en",
+        "ms": 3249,
+        "text": "Ask Deepgram support why the connection drops after 90 seconds of silence.",
+        "errors": 1,
+        "words": 12
+      },
+      {
+        "clip": "clip-16-en.wav",
+        "lang": "en",
+        "ms": 3211,
+        "text": "We sold 312 units last quarter and the refund rate stayed under 2%.",
+        "errors": 2,
+        "words": 14
+      },
+      {
+        "clip": "clip-17-en.wav",
+        "lang": "en",
+        "ms": 3109,
+        "text": "The Anker PowerConf sits on the desk next to the second monitor.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-18-en.wav",
+        "lang": "en",
+        "ms": 3098,
+        "text": "Forward the packing slip to the customer and copy me on the message.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-19-en.wav",
+        "lang": "en",
+        "ms": 3078,
+        "text": "Our margin on the 140 gram bag is thinner than the 300 gram one.",
+        "errors": 0,
+        "words": 14
+      },
+      {
+        "clip": "clip-20-en.wav",
+        "lang": "en",
+        "ms": 3080,
+        "text": "Schedule the call with the accountant for Tuesday at half past nine.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-21-en.wav",
+        "lang": "en",
+        "ms": 3076,
+        "text": "The tracking number starts with CA and ends in 773.",
+        "errors": 3,
+        "words": 12
+      },
+      {
+        "clip": "clip-22-en.wav",
+        "lang": "en",
+        "ms": 3107,
+        "text": "Tell Drago the invoice terms changed to net 30 starting in August.",
+        "errors": 1,
+        "words": 12
+      },
+      {
+        "clip": "clip-23-en.wav",
+        "lang": "en",
+        "ms": 3050,
+        "text": "Move the meeting to Thursday because the supplier is closed on Wednesday.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-24-en.wav",
+        "lang": "en",
+        "ms": 3041,
+        "text": "The G-voice hot is the right option key and it should never conflict.",
+        "errors": 3,
+        "words": 13
+      },
+      {
+        "clip": "clip-25-en.wav",
+        "lang": "en",
+        "ms": 3035,
+        "text": "Check whether the 25-kilogram box costs less by ground than by air.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-26-en.wav",
+        "lang": "en",
+        "ms": 3051,
+        "text": "I paid $68 for the domain and $12 a month for the host.",
+        "errors": 2,
+        "words": 15
+      },
+      {
+        "clip": "clip-27-hr.wav",
+        "lang": "hr",
+        "ms": 3041,
+        "text": "Molim te pošalji ponudu do petka jer klijen čeka odgovor.",
+        "errors": 1,
+        "words": 10
+      },
+      {
+        "clip": "clip-28-hr.wav",
+        "lang": "hr",
+        "ms": 3001,
+        "text": "Račun broj 4821 je plaćen ali dostava kasni tri dana.",
+        "errors": 0,
+        "words": 10
+      },
+      {
+        "clip": "clip-29-hr.wav",
+        "lang": "hr",
+        "ms": 3064,
+        "text": "Nazovi Niu u 9 sati i potvrdi cijenu za veliku kutiju.",
+        "errors": 1,
+        "words": 11
+      },
+      {
+        "clip": "clip-30-hr.wav",
+        "lang": "hr",
+        "ms": 3076,
+        "text": "Trebamo još 20 komada prije kraja mjeseca, inače gubimo nar učbu.",
+        "errors": 3,
+        "words": 10
+      }
+    ],
+    "medium-q5_0": [
+      {
+        "clip": "clip-01-en.wav",
+        "lang": "en",
+        "ms": 1822,
+        "text": "Not going to get it quite right.",
+        "errors": 0,
+        "words": 7
+      },
+      {
+        "clip": "clip-02-en.wav",
+        "lang": "en",
+        "ms": 1900,
+        "text": "Open the shipment dashboard and check the tracking numbers for the purify orders.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-03-en.wav",
+        "lang": "en",
+        "ms": 1922,
+        "text": "Send Nia the invoice for last month and ask her to confirm the terms.",
+        "errors": 0,
+        "words": 14
+      },
+      {
+        "clip": "clip-04-en.wav",
+        "lang": "en",
+        "ms": 1926,
+        "text": "I need three things, first speed, second accuracy, third the cost per month.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-05-en.wav",
+        "lang": "en",
+        "ms": 1888,
+        "text": "The anchor microphone keeps dropping out when the Mac wakes up from sleep.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-06-en.wav",
+        "lang": "en",
+        "ms": 1895,
+        "text": "Tell the supplier we need the pallet delivered before Friday afternoon.",
+        "errors": 0,
+        "words": 11
+      },
+      {
+        "clip": "clip-07-en.wav",
+        "lang": "en",
+        "ms": 1942,
+        "text": "What is the word error rate on the small model compared to the large one?",
+        "errors": 0,
+        "words": 15
+      },
+      {
+        "clip": "clip-08-en.wav",
+        "lang": "en",
+        "ms": 1962,
+        "text": "Remind me to call the accountant about the quarterly filing on Monday.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-09-hr.wav",
+        "lang": "hr",
+        "ms": 2059,
+        "text": "Stranica je spremna, ali cijenu treba još jednom provjeriti .",
+        "errors": 0,
+        "words": 9
+      },
+      {
+        "clip": "clip-10-hr.wav",
+        "lang": "hr",
+        "ms": 2115,
+        "text": "pošalj mi račun za prošli mjesec i potvrdi uvijete plaćanja .",
+        "errors": 2,
+        "words": 10
+      },
+      {
+        "clip": "clip-11-en.wav",
+        "lang": "en",
+        "ms": 1951,
+        "text": "The purify order number is 4821 and it ships from the Montreal warehouse.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-12-en.wav",
+        "lang": "en",
+        "ms": 1954,
+        "text": "Nia said the deposit cleared on the 9th so we can release the pallet.",
+        "errors": 1,
+        "words": 14
+      },
+      {
+        "clip": "clip-13-en.wav",
+        "lang": "en",
+        "ms": 1898,
+        "text": "Book the flight for October 14th and put the receipt in the folder.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-14-en.wav",
+        "lang": "en",
+        "ms": 1915,
+        "text": "The small model runs at 440 milliseconds and the large one takes three times that.",
+        "errors": 0,
+        "words": 15
+      },
+      {
+        "clip": "clip-15-en.wav",
+        "lang": "en",
+        "ms": 1869,
+        "text": "Ask Dikgram support why the connection drops after 90 seconds of silence.",
+        "errors": 2,
+        "words": 12
+      },
+      {
+        "clip": "clip-16-en.wav",
+        "lang": "en",
+        "ms": 1882,
+        "text": "We sold 312 units last quarter and the refund rate stayed under 2%.",
+        "errors": 2,
+        "words": 14
+      },
+      {
+        "clip": "clip-17-en.wav",
+        "lang": "en",
+        "ms": 1922,
+        "text": "The Anker PowerConf sits on the desk next to the second monitor.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-18-en.wav",
+        "lang": "en",
+        "ms": 1917,
+        "text": "Forward the packing slip to the customer and copy me on the message.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-19-en.wav",
+        "lang": "en",
+        "ms": 1921,
+        "text": "Our margin on the 140 gram bag is thinner than the 300 gram one.",
+        "errors": 0,
+        "words": 14
+      },
+      {
+        "clip": "clip-20-en.wav",
+        "lang": "en",
+        "ms": 1877,
+        "text": "Schedule the call with the accountant for Tuesday at half past nine.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-21-en.wav",
+        "lang": "en",
+        "ms": 1876,
+        "text": "The tracking number starts with CA and ends in 773.",
+        "errors": 3,
+        "words": 12
+      },
+      {
+        "clip": "clip-22-en.wav",
+        "lang": "en",
+        "ms": 1872,
+        "text": "Tell Drago the invoice terms changed to net 30 starting in August.",
+        "errors": 1,
+        "words": 12
+      },
+      {
+        "clip": "clip-23-en.wav",
+        "lang": "en",
+        "ms": 1903,
+        "text": "Move the meeting to Thursday because the supplier is closed on Wednesday.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-24-en.wav",
+        "lang": "en",
+        "ms": 1900,
+        "text": "The G voice hot is the right option key and it should never conflict.",
+        "errors": 3,
+        "words": 13
+      },
+      {
+        "clip": "clip-25-en.wav",
+        "lang": "en",
+        "ms": 1909,
+        "text": "Check whether the 25 kg box costs less by ground than by air.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-26-en.wav",
+        "lang": "en",
+        "ms": 1942,
+        "text": "I paid $68 for the domain and $12 a month for the host.",
+        "errors": 2,
+        "words": 15
+      },
+      {
+        "clip": "clip-27-hr.wav",
+        "lang": "hr",
+        "ms": 2017,
+        "text": "Molim te pošalj ponudu do petka jer klijen čeka odgovor.",
+        "errors": 2,
+        "words": 10
+      },
+      {
+        "clip": "clip-28-hr.wav",
+        "lang": "hr",
+        "ms": 1988,
+        "text": "Račun broj, 4821 je plaćen ali dostava kasni tri dana.",
+        "errors": 0,
+        "words": 10
+      },
+      {
+        "clip": "clip-29-hr.wav",
+        "lang": "hr",
+        "ms": 2030,
+        "text": "Nazov i Niu u 9 sati i potvrdi cijenu za veliku kutiju.",
+        "errors": 3,
+        "words": 11
+      },
+      {
+        "clip": "clip-30-hr.wav",
+        "lang": "hr",
+        "ms": 2044,
+        "text": "Trebamo još 20 komada prije kraja mjeseca, inače gubimo nar udžbu.",
+        "errors": 3,
+        "words": 10
+      }
+    ],
+    "small.en-q5_1": [
+      {
+        "clip": "clip-01-en.wav",
+        "lang": "en",
+        "ms": 412,
+        "text": "Not going to get it quite right.",
+        "errors": 0,
+        "words": 7
+      },
+      {
+        "clip": "clip-02-en.wav",
+        "lang": "en",
+        "ms": 458,
+        "text": "Open the shipment dashboard and check the tracking numbers for the Purify orders.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-03-en.wav",
+        "lang": "en",
+        "ms": 460,
+        "text": "Send Nia the invoice for last month and ask her to confirm the terms.",
+        "errors": 0,
+        "words": 14
+      },
+      {
+        "clip": "clip-04-en.wav",
+        "lang": "en",
+        "ms": 428,
+        "text": "I need three things first speed second accuracy third the cost per month",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-05-en.wav",
+        "lang": "en",
+        "ms": 443,
+        "text": "The anchor microphone keeps dropping out when the Mac wakes up from sleep.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-06-en.wav",
+        "lang": "en",
+        "ms": 460,
+        "text": "Tell the supplier we need the pallet delivered before Friday afternoon.",
+        "errors": 0,
+        "words": 11
+      },
+      {
+        "clip": "clip-07-en.wav",
+        "lang": "en",
+        "ms": 462,
+        "text": "What is the word error rate on the small model compared to the large one?",
+        "errors": 0,
+        "words": 15
+      },
+      {
+        "clip": "clip-08-en.wav",
+        "lang": "en",
+        "ms": 462,
+        "text": "Remind me to call the accountant about the quarterly filing on Monday.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-09-hr.wav",
+        "lang": "hr",
+        "ms": 500,
+        "text": "Stranica es premna alizien treba yosh yed nam praviariti.",
+        "errors": 8,
+        "words": 9
+      },
+      {
+        "clip": "clip-10-hr.wav",
+        "lang": "hr",
+        "ms": 418,
+        "text": "(speaking in foreign language)",
+        "errors": 10,
+        "words": 10
+      },
+      {
+        "clip": "clip-11-en.wav",
+        "lang": "en",
+        "ms": 462,
+        "text": "The purify order number is 4821 and it ships from the Montreal warehouse.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-12-en.wav",
+        "lang": "en",
+        "ms": 473,
+        "text": "Nia said the deposit cleared on the 9th so we can release the pallet.",
+        "errors": 1,
+        "words": 14
+      },
+      {
+        "clip": "clip-13-en.wav",
+        "lang": "en",
+        "ms": 450,
+        "text": "Book the flight for October 14 and put the receipt in the folder.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-14-en.wav",
+        "lang": "en",
+        "ms": 462,
+        "text": "The small model runs at 440 milliseconds and the large one takes three times that.",
+        "errors": 0,
+        "words": 15
+      },
+      {
+        "clip": "clip-15-en.wav",
+        "lang": "en",
+        "ms": 456,
+        "text": "Ask Deep Gram support why the connection drops after 90 seconds of silence.",
+        "errors": 3,
+        "words": 12
+      },
+      {
+        "clip": "clip-16-en.wav",
+        "lang": "en",
+        "ms": 436,
+        "text": "We sold 312 units last quarter and the refund rate stayed under 2%.",
+        "errors": 2,
+        "words": 14
+      },
+      {
+        "clip": "clip-17-en.wav",
+        "lang": "en",
+        "ms": 459,
+        "text": "The anchor power conf sits on the desk next to the second monitor.",
+        "errors": 3,
+        "words": 12
+      },
+      {
+        "clip": "clip-18-en.wav",
+        "lang": "en",
+        "ms": 467,
+        "text": "forward the packing slip to the customer and copy me on the message.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-19-en.wav",
+        "lang": "en",
+        "ms": 473,
+        "text": "Our margin on the 140 gram bag is thinner than the 300 gram one.",
+        "errors": 0,
+        "words": 14
+      },
+      {
+        "clip": "clip-20-en.wav",
+        "lang": "en",
+        "ms": 463,
+        "text": "Schedule the call with the accountant for Tuesday at half past nine.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-21-en.wav",
+        "lang": "en",
+        "ms": 445,
+        "text": "The tracking number starts with CA and ends in 773.",
+        "errors": 3,
+        "words": 12
+      },
+      {
+        "clip": "clip-22-en.wav",
+        "lang": "en",
+        "ms": 452,
+        "text": "Tell Drago the invoice terms changed to net 30 starting in August.",
+        "errors": 1,
+        "words": 12
+      },
+      {
+        "clip": "clip-23-en.wav",
+        "lang": "en",
+        "ms": 450,
+        "text": "Move the meeting to Thursday because the supplier is closed on Wednesday.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-24-en.wav",
+        "lang": "en",
+        "ms": 465,
+        "text": "The G Voice Hot is the right option key and it should never conflict.",
+        "errors": 3,
+        "words": 13
+      },
+      {
+        "clip": "clip-25-en.wav",
+        "lang": "en",
+        "ms": 469,
+        "text": "Check whether the 25 kilogram box costs less by ground than by air.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-26-en.wav",
+        "lang": "en",
+        "ms": 473,
+        "text": "I paid $68 for the domain and $12 a month for the host.",
+        "errors": 2,
+        "words": 15
+      },
+      {
+        "clip": "clip-27-hr.wav",
+        "lang": "hr",
+        "ms": 508,
+        "text": "We will continue to learn the language of God.",
+        "errors": 10,
+        "words": 10
+      },
+      {
+        "clip": "clip-28-hr.wav",
+        "lang": "hr",
+        "ms": 578,
+        "text": "Rachum broi, chetiri awesome, dva yedan yep lachan ali dost ava kasnitri dana.",
+        "errors": 11,
+        "words": 10
+      },
+      {
+        "clip": "clip-29-hr.wav",
+        "lang": "hr",
+        "ms": 559,
+        "text": "We will not be able to find the place where we are.",
+        "errors": 12,
+        "words": 11
+      },
+      {
+        "clip": "clip-30-hr.wav",
+        "lang": "hr",
+        "ms": 525,
+        "text": "[speaking foreign language]",
+        "errors": 10,
+        "words": 10
+      }
+    ],
+    "deepgram nova-3": [
+      {
+        "clip": "clip-01-en.wav",
+        "lang": "en",
+        "ms": 969,
+        "text": "Not going to get it quite right.",
+        "errors": 0,
+        "words": 7
+      },
+      {
+        "clip": "clip-02-en.wav",
+        "lang": "en",
+        "ms": 439,
+        "text": "Open the shipment dashboard and check the tracking numbers for the Purify orders.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-03-en.wav",
+        "lang": "en",
+        "ms": 368,
+        "text": "Send Nia the invoice for last month and ask her to confirm the terms.",
+        "errors": 0,
+        "words": 14
+      },
+      {
+        "clip": "clip-04-en.wav",
+        "lang": "en",
+        "ms": 301,
+        "text": "I need three things. First, speed. Second, accuracy. Third, the cost per month.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-05-en.wav",
+        "lang": "en",
+        "ms": 291,
+        "text": "The Anchor microphone keeps dropping out when the Mac wakes up from sleep.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-06-en.wav",
+        "lang": "en",
+        "ms": 480,
+        "text": "Tell the supplier we need the pallet delivered before Friday afternoon.",
+        "errors": 0,
+        "words": 11
+      },
+      {
+        "clip": "clip-07-en.wav",
+        "lang": "en",
+        "ms": 343,
+        "text": "What is the word error rate on the small model compared to the large one?",
+        "errors": 0,
+        "words": 15
+      },
+      {
+        "clip": "clip-08-en.wav",
+        "lang": "en",
+        "ms": 294,
+        "text": "Remind me to call the accountant about the quarterly filing on Monday.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-09-hr.wav",
+        "lang": "hr",
+        "ms": 1523,
+        "text": "Stranica je spremna, ali cijenu treba još jednom provjeriti.",
+        "errors": 0,
+        "words": 9
+      },
+      {
+        "clip": "clip-10-hr.wav",
+        "lang": "hr",
+        "ms": 1719,
+        "text": "Pošalji mi račun za prošli mjesec I potvrdi uvjete plaćanja.",
+        "errors": 0,
+        "words": 10
+      },
+      {
+        "clip": "clip-11-en.wav",
+        "lang": "en",
+        "ms": 363,
+        "text": "The Purify order number is 4800And21 and it ships from the Montreal warehouse.",
+        "errors": 2,
+        "words": 13
+      },
+      {
+        "clip": "clip-12-en.wav",
+        "lang": "en",
+        "ms": 345,
+        "text": "Nia said the deposit cleared on the ninth so we can release the palate.",
+        "errors": 1,
+        "words": 14
+      },
+      {
+        "clip": "clip-13-en.wav",
+        "lang": "en",
+        "ms": 277,
+        "text": "Book the flight for October 14 and put the receipt in the folder.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-14-en.wav",
+        "lang": "en",
+        "ms": 340,
+        "text": "The small model runs at four forty milliseconds and the large one takes three times that.",
+        "errors": 2,
+        "words": 15
+      },
+      {
+        "clip": "clip-15-en.wav",
+        "lang": "en",
+        "ms": 357,
+        "text": "Ask Deepgram support why the connection drops after ninety seconds of silence.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-16-en.wav",
+        "lang": "en",
+        "ms": 364,
+        "text": "We sold three twelve units last quarter and the refund rate stayed under 2%.",
+        "errors": 4,
+        "words": 14
+      },
+      {
+        "clip": "clip-17-en.wav",
+        "lang": "en",
+        "ms": 309,
+        "text": "The Anker PowerConf sits on the desk next to the second monitor.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-18-en.wav",
+        "lang": "en",
+        "ms": 319,
+        "text": "Forward the packing slip to the customer and copy me on the message.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-19-en.wav",
+        "lang": "en",
+        "ms": 299,
+        "text": "Our margin on the 140 gram bag is thinner than the 300 gram one.",
+        "errors": 0,
+        "words": 14
+      },
+      {
+        "clip": "clip-20-en.wav",
+        "lang": "en",
+        "ms": 292,
+        "text": "Schedule the call with the accountant for Tuesday at half past nine.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-21-en.wav",
+        "lang": "en",
+        "ms": 679,
+        "text": "The tracking number starts with CA and ends in 773.",
+        "errors": 3,
+        "words": 12
+      },
+      {
+        "clip": "clip-22-en.wav",
+        "lang": "en",
+        "ms": 403,
+        "text": "Tell Drago the invoice terms changed to net 30 starting in August.",
+        "errors": 1,
+        "words": 12
+      },
+      {
+        "clip": "clip-23-en.wav",
+        "lang": "en",
+        "ms": 366,
+        "text": "Move the meeting to Thursday because the supplier is closed on Wednesday.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-24-en.wav",
+        "lang": "en",
+        "ms": 406,
+        "text": "The g voice hot is the right option key and it should never conflict.",
+        "errors": 3,
+        "words": 13
+      },
+      {
+        "clip": "clip-25-en.wav",
+        "lang": "en",
+        "ms": 373,
+        "text": "Check whether the 25 kilogram box costs less by ground than by air.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-26-en.wav",
+        "lang": "en",
+        "ms": 321,
+        "text": "I paid $68 for the domain and $12 a month for the host.",
+        "errors": 2,
+        "words": 15
+      },
+      {
+        "clip": "clip-27-hr.wav",
+        "lang": "hr",
+        "ms": 1390,
+        "text": "Molim te pošalji ponudu do petka jer klijent čeka odgovor.",
+        "errors": 0,
+        "words": 10
+      },
+      {
+        "clip": "clip-28-hr.wav",
+        "lang": "hr",
+        "ms": 1683,
+        "text": "Račun broj četiri osam dva jedan je plaćen ali dostava kasni tri dana.",
+        "errors": 4,
+        "words": 10
+      },
+      {
+        "clip": "clip-29-hr.wav",
+        "lang": "hr",
+        "ms": 1165,
+        "text": "Nazovi niju u devet sati I potvrdi cijenu za veliku kutiju.",
+        "errors": 1,
+        "words": 11
+      },
+      {
+        "clip": "clip-30-hr.wav",
+        "lang": "hr",
+        "ms": 2261,
+        "text": "Trebamo još dvadeset komada prije kraja mjeseca, inače gubimo narudžbu.",
+        "errors": 0,
+        "words": 10
+      }
+    ],
+    "parakeet tdt 0.6b v3": [
+      {
+        "clip": "clip-01-en.wav",
+        "lang": "en",
+        "ms": 842,
+        "text": "Not going to get it quite right.",
+        "errors": 0,
+        "words": 7
+      },
+      {
+        "clip": "clip-02-en.wav",
+        "lang": "en",
+        "ms": 663,
+        "text": "Open the shipment dashboard and check the tracking numbers for the Purify orders.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-03-en.wav",
+        "lang": "en",
+        "ms": 1497,
+        "text": "Send Nia the invoice for last month and ask her to confirm the terms.",
+        "errors": 0,
+        "words": 14
+      },
+      {
+        "clip": "clip-04-en.wav",
+        "lang": "en",
+        "ms": 659,
+        "text": "I need three things first speed second accuracy third the cost per month.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-05-en.wav",
+        "lang": "en",
+        "ms": 663,
+        "text": "The anchor microphone keeps dropping out when the Mac wakes up from sleep.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-06-en.wav",
+        "lang": "en",
+        "ms": 565,
+        "text": "Tell the supplier we need the palette delivered before Friday afternoon.",
+        "errors": 1,
+        "words": 11
+      },
+      {
+        "clip": "clip-07-en.wav",
+        "lang": "en",
+        "ms": 395,
+        "text": "What is the word error rate on the small model compared to the large one?",
+        "errors": 0,
+        "words": 15
+      },
+      {
+        "clip": "clip-08-en.wav",
+        "lang": "en",
+        "ms": 1445,
+        "text": "Remind me to call the accountant about the quarterly filing on Monday.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-09-hr.wav",
+        "lang": "hr",
+        "ms": 413,
+        "text": "Stranica je spremna, ali cijenu treba još jednom provjeriti.",
+        "errors": 0,
+        "words": 9
+      },
+      {
+        "clip": "clip-10-hr.wav",
+        "lang": "hr",
+        "ms": 383,
+        "text": "Pošalji mi račun za prošli mjesec i potvrdi uvijete plaćanja.",
+        "errors": 1,
+        "words": 10
+      },
+      {
+        "clip": "clip-11-en.wav",
+        "lang": "en",
+        "ms": 431,
+        "text": "The Purify order number is 4821 and it ships from the Montreal warehouse.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-12-en.wav",
+        "lang": "en",
+        "ms": 326,
+        "text": "Nia said the deposit cleared on the 9th so we can release the pallet.",
+        "errors": 1,
+        "words": 14
+      },
+      {
+        "clip": "clip-13-en.wav",
+        "lang": "en",
+        "ms": 333,
+        "text": "Book the flight for October 14 and put the receipt in the folder.",
+        "errors": 1,
+        "words": 13
+      },
+      {
+        "clip": "clip-14-en.wav",
+        "lang": "en",
+        "ms": 479,
+        "text": "The small model runs at 440 milliseconds and the large one takes three times that.",
+        "errors": 0,
+        "words": 15
+      },
+      {
+        "clip": "clip-15-en.wav",
+        "lang": "en",
+        "ms": 330,
+        "text": "Ask Deepgram support why the connection drops after 90 seconds of silence.",
+        "errors": 1,
+        "words": 12
+      },
+      {
+        "clip": "clip-16-en.wav",
+        "lang": "en",
+        "ms": 392,
+        "text": "We sold 312 units last quarter and the refund rate stayed under 2%.",
+        "errors": 2,
+        "words": 14
+      },
+      {
+        "clip": "clip-17-en.wav",
+        "lang": "en",
+        "ms": 278,
+        "text": "The anchor power conf sits on the desk next to the second monitor.",
+        "errors": 3,
+        "words": 12
+      },
+      {
+        "clip": "clip-18-en.wav",
+        "lang": "en",
+        "ms": 245,
+        "text": "Forward the packing slip to the customer and copy me on the message.",
+        "errors": 0,
+        "words": 13
+      },
+      {
+        "clip": "clip-19-en.wav",
+        "lang": "en",
+        "ms": 333,
+        "text": "Our margin on the 140 gram bag is thinner than the 300 gram one.",
+        "errors": 0,
+        "words": 14
+      },
+      {
+        "clip": "clip-20-en.wav",
+        "lang": "en",
+        "ms": 277,
+        "text": "Schedule the call with the accountant for Tuesday at half past nine.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-21-en.wav",
+        "lang": "en",
+        "ms": 241,
+        "text": "The tracking number starts with CA and ends in 773.",
+        "errors": 3,
+        "words": 12
+      },
+      {
+        "clip": "clip-22-en.wav",
+        "lang": "en",
+        "ms": 313,
+        "text": "Tell Drago the invoice terms change to net 30 starting in August.",
+        "errors": 2,
+        "words": 12
+      },
+      {
+        "clip": "clip-23-en.wav",
+        "lang": "en",
+        "ms": 442,
+        "text": "Move the meeting to Thursday because the supplier is closed on Wednesday.",
+        "errors": 0,
+        "words": 12
+      },
+      {
+        "clip": "clip-24-en.wav",
+        "lang": "en",
+        "ms": 338,
+        "text": "The G voice hot is the right option key and it should never conflict.",
+        "errors": 3,
+        "words": 13
+      },
+      {
+        "clip": "clip-25-en.wav",
+        "lang": "en",
+        "ms": 330,
+        "text": "Check whether the 25kg box costs less by ground than by air.",
+        "errors": 2,
+        "words": 13
+      },
+      {
+        "clip": "clip-26-en.wav",
+        "lang": "en",
+        "ms": 379,
+        "text": "I paid$68 for the domain and$12 a month for the host.",
+        "errors": 2,
+        "words": 15
+      },
+      {
+        "clip": "clip-27-hr.wav",
+        "lang": "hr",
+        "ms": 439,
+        "text": "Molim te pošalji ponudu do petka jer klient čeka odgovor.",
+        "errors": 1,
+        "words": 10
+      },
+      {
+        "clip": "clip-28-hr.wav",
+        "lang": "hr",
+        "ms": 872,
+        "text": "Račun Broj 4821 je plaćen ali dostava kasni tri dana.",
+        "errors": 0,
+        "words": 10
+      },
+      {
+        "clip": "clip-29-hr.wav",
+        "lang": "hr",
+        "ms": 719,
+        "text": "Nazovim ju u devet sati i potvrdi cijenu za veliku kutiju.",
+        "errors": 2,
+        "words": 11
+      },
+      {
+        "clip": "clip-30-hr.wav",
+        "lang": "hr",
+        "ms": 556,
+        "text": "Trebamo još 20 komada prije kraja mjeseca inače gubimo narudžbu.",
+        "errors": 1,
+        "words": 10
+      }
+    ]
+  }
+}

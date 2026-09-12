@@ -1,0 +1,2418 @@
+{
+  "when": "2026-09-12T16:55:40.451Z",
+  "clipsDir": "/tmp/bench-real",
+  "results": {
+    "large-v3-q5_0": [
+      {
+        "clip": "dictation-1789121786771-mxfq.wav",
+        "lang": "en",
+        "ms": 3334,
+        "text": "Takk for watching!",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210095984-d513.wav",
+        "lang": "en",
+        "ms": 11503,
+        "text": "Kör på de fleste styrken.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210101913-1b0j.wav",
+        "lang": "en",
+        "ms": 3339,
+        "text": "ご視聴ありがとうございました",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210110402-o299.wav",
+        "lang": "en",
+        "ms": 3303,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210122643-8689.wav",
+        "lang": "en",
+        "ms": 3288,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212223791-53kv.wav",
+        "lang": "en",
+        "ms": 3464,
+        "text": "*Spring*",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212286547-xwe3.wav",
+        "lang": "en",
+        "ms": 3410,
+        "text": "Thank you for watching.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212352727-paag.wav",
+        "lang": "en",
+        "ms": 3557,
+        "text": "wheelchair intermittently she's not",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215683554-jltp.wav",
+        "lang": "en",
+        "ms": 3599,
+        "text": "見てくれてありがとう:",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215691815-grry.wav",
+        "lang": "en",
+        "ms": 3653,
+        "text": "バター",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215696108-1o76.wav",
+        "lang": "en",
+        "ms": 3571,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215699548-mozd.wav",
+        "lang": "en",
+        "ms": 3653,
+        "text": "Testing, one, two, three.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217765179-71ew.wav",
+        "lang": "en",
+        "ms": 3668,
+        "text": "- Yeah.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217771701-bgxy.wav",
+        "lang": "en",
+        "ms": 3615,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217781275-iwyv.wav",
+        "lang": "en",
+        "ms": 3650,
+        "text": "Testing 1, 2, 3.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217785185-4lvx.wav",
+        "lang": "en",
+        "ms": 3543,
+        "text": "Testing, testing.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217789912-2nna.wav",
+        "lang": "en",
+        "ms": 3651,
+        "text": "Testing, test, test, test, test.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217864427-i13o.wav",
+        "lang": "en",
+        "ms": 3860,
+        "text": "Kansai, Japan",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217869227-smkl.wav",
+        "lang": "en",
+        "ms": 3527,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218002907-1xia.wav",
+        "lang": "en",
+        "ms": 3559,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218005992-efpy.wav",
+        "lang": "en",
+        "ms": 3814,
+        "text": "Kjell Kjell",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218250782-6d2z.wav",
+        "lang": "en",
+        "ms": 3535,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218286944-0qu1.wav",
+        "lang": "en",
+        "ms": 3554,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219116754-vr86.wav",
+        "lang": "en",
+        "ms": 3585,
+        "text": "So does this work?",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219121512-8c9l.wav",
+        "lang": "en",
+        "ms": 3613,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219141343-1f4i.wav",
+        "lang": "en",
+        "ms": 4350,
+        "text": "When I hit the transcribe button again after it said success, nothing happened. But then a second or two later, I held it down and it's transcribing fine.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219146120-mtgu.wav",
+        "lang": "en",
+        "ms": 3714,
+        "text": "So.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219148353-wq7w.wav",
+        "lang": "en",
+        "ms": 3702,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219148907-khha.wav",
+        "lang": "en",
+        "ms": 3656,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219671474-2r9h.wav",
+        "lang": "en",
+        "ms": 3493,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220027115-s53t.wav",
+        "lang": "en",
+        "ms": 3574,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220029533-xju3.wav",
+        "lang": "en",
+        "ms": 3720,
+        "text": "You should test yourself on this if you sounded",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220052008-1w8m.wav",
+        "lang": "en",
+        "ms": 3866,
+        "text": "Do you have a best one? Anyway, here's one.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220054081-ebkr.wav",
+        "lang": "en",
+        "ms": 3579,
+        "text": "everything I told you about.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220297154-590k.wav",
+        "lang": "en",
+        "ms": 3726,
+        "text": "It doesn't exist yet. It's falling down to six.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220299215-p7ln.wav",
+        "lang": "en",
+        "ms": 3516,
+        "text": "that.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226049291-j10h.wav",
+        "lang": "en",
+        "ms": 3789,
+        "text": "In just a few seconds.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226549355-61lq.wav",
+        "lang": "en",
+        "ms": 3516,
+        "text": "outfits",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226957631-o7l3.wav",
+        "lang": "en",
+        "ms": 3556,
+        "text": "-",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789227252155-bz11.wav",
+        "lang": "en",
+        "ms": 3549,
+        "text": "-",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789227258923-0vem.wav",
+        "lang": "en",
+        "ms": 3487,
+        "text": "-",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228098581-0dbs.wav",
+        "lang": "en",
+        "ms": 3484,
+        "text": "Hello there.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228103927-qkfx.wav",
+        "lang": "en",
+        "ms": 3837,
+        "text": "It seems to have been a little too late.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228108501-fon7.wav",
+        "lang": "en",
+        "ms": 3453,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228116506-j66z.wav",
+        "lang": "en",
+        "ms": 3526,
+        "text": "It's coming off the soil a bit.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228253350-nrdn.wav",
+        "lang": "en",
+        "ms": 3822,
+        "text": "I don't know, let's see how this goes now. I'm not sure it 's going to get it quite right.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228263859-u8l1.wav",
+        "lang": "en",
+        "ms": 3734,
+        "text": "For instance, there it said \"a playwright\" but I said \"it quite right\".",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228322518-r7dn.wav",
+        "lang": "en",
+        "ms": 3644,
+        "text": "Maybe we switch language models or something.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228335778-q931.wav",
+        "lang": "en",
+        "ms": 3691,
+        "text": "It seems more error prone now.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228341983-0h3b.wav",
+        "lang": "en",
+        "ms": 3606,
+        "text": "The button is working though.",
+        "errors": null,
+        "words": null
+      }
+    ],
+    "large-v3-turbo-q5_0": [
+      {
+        "clip": "dictation-1789121786771-mxfq.wav",
+        "lang": "en",
+        "ms": 3045,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210095984-d513.wav",
+        "lang": "en",
+        "ms": 3146,
+        "text": "I'm going to go to the next one.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210101913-1b0j.wav",
+        "lang": "en",
+        "ms": 2981,
+        "text": "ご視聴ありがとうございました",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210110402-o299.wav",
+        "lang": "en",
+        "ms": 2948,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210122643-8689.wav",
+        "lang": "en",
+        "ms": 2933,
+        "text": "you",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212223791-53kv.wav",
+        "lang": "en",
+        "ms": 2915,
+        "text": "-",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212286547-xwe3.wav",
+        "lang": "en",
+        "ms": 2930,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212352727-paag.wav",
+        "lang": "en",
+        "ms": 2928,
+        "text": "wheelchair intermittently she's not",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215683554-jltp.wav",
+        "lang": "en",
+        "ms": 2980,
+        "text": "チョコレート",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215691815-grry.wav",
+        "lang": "en",
+        "ms": 3007,
+        "text": "バター",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215696108-1o76.wav",
+        "lang": "en",
+        "ms": 2948,
+        "text": ".",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215699548-mozd.wav",
+        "lang": "en",
+        "ms": 2972,
+        "text": "Testing 1, 2, 3.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217765179-71ew.wav",
+        "lang": "en",
+        "ms": 2965,
+        "text": "- Okay.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217771701-bgxy.wav",
+        "lang": "en",
+        "ms": 3034,
+        "text": ".",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217781275-iwyv.wav",
+        "lang": "en",
+        "ms": 3102,
+        "text": "Testing one, two, three.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217785185-4lvx.wav",
+        "lang": "en",
+        "ms": 3090,
+        "text": "Testing, testing.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217789912-2nna.wav",
+        "lang": "en",
+        "ms": 3133,
+        "text": "Testing, test, test, test, test.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217864427-i13o.wav",
+        "lang": "en",
+        "ms": 3198,
+        "text": "So",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217869227-smkl.wav",
+        "lang": "en",
+        "ms": 3165,
+        "text": ".",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218002907-1xia.wav",
+        "lang": "en",
+        "ms": 3189,
+        "text": "*Rain*",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218005992-efpy.wav",
+        "lang": "en",
+        "ms": 3086,
+        "text": "I'm going to go.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218250782-6d2z.wav",
+        "lang": "en",
+        "ms": 3040,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218286944-0qu1.wav",
+        "lang": "en",
+        "ms": 3055,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219116754-vr86.wav",
+        "lang": "en",
+        "ms": 3046,
+        "text": "So does this work?",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219121512-8c9l.wav",
+        "lang": "en",
+        "ms": 3054,
+        "text": "What?",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219141343-1f4i.wav",
+        "lang": "en",
+        "ms": 3212,
+        "text": "When I hit the transcribe button again, after it said success, nothing happened. But then a second or two later, I held it down and it's transcribing fine.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219146120-mtgu.wav",
+        "lang": "en",
+        "ms": 3033,
+        "text": "So...",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219148353-wq7w.wav",
+        "lang": "en",
+        "ms": 3211,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219148907-khha.wav",
+        "lang": "en",
+        "ms": 3185,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219671474-2r9h.wav",
+        "lang": "en",
+        "ms": 3240,
+        "text": "Okay.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220027115-s53t.wav",
+        "lang": "en",
+        "ms": 3341,
+        "text": "Það er það er það er það.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220029533-xju3.wav",
+        "lang": "en",
+        "ms": 3293,
+        "text": "You should test yourself on this if you're sounding",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220052008-1w8m.wav",
+        "lang": "en",
+        "ms": 3216,
+        "text": "Do you have a best one? Anyway, here's one.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220054081-ebkr.wav",
+        "lang": "en",
+        "ms": 3233,
+        "text": "everything I told you about.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220297154-590k.wav",
+        "lang": "en",
+        "ms": 3216,
+        "text": "It doesn't exist yet. It's slowing down to--",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220299215-p7ln.wav",
+        "lang": "en",
+        "ms": 3177,
+        "text": "that.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226049291-j10h.wav",
+        "lang": "en",
+        "ms": 3217,
+        "text": "- Okay, let me go to the center.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226549355-61lq.wav",
+        "lang": "en",
+        "ms": 3203,
+        "text": "the top of it.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226957631-o7l3.wav",
+        "lang": "en",
+        "ms": 3156,
+        "text": "- Wow!",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789227252155-bz11.wav",
+        "lang": "en",
+        "ms": 3122,
+        "text": "-",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789227258923-0vem.wav",
+        "lang": "en",
+        "ms": 3194,
+        "text": "-",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228098581-0dbs.wav",
+        "lang": "en",
+        "ms": 3219,
+        "text": "Hello there.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228103927-qkfx.wav",
+        "lang": "en",
+        "ms": 3218,
+        "text": "It seems to have been a good time.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228108501-fon7.wav",
+        "lang": "en",
+        "ms": 3174,
+        "text": "Thank you.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228116506-j66z.wav",
+        "lang": "en",
+        "ms": 3201,
+        "text": "It's coming off the soil of the earth.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228253350-nrdn.wav",
+        "lang": "en",
+        "ms": 3250,
+        "text": "I don't know, let's see how this goes now. I'm not sure it 's going to get it quite right.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228263859-u8l1.wav",
+        "lang": "en",
+        "ms": 3224,
+        "text": "For instance, there it said \"a play right\" but I said \"it quite right\"",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228322518-r7dn.wav",
+        "lang": "en",
+        "ms": 3181,
+        "text": "Maybe we switched language models or something.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228335778-q931.wav",
+        "lang": "en",
+        "ms": 3193,
+        "text": "It seems more error for him now.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228341983-0h3b.wav",
+        "lang": "en",
+        "ms": 3272,
+        "text": "The button is working though.",
+        "errors": null,
+        "words": null
+      }
+    ],
+    "medium-q5_0": [
+      {
+        "clip": "dictation-1789121786771-mxfq.wav",
+        "lang": "en",
+        "ms": 2022,
+        "text": "Thank you for watching. Please subscribe to the channel.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210095984-d513.wav",
+        "lang": "en",
+        "ms": 2141,
+        "text": "Thanks for watching! Please subscribe!",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210101913-1b0j.wav",
+        "lang": "en",
+        "ms": 2008,
+        "text": "最後まで見てくれてありがとう!",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210110402-o299.wav",
+        "lang": "en",
+        "ms": 1887,
+        "text": "(fire crackling)",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210122643-8689.wav",
+        "lang": "en",
+        "ms": 1825,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212223791-53kv.wav",
+        "lang": "en",
+        "ms": 1825,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212286547-xwe3.wav",
+        "lang": "en",
+        "ms": 1838,
+        "text": "Thank you for watching.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212352727-paag.wav",
+        "lang": "en",
+        "ms": 1856,
+        "text": "wheelchair intermittently. She's not",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215683554-jltp.wav",
+        "lang": "en",
+        "ms": 1864,
+        "text": "見てくれてありがとう!",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215691815-grry.wav",
+        "lang": "en",
+        "ms": 1837,
+        "text": "見てくれてありがとう!",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215696108-1o76.wav",
+        "lang": "en",
+        "ms": 1796,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215699548-mozd.wav",
+        "lang": "en",
+        "ms": 1832,
+        "text": "Testing 1, 2, 3.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217765179-71ew.wav",
+        "lang": "en",
+        "ms": 1783,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217771701-bgxy.wav",
+        "lang": "en",
+        "ms": 1832,
+        "text": "(upbeat music)",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217781275-iwyv.wav",
+        "lang": "en",
+        "ms": 1887,
+        "text": "Testing 1, 2, 3.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217785185-4lvx.wav",
+        "lang": "en",
+        "ms": 1819,
+        "text": "testing testing",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217789912-2nna.wav",
+        "lang": "en",
+        "ms": 1874,
+        "text": "testing test test test.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217864427-i13o.wav",
+        "lang": "en",
+        "ms": 1864,
+        "text": "Thank you for watching.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217869227-smkl.wav",
+        "lang": "en",
+        "ms": 1874,
+        "text": "Thank you for watching!",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218002907-1xia.wav",
+        "lang": "en",
+        "ms": 1866,
+        "text": "Thank you for watching.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218005992-efpy.wav",
+        "lang": "en",
+        "ms": 1865,
+        "text": "Thank you for watching.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218250782-6d2z.wav",
+        "lang": "en",
+        "ms": 1815,
+        "text": "you",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218286944-0qu1.wav",
+        "lang": "en",
+        "ms": 1855,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219116754-vr86.wav",
+        "lang": "en",
+        "ms": 1874,
+        "text": "So does this work?",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219121512-8c9l.wav",
+        "lang": "en",
+        "ms": 1830,
+        "text": "おれっ",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219141343-1f4i.wav",
+        "lang": "en",
+        "ms": 2272,
+        "text": "When I hit the transcribe button again, after it said success, nothing happened. But then a second or two later I held it down and it's transcribing fine.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219146120-mtgu.wav",
+        "lang": "en",
+        "ms": 1898,
+        "text": "So.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219148353-wq7w.wav",
+        "lang": "en",
+        "ms": 1838,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219148907-khha.wav",
+        "lang": "en",
+        "ms": 1814,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219671474-2r9h.wav",
+        "lang": "en",
+        "ms": 1813,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220027115-s53t.wav",
+        "lang": "en",
+        "ms": 1836,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220029533-xju3.wav",
+        "lang": "en",
+        "ms": 1834,
+        "text": "You should test yourself.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220052008-1w8m.wav",
+        "lang": "en",
+        "ms": 1915,
+        "text": "Do you have a best one? Anyway, here's one.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220054081-ebkr.wav",
+        "lang": "en",
+        "ms": 1850,
+        "text": "Everything I told you about.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220297154-590k.wav",
+        "lang": "en",
+        "ms": 1988,
+        "text": "[BANG] [INAUDIBLE]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220299215-p7ln.wav",
+        "lang": "en",
+        "ms": 1790,
+        "text": "that.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226049291-j10h.wav",
+        "lang": "en",
+        "ms": 1883,
+        "text": "Windows reset.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226549355-61lq.wav",
+        "lang": "en",
+        "ms": 1871,
+        "text": "of this.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226957631-o7l3.wav",
+        "lang": "en",
+        "ms": 1819,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789227252155-bz11.wav",
+        "lang": "en",
+        "ms": 1804,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789227258923-0vem.wav",
+        "lang": "en",
+        "ms": 1877,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228098581-0dbs.wav",
+        "lang": "en",
+        "ms": 1826,
+        "text": "Hello there.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228103927-qkfx.wav",
+        "lang": "en",
+        "ms": 1813,
+        "text": "[APPLAUSE]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228108501-fon7.wav",
+        "lang": "en",
+        "ms": 1813,
+        "text": "(applause)",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228116506-j66z.wav",
+        "lang": "en",
+        "ms": 1874,
+        "text": "It's coming off the side of the filter button.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228253350-nrdn.wav",
+        "lang": "en",
+        "ms": 2032,
+        "text": "I don't know, let's see how this goes now. I'm not sure it's gonna get it clear right.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228263859-u8l1.wav",
+        "lang": "en",
+        "ms": 1965,
+        "text": "For instance, there it said \"a playwright\" but I said \"it played right.\"",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228322518-r7dn.wav",
+        "lang": "en",
+        "ms": 1854,
+        "text": "Maybe we switch language models or something.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228335778-q931.wav",
+        "lang": "en",
+        "ms": 1854,
+        "text": "It seems more error prone now.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228341983-0h3b.wav",
+        "lang": "en",
+        "ms": 1843,
+        "text": "The button is working though.",
+        "errors": null,
+        "words": null
+      }
+    ],
+    "small.en-q5_1": [
+      {
+        "clip": "dictation-1789121786771-mxfq.wav",
+        "lang": "en",
+        "ms": 388,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210095984-d513.wav",
+        "lang": "en",
+        "ms": 432,
+        "text": "[SOUND]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210101913-1b0j.wav",
+        "lang": "en",
+        "ms": 390,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210110402-o299.wav",
+        "lang": "en",
+        "ms": 399,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210122643-8689.wav",
+        "lang": "en",
+        "ms": 401,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212223791-53kv.wav",
+        "lang": "en",
+        "ms": 427,
+        "text": "(audience applauding)",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212286547-xwe3.wav",
+        "lang": "en",
+        "ms": 410,
+        "text": "(water splashing)",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212352727-paag.wav",
+        "lang": "en",
+        "ms": 401,
+        "text": "wheelchair intermittently.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215683554-jltp.wav",
+        "lang": "en",
+        "ms": 436,
+        "text": "[snaps fingers]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215691815-grry.wav",
+        "lang": "en",
+        "ms": 390,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215696108-1o76.wav",
+        "lang": "en",
+        "ms": 408,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215699548-mozd.wav",
+        "lang": "en",
+        "ms": 422,
+        "text": "Testing, one, two, three.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217765179-71ew.wav",
+        "lang": "en",
+        "ms": 412,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217771701-bgxy.wav",
+        "lang": "en",
+        "ms": 408,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217781275-iwyv.wav",
+        "lang": "en",
+        "ms": 413,
+        "text": "Testing one, two, three.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217785185-4lvx.wav",
+        "lang": "en",
+        "ms": 397,
+        "text": "Testing, testing.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217789912-2nna.wav",
+        "lang": "en",
+        "ms": 407,
+        "text": "testing test test test test.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217864427-i13o.wav",
+        "lang": "en",
+        "ms": 412,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217869227-smkl.wav",
+        "lang": "en",
+        "ms": 409,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218002907-1xia.wav",
+        "lang": "en",
+        "ms": 387,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218005992-efpy.wav",
+        "lang": "en",
+        "ms": 386,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218250782-6d2z.wav",
+        "lang": "en",
+        "ms": 408,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218286944-0qu1.wav",
+        "lang": "en",
+        "ms": 410,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219116754-vr86.wav",
+        "lang": "en",
+        "ms": 419,
+        "text": "So, what does this work?",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219121512-8c9l.wav",
+        "lang": "en",
+        "ms": 432,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219141343-1f4i.wav",
+        "lang": "en",
+        "ms": 526,
+        "text": "When I hit the transcribe button again after it said success, nothing happened. But then a second or two later I held it down and it's transcribed fine.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219146120-mtgu.wav",
+        "lang": "en",
+        "ms": 418,
+        "text": "So.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219148353-wq7w.wav",
+        "lang": "en",
+        "ms": 407,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219148907-khha.wav",
+        "lang": "en",
+        "ms": 405,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219671474-2r9h.wav",
+        "lang": "en",
+        "ms": 427,
+        "text": "[BLANK_AUDIO]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220027115-s53t.wav",
+        "lang": "en",
+        "ms": 395,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220029533-xju3.wav",
+        "lang": "en",
+        "ms": 415,
+        "text": "You should test yourself.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220052008-1w8m.wav",
+        "lang": "en",
+        "ms": 507,
+        "text": "Do you have a best one? Anyway, here's one. What really matters.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220054081-ebkr.wav",
+        "lang": "en",
+        "ms": 410,
+        "text": "Everything I told you about.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220297154-590k.wav",
+        "lang": "en",
+        "ms": 560,
+        "text": "[BANG!] [Inaudible] [Inaudible] [Inaudible]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220299215-p7ln.wav",
+        "lang": "en",
+        "ms": 388,
+        "text": "Yeah.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226049291-j10h.wav",
+        "lang": "en",
+        "ms": 453,
+        "text": "In those few seconds.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226549355-61lq.wav",
+        "lang": "en",
+        "ms": 388,
+        "text": "Stop this.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226957631-o7l3.wav",
+        "lang": "en",
+        "ms": 428,
+        "text": "[SOUND]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789227252155-bz11.wav",
+        "lang": "en",
+        "ms": 406,
+        "text": "(screaming)",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789227258923-0vem.wav",
+        "lang": "en",
+        "ms": 395,
+        "text": "(screaming)",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228098581-0dbs.wav",
+        "lang": "en",
+        "ms": 378,
+        "text": "Hello there.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228103927-qkfx.wav",
+        "lang": "en",
+        "ms": 386,
+        "text": "[Applause]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228108501-fon7.wav",
+        "lang": "en",
+        "ms": 393,
+        "text": "(screaming)",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228116506-j66z.wav",
+        "lang": "en",
+        "ms": 446,
+        "text": "[MUSIC]",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228253350-nrdn.wav",
+        "lang": "en",
+        "ms": 524,
+        "text": "I don't know, let's see how this goes now. I'm not sure it's going to get a play rate.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228263859-u8l1.wav",
+        "lang": "en",
+        "ms": 488,
+        "text": "For instance, they said \"a playwright\", but I said \"it quite right\".",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228322518-r7dn.wav",
+        "lang": "en",
+        "ms": 422,
+        "text": "Maybe we switched language models or something.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228335778-q931.wav",
+        "lang": "en",
+        "ms": 419,
+        "text": "It seems more error prone now.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228341983-0h3b.wav",
+        "lang": "en",
+        "ms": 395,
+        "text": "The button is working though.",
+        "errors": null,
+        "words": null
+      }
+    ],
+    "deepgram nova-3": [
+      {
+        "clip": "dictation-1789121786771-mxfq.wav",
+        "lang": "en",
+        "ms": 708,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210095984-d513.wav",
+        "lang": "en",
+        "ms": 600,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210101913-1b0j.wav",
+        "lang": "en",
+        "ms": 293,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210110402-o299.wav",
+        "lang": "en",
+        "ms": 303,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210122643-8689.wav",
+        "lang": "en",
+        "ms": 271,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212223791-53kv.wav",
+        "lang": "en",
+        "ms": 424,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212286547-xwe3.wav",
+        "lang": "en",
+        "ms": 297,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212352727-paag.wav",
+        "lang": "en",
+        "ms": 369,
+        "text": "Wheelchair intermittently. She's not",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215683554-jltp.wav",
+        "lang": "en",
+        "ms": 290,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215691815-grry.wav",
+        "lang": "en",
+        "ms": 248,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215696108-1o76.wav",
+        "lang": "en",
+        "ms": 288,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215699548-mozd.wav",
+        "lang": "en",
+        "ms": 505,
+        "text": "Testing one two three.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217765179-71ew.wav",
+        "lang": "en",
+        "ms": 256,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217771701-bgxy.wav",
+        "lang": "en",
+        "ms": 227,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217781275-iwyv.wav",
+        "lang": "en",
+        "ms": 340,
+        "text": "Testing one two three.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217785185-4lvx.wav",
+        "lang": "en",
+        "ms": 374,
+        "text": "Testing. Testing.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217789912-2nna.wav",
+        "lang": "en",
+        "ms": 368,
+        "text": "Testing test. Test. Test. Test.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217864427-i13o.wav",
+        "lang": "en",
+        "ms": 274,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217869227-smkl.wav",
+        "lang": "en",
+        "ms": 273,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218002907-1xia.wav",
+        "lang": "en",
+        "ms": 754,
+        "text": "Hello?",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218005992-efpy.wav",
+        "lang": "en",
+        "ms": 331,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218250782-6d2z.wav",
+        "lang": "en",
+        "ms": 399,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218286944-0qu1.wav",
+        "lang": "en",
+        "ms": 256,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219116754-vr86.wav",
+        "lang": "en",
+        "ms": 354,
+        "text": "So does this work?",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219121512-8c9l.wav",
+        "lang": "en",
+        "ms": 280,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219141343-1f4i.wav",
+        "lang": "en",
+        "ms": 467,
+        "text": "When I hit the transcribe button again after it said success, nothing happened. But then a second or two later, I held it down and it's transcribed fine.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219146120-mtgu.wav",
+        "lang": "en",
+        "ms": 541,
+        "text": "So",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219148353-wq7w.wav",
+        "lang": "en",
+        "ms": 325,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219148907-khha.wav",
+        "lang": "en",
+        "ms": 306,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219671474-2r9h.wav",
+        "lang": "en",
+        "ms": 295,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220027115-s53t.wav",
+        "lang": "en",
+        "ms": 391,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220029533-xju3.wav",
+        "lang": "en",
+        "ms": 380,
+        "text": "We should test yourself on this. If you sound",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220052008-1w8m.wav",
+        "lang": "en",
+        "ms": 334,
+        "text": "Do you have a vessel? Anyway, here's what what really matters.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220054081-ebkr.wav",
+        "lang": "en",
+        "ms": 310,
+        "text": "Everything I told you about.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220297154-590k.wav",
+        "lang": "en",
+        "ms": 318,
+        "text": "Exist yet, slowing down to thick",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220299215-p7ln.wav",
+        "lang": "en",
+        "ms": 317,
+        "text": "Yeah.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226049291-j10h.wav",
+        "lang": "en",
+        "ms": 528,
+        "text": "Give us some seconds.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226549355-61lq.wav",
+        "lang": "en",
+        "ms": 506,
+        "text": "Office.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226957631-o7l3.wav",
+        "lang": "en",
+        "ms": 746,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789227252155-bz11.wav",
+        "lang": "en",
+        "ms": 490,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789227258923-0vem.wav",
+        "lang": "en",
+        "ms": 250,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228098581-0dbs.wav",
+        "lang": "en",
+        "ms": 542,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228103927-qkfx.wav",
+        "lang": "en",
+        "ms": 276,
+        "text": "And",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228108501-fon7.wav",
+        "lang": "en",
+        "ms": 245,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228116506-j66z.wav",
+        "lang": "en",
+        "ms": 435,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228253350-nrdn.wav",
+        "lang": "en",
+        "ms": 354,
+        "text": "I don't know. Let's see how this goes now. I'm not sure it's gonna get it quite right.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228263859-u8l1.wav",
+        "lang": "en",
+        "ms": 430,
+        "text": "For instance, there it said a playwright, but I said it quite right.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228322518-r7dn.wav",
+        "lang": "en",
+        "ms": 326,
+        "text": "Maybe we switched language models or something.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228335778-q931.wav",
+        "lang": "en",
+        "ms": 271,
+        "text": "It seems more error prone now.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228341983-0h3b.wav",
+        "lang": "en",
+        "ms": 555,
+        "text": "The button is working, though.",
+        "errors": null,
+        "words": null
+      }
+    ],
+    "parakeet tdt 0.6b v3": [
+      {
+        "clip": "dictation-1789121786771-mxfq.wav",
+        "lang": "en",
+        "ms": 109,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210095984-d513.wav",
+        "lang": "en",
+        "ms": 2272,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210101913-1b0j.wav",
+        "lang": "en",
+        "ms": 536,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210110402-o299.wav",
+        "lang": "en",
+        "ms": 158,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789210122643-8689.wav",
+        "lang": "en",
+        "ms": 85,
+        "text": "Yeah.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212223791-53kv.wav",
+        "lang": "en",
+        "ms": 170,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212286547-xwe3.wav",
+        "lang": "en",
+        "ms": 177,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789212352727-paag.wav",
+        "lang": "en",
+        "ms": 191,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215683554-jltp.wav",
+        "lang": "en",
+        "ms": 184,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215691815-grry.wav",
+        "lang": "en",
+        "ms": 155,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215696108-1o76.wav",
+        "lang": "en",
+        "ms": 135,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789215699548-mozd.wav",
+        "lang": "en",
+        "ms": 186,
+        "text": "Testing one, two, three.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217765179-71ew.wav",
+        "lang": "en",
+        "ms": 123,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217771701-bgxy.wav",
+        "lang": "en",
+        "ms": 127,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217781275-iwyv.wav",
+        "lang": "en",
+        "ms": 184,
+        "text": "Yeah.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217785185-4lvx.wav",
+        "lang": "en",
+        "ms": 157,
+        "text": "That's fantastic.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217789912-2nna.wav",
+        "lang": "en",
+        "ms": 124,
+        "text": "Test test test.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217864427-i13o.wav",
+        "lang": "en",
+        "ms": 183,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789217869227-smkl.wav",
+        "lang": "en",
+        "ms": 168,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218002907-1xia.wav",
+        "lang": "en",
+        "ms": 194,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218005992-efpy.wav",
+        "lang": "en",
+        "ms": 141,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218250782-6d2z.wav",
+        "lang": "en",
+        "ms": 150,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789218286944-0qu1.wav",
+        "lang": "en",
+        "ms": 177,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219116754-vr86.wav",
+        "lang": "en",
+        "ms": 209,
+        "text": "So does this work?",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219121512-8c9l.wav",
+        "lang": "en",
+        "ms": 120,
+        "text": "What",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219141343-1f4i.wav",
+        "lang": "en",
+        "ms": 814,
+        "text": "When I hit the transcribe button again after it said success, nothing happened, but then a second or two later I held it down and it's transcribing fine.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219146120-mtgu.wav",
+        "lang": "en",
+        "ms": 219,
+        "text": "So",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219148353-wq7w.wav",
+        "lang": "en",
+        "ms": 157,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219148907-khha.wav",
+        "lang": "en",
+        "ms": 119,
+        "text": "Mm-hmm.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789219671474-2r9h.wav",
+        "lang": "en",
+        "ms": 167,
+        "text": "Okay.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220027115-s53t.wav",
+        "lang": "en",
+        "ms": 163,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220029533-xju3.wav",
+        "lang": "en",
+        "ms": 158,
+        "text": "You should test yourself.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220052008-1w8m.wav",
+        "lang": "en",
+        "ms": 291,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220054081-ebkr.wav",
+        "lang": "en",
+        "ms": 168,
+        "text": "Everything I told you about.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220297154-590k.wav",
+        "lang": "en",
+        "ms": 173,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789220299215-p7ln.wav",
+        "lang": "en",
+        "ms": 140,
+        "text": "Yeah.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226049291-j10h.wav",
+        "lang": "en",
+        "ms": 125,
+        "text": "With the second.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226549355-61lq.wav",
+        "lang": "en",
+        "ms": 157,
+        "text": "Now it's",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789226957631-o7l3.wav",
+        "lang": "en",
+        "ms": 154,
+        "text": "Yeah",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789227252155-bz11.wav",
+        "lang": "en",
+        "ms": 202,
+        "text": "Uh",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789227258923-0vem.wav",
+        "lang": "en",
+        "ms": 161,
+        "text": "I have a",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228098581-0dbs.wav",
+        "lang": "en",
+        "ms": 143,
+        "text": "Hello there.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228103927-qkfx.wav",
+        "lang": "en",
+        "ms": 156,
+        "text": "It seems to",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228108501-fon7.wav",
+        "lang": "en",
+        "ms": 129,
+        "text": "",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228116506-j66z.wav",
+        "lang": "en",
+        "ms": 255,
+        "text": "It's coming off the side of the both.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228253350-nrdn.wav",
+        "lang": "en",
+        "ms": 269,
+        "text": "I don't know, let's see how this goes now. I'm not sure it's gonna get it quite right.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228263859-u8l1.wav",
+        "lang": "en",
+        "ms": 325,
+        "text": "For instance there it said a playwright, but I said it quite right.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228322518-r7dn.wav",
+        "lang": "en",
+        "ms": 243,
+        "text": "Maybe we switch language models or something.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228335778-q931.wav",
+        "lang": "en",
+        "ms": 218,
+        "text": "It seems more error prone now.",
+        "errors": null,
+        "words": null
+      },
+      {
+        "clip": "dictation-1789228341983-0h3b.wav",
+        "lang": "en",
+        "ms": 202,
+        "text": "The button is working though.",
+        "errors": null,
+        "words": null
+      }
+    ]
+  }
+}
