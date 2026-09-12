@@ -170,12 +170,36 @@ function strictWordMatch(source, output, cleanedText) {
   }
 
   let j = 0;
-  for (let i = 0; i < source.length; i += 1) {
+  let i = 0;
+  while (i < source.length) {
     if (source[i] === output[j]) {
+      i += 1;
+      j += 1;
+      continue;
+    }
+    // A word the user saved in their dictionary may stand in for the word or
+    // words it was misheard as: "anchor" → "Anker", "deep gram" → "Deepgram".
+    // Without this the guard discards every name fix the model makes, which is
+    // what it did until 2026-09-12: the correction was made and then silently
+    // reverted on every single dictation. The longest run is tried first so
+    // "power conf" collapses into PowerConf instead of matching "power" alone.
+    // See vocab.isTermSubstitution for why the bar sits where it does.
+    let consumed = 0;
+    if (j < output.length) {
+      for (let k = Math.min(vocab.TERM_RUN_MAX, source.length - i); k >= 1; k -= 1) {
+        if (vocab.isTermSubstitution(source.slice(i, i + k), output[j])) {
+          consumed = k;
+          break;
+        }
+      }
+    }
+    if (consumed) {
+      i += consumed;
       j += 1;
       continue;
     }
     if (!optional.has(i)) return false;
+    i += 1;
   }
   return j === output.length;
 }
