@@ -115,6 +115,30 @@ test("an explicit cleanup model never silently falls back", async () => {
   assert.match(String(takeCleanupError()), /tidy-up isn't working/i);
 });
 
+// The pin above is honoured because the name is plausible. This one is not: it
+// is a setting left behind by an older build, and honouring it would pin a
+// dead engine forever with no way for the user to see why tidy-up stopped. It
+// is dropped and the provider's own chain runs instead. (The sibling case — a
+// model belonging to a DIFFERENT provider — is covered further down, in
+// "switching cleanup providers never carries the other provider's built-in
+// model".)
+test("a retired Groq model left in Settings is ignored, not pinned", async () => {
+  useGroq();
+  process.env.CLEANUP_MODEL = "llama-3.3-70b-versatile";
+  const requestedModels = [];
+  globalThis.fetch = async (_url, init) => {
+    requestedModels.push(JSON.parse(String(init.body)).model);
+    return new Response(
+      '{"choices":[{"message":{"content":"So, like, I think we should ship this thing tomorrow."}}]}',
+      { status: 200 }
+    );
+  };
+
+  assert.equal(await polishTranscript(SAMPLE), CLEANED_A);
+  assert.deepEqual(requestedModels, ["openai/gpt-oss-120b"]);
+  assert.equal(takeCleanupError(), null);
+});
+
 test("a rate-limited default model uses the backup model's separate quota", async () => {
   useGroq();
   const requestedModels = [];
