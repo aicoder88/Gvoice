@@ -681,7 +681,14 @@ function showPillResult(
   //    way, so a success is a success: 3s.
   //  - `opts.holdMs` overrides all of it, for a success whose text only landed
   //    on the clipboard (the retry recovery) and so needs reading time.
-  const holdMs = opts.holdMs ?? (state === "error" ? 30000 : 3000);
+  //  - An error with NOTHING to act on — "No speech detected." above all — has
+  //    no text to copy and nothing to read back. Thirty seconds of red sitting
+  //    on screen made it look as though GVoice had to finish sulking before the
+  //    next press would be heard. It never did: a press during that pill starts
+  //    a dictation like any other (measured 0.7s after one). The pill was the
+  //    only thing in the way, so an empty-handed error now clears in 8s.
+  const holdMs = opts.holdMs
+    ?? (state === "error" ? (transcript ? 30000 : 8000) : 3000);
   setPillState(state, { canCopy: !!transcript, canOpen: !!recordingPath, holdMs, reason: opts.reason });
   pillWindow?.showInactive();
   // Crash backstop only — must outlive the renderer's own timer so it never
