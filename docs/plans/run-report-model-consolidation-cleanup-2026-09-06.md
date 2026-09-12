@@ -128,3 +128,11 @@ machine's. Until he says, nobody should merge them.
 **Also noticed:** GitHub reports the repository has moved from `aicoder88/voice` to
 `aicoder88/Gvoice`. Pushes still work through the redirect today. The address should be
 updated before the redirect is withdrawn.
+
+## Resolved, 12 September 2026
+
+Both versions were merged rather than one being thrown away. The word-preservation
+guard from this Mac and the backup-model failover from the other machine now both run:
+a retired or rate-limited model falls through to the backup, and whatever comes back
+is still rejected if it changed the speaker's words. A stale model name saved in
+Settings no longer pins a dead model — it is dropped and the default chain runs.

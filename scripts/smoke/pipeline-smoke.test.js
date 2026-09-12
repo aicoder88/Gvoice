@@ -27,6 +27,7 @@ import { dirname, join } from "node:path";
 import { WebSocket } from "ws";
 import { startServer } from "../../server.js";
 import { findInstalledWhisperCli } from "../../src/model-download.js";
+import { stopWhisperServer } from "../../src/providers/whisper-local.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = join(HERE, "fixtures", "quick-fox.pcm16");
@@ -105,6 +106,11 @@ async function transcribeFixture() {
     ws.close();
     return transcript;
   } finally {
+    // Closing the HTTP server is not enough: the first transcription warms a
+    // real whisper-server child that outlives it and holds the event loop
+    // open, so `node --test` hangs forever after the assertions pass. Kill the
+    // engine we started, the same way benchmark-run.js does.
+    try { stopWhisperServer(); } catch {}
     await new Promise((resolve) => {
       try { server.closeAllConnections?.(); } catch {}
       server.close(() => resolve());

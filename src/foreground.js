@@ -15,6 +15,8 @@
 // false on non-Win because the only caller (the polling hotkey loop) is
 // itself Windows-only — Mac uses uiohook-napi's event-based path instead.
 
+import { isTerminalApp } from "./paste-confidence.js";
+
 const isWin = process.platform === "win32";
 
 /** @type {((hwnd: number) => number) | null} */
@@ -155,9 +157,9 @@ if (isMac) {
 /**
  * Is the currently-focused element something the user can type into?
  *
- * @returns {boolean | null}  true = editable field focused, false = nothing
- *   editable focused (a paste would go nowhere), null = couldn't tell (AX
- *   unavailable / not trusted) — caller should not treat this as a failure.
+ * @returns {boolean | null}  true = AX reports an editable field, false = AX
+ *   reports no editable field, null = couldn't tell. Both false and null are
+ *   advisory: custom Electron/browser editors can still accept the paste.
  */
 export function isEditableFieldFocused() {
   if (!isMac || !AXUIElementCreateSystemWide || !AXUIElementCopyAttributeValue) return null;
@@ -168,8 +170,7 @@ export function isEditableFieldFocused() {
     try {
       const focusedOut = [null];
       // kAXErrorSuccess === 0. Only the codes that genuinely mean "nothing
-      // focused" may return false — false downgrades a paste to a hard
-      // "Couldn't paste" error. Transient codes (kAXErrorCannotComplete -25204:
+      // focused" may return false. Transient codes (kAXErrorCannotComplete -25204:
       // target app busy or AX messaging timed out; kAXErrorAPIDisabled -25211)
       // mean "couldn't tell" ⇒ null, which the caller never holds against the
       // paste.
@@ -275,22 +276,6 @@ function readFocusedStringValue(/** @type {unknown} */ focused) {
     CFRelease(valueOut[0]);
   }
 }
-
-// App names (lowercased) that mean "the paste target is a terminal emulator".
-// Terminals run TUIs (tmux, vim, editors, Claude Code) that draw box borders and
-// wrap lines, so the focused element's on-screen text (AXValue) is a poor place
-// to look for our pasted string — read-back verification gives false negatives
-// there. Recognising the app lets us skip that check and trust the paste instead
-// of flagging a failure. Matched EXACTLY against the .app bundle name and the
-// executable basename (e.g. "iterm" and "iterm2") — never a substring — so an
-// app merely *containing* one of these words ("Terminal Velocity",
-// "Hyperplanning") is NOT mistaken for a terminal and keeps its read-back check.
-// The bundle name alone covers every listed app; the extra binary basenames are
-// the fallback for a terminal binary launched outside a .app wrapper.
-const TERMINAL_BINARIES = new Set([
-  "iterm", "iterm2", "terminal", "ghostty", "alacritty", "wezterm",
-  "wezterm-gui", "kitty", "warp", "tabby", "hyper"
-]);
 
 // libproc's max path size. One reusable scratch buffer: proc_pidpath writes a
 // fresh NUL-terminated path each call, so reuse is safe and avoids allocating
@@ -420,7 +405,7 @@ export function captureForegroundTarget() {
 export function readbackPasteTarget() {
   return withFocusedElement((focused) => {
     const { bundle, basename } = elementApp(focused);
-    const isTerminal = TERMINAL_BINARIES.has(bundle) || TERMINAL_BINARIES.has(basename);
+    const isTerminal = isTerminalApp(bundle, basename);
     return {
       isTerminal,
       value: isTerminal ? null : readFocusedStringValue(focused),
