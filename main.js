@@ -1307,7 +1307,12 @@ async function setupHotkey() {
     // engine and did nothing, leaving the raw mouse-back toggle live alongside
     // the companion – the double-trigger stuck-mic bug the socket exists to
     // end. Ask the socket where things actually stand instead of assuming.
-    try { hotkeyEngine.setMouseBackEnabled?.(!controlServer?.hasCompanion?.()); } catch {}
+    const companionOwnsButton = !!controlServer?.hasCompanion?.();
+    try { hotkeyEngine.setMouseBackEnabled?.(!companionOwnsButton); } catch {}
+    // Logged so this gate is visible in debug.log. It is silent safety code:
+    // without a line here, the only way to know it worked is the stuck mic it
+    // exists to prevent.
+    dlog("mouse-back-gate", { enabled: !companionOwnsButton, companion: companionOwnsButton, at: "setup" });
     startHookWatchdog(hotkeyEngine.sawEvent);
     const altLabel = process.platform === "darwin"
       ? "right Option (⌥), left Ctrl+Cmd, or mouse back button"
