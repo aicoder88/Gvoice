@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'none'">
+<title>GVoice - Edit selection</title>
+<style>
+:root { color-scheme: dark; font: 14px system-ui; background: #10151b; color: #ecf2f8; }
+* { box-sizing: border-box; } body { margin: 0; padding: 28px; } h1 { margin: 0 0 8px; font-size: 24px; }
+p { color: #b6c5d4; line-height: 1.5; } .columns { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 22px 0; }
+label { display: block; font-weight: 600; margin-bottom: 8px; } textarea { width: 100%; min-height: 210px; resize: vertical; background: #18222d; border: 1px solid #42556b; border-radius: 8px; padding: 12px; color: #ecf2f8; font: inherit; line-height: 1.5; }
+#instruction { min-height: 70px; } button { font: inherit; padding: 10px 16px; border: 1px solid #536981; color: #ecf2f8; background: #233346; border-radius: 7px; cursor: pointer; }
+button:disabled { opacity: .45; cursor: default; } button:focus-visible, textarea:focus-visible { outline: 3px solid #79bcff; outline-offset: 3px; }
+#apply { background: #94dcba; color: #10241b; font-weight: 700; } .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; } #status { min-height: 42px; }
+</style></head><body>
+<h1>Edit selected text</h1><p>Select text in another app and press Cmd+Shift+E. Only your selection and editing instruction go to the configured text provider.</p>
+<div class="columns"><div><label for="original">Original selection</label><textarea id="original" readonly></textarea></div><div><label for="replacement">Replacement preview</label><textarea id="replacement" readonly placeholder="Your preview will appear here."></textarea></div></div>
+<label for="instruction">What should change?</label><textarea id="instruction" placeholder="For example: make this shorter, keeping all the facts."></textarea>
+<div class="actions"><button id="speak">Speak instruction</button><button id="generate">Generate preview</button><button id="cancel">Cancel</button><button id="apply" disabled>Apply replacement</button><button id="undo" disabled>Undo edit</button></div>
+<p id="status" role="status" aria-live="polite"></p><script src="voice-edit-ui.js"></script></body></html>

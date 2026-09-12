@@ -6,6 +6,10 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("settingsBridge", {
   get: () => ipcRenderer.invoke("settings:get"),
+  profiles: () => ipcRenderer.invoke("profiles:get"),
+  saveProfiles: view => ipcRenderer.invoke("profiles:save", view),
+  detectDestination: () => ipcRenderer.invoke("profiles:detect"),
+  openBenchmark: () => ipcRenderer.invoke("benchmark:open"),
   save: (view) => ipcRenderer.invoke("settings:save", view),
   clearRecordings: () => ipcRenderer.invoke("settings:clear-recordings"),
   // Microphone section. These live in preferences.json, not the .env the rest

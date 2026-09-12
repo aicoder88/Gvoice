@@ -5,6 +5,7 @@
 // dictations can't interleave and corrupt the file.
 import { readFile, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
+import { DELIVERY_STATES as LEASE_DELIVERY_STATES } from "./clipboard-lease.js";
 
 const MAX_ENTRIES = 50;
 
@@ -32,6 +33,38 @@ const MAX_ENTRIES = 50;
 
 /** @type {HistoryEntry[]} */
 let entries = [];
+
+// What actually became of a dictation. One field instead of the four booleans
+// the two machines grew separately, so the tray has one thing to read and a
+// new outcome cannot be half-added.
+//
+//   verified        pasted, and read back out of the field afterwards
+//   sent-unverified pasted, but nothing readable to confirm it with
+//   refused         the destination changed, so it waits on the clipboard
+//   cancelled       the user gave up, before or after the words arrived
+//   superseded      a newer press took over before this one was delivered
+//   recovered       transcribed again later from the saved clip
+//   failed          the paste itself threw
+// The first five are a paste's own outcomes and belong to the clipboard lease;
+// history adds the two that happen without a paste at all.
+export const DELIVERY_STATES = [...LEASE_DELIVERY_STATES, "cancelled", "recovered"];
+
+// History written before this field existed, read back without losing meaning.
+function legacyState(entry) {
+  if (entry.cancelled) return "cancelled";
+  if (entry.copy) return "refused";
+  if (entry.recovered) return "recovered";
+  return entry.pasted ? "sent-unverified" : "failed";
+}
+
+// The one place an outcome is decided. Callers pass what they know; an explicit
+// deliveryState always wins, and the older flags still map cleanly so no call
+// site has to change on the same day as the merge.
+function resolveDeliveryState(pasted, meta = {}) {
+  if (DELIVERY_STATES.includes(meta.deliveryState)) return meta.deliveryState;
+  return legacyState({ ...meta, pasted });
+}
+
 /** @type {string | null} */
 let historyPath = null;
 /** @type {Promise<void>} */
@@ -53,10 +86,8 @@ export async function initHistory() {
           ts: e.ts,
           text: e.text,
           pasted: !!e.pasted,
+          deliveryState: DELIVERY_STATES.includes(e.deliveryState) ? e.deliveryState : legacyState(e),
           recordingPath: typeof e.recordingPath === "string" ? e.recordingPath : null,
-          recovered: !!e.recovered,
-          cancelled: !!e.cancelled,
-          copy: !!e.copy,
           sessionId: typeof e.sessionId === "string" ? e.sessionId : null
         }))
         .slice(0, MAX_ENTRIES);
@@ -92,10 +123,8 @@ export function recordTranscript(text, pasted, recordingPath = null, meta = {}) 
     ts: Date.now(),
     text: text || "",
     pasted,
+    deliveryState: resolveDeliveryState(pasted, meta),
     recordingPath: recordingPath || null,
-    recovered: !!meta.recovered,
-    cancelled: !!meta.cancelled,
-    copy: !!meta.copy,
     sessionId: typeof meta.sessionId === "string" ? meta.sessionId : null
   });
   if (entries.length > MAX_ENTRIES) entries.length = MAX_ENTRIES;

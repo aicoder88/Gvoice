@@ -1,5 +1,7 @@
 // @ts-check
 import { execFile } from "node:child_process";
+import { createClipboardLease } from "./clipboard-lease.js";
+import { getClipboardChangeCount } from "./clipboard-sequence.js";
 import { sendPasteShortcut } from "./foreground.js";
 import { checkDestination } from "./paste-guard.js";
 
@@ -33,13 +35,6 @@ const RELEASE_DELAY_MS = Number(process.env.TYPE_RELEASE_DELAY_MS || 80);
 // kernel exit — seen 2026-06-06), where waiting longer never helps. Without
 // this cap, typeText awaits forever and the pill is stuck on "Transcribing…".
 const PASTE_TIMEOUT_MS = Number(process.env.TYPE_PASTE_TIMEOUT_MS) || 4000;
-// How long to let the target app actually consume the ⌘V before we put the
-// user's own clipboard back. The keystroke returns as soon as it is delivered,
-// not when the app has read the pasteboard, so restoring instantly would rip
-// the text away mid-paste. This wait is now AWAITED (it used to be a bare
-// fire-and-forget setTimeout), so the restore finishes inside the delivery and
-// two dictations can never have their clipboard writes interleave.
-const PASTE_SETTLE_MS = Number(process.env.TYPE_PASTE_SETTLE_MS) || 250;
 
 /**
  * @param {number} ms
@@ -93,7 +88,7 @@ export function prewarmTyping() {
  * neither pulls in nut-js). Linux falls back to nut-js.
  * @returns {Promise<void>}
  */
-function pasteShortcut() {
+export function pasteShortcut({ expectedPid = null } = {}) {
   if (isWin) {
     // Native Win32 Ctrl+V. Returns false only if koffi never loaded, in which
     // case we fall through to the nut-js path below as a last resort.
@@ -111,15 +106,18 @@ function pasteShortcut() {
         settled = true;
         reject(new Error("osascript paste helper did not return within " + PASTE_TIMEOUT_MS + "ms (System Events hung?)"));
       }, PASTE_TIMEOUT_MS);
+      const guard = Number.isSafeInteger(expectedPid) && expectedPid > 0
+        ? `if (unix id of first application process whose frontmost is true) is not ${expectedPid} then return "gvoice-refused"\n`
+        : "";
       execFile(
         "/usr/bin/osascript",
-        ["-e", 'tell application "System Events" to keystroke "v" using command down'],
+        ["-e", `tell application "System Events"\n${guard}keystroke "v" using command down\nreturn "gvoice-sent"\nend tell`],
         { timeout: PASTE_TIMEOUT_MS, killSignal: "SIGKILL" },
-        (err) => {
+        (err, stdout) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          err ? reject(err) : resolve();
+          err ? reject(err) : resolve({ refused: stdout?.trim() === "gvoice-refused" });
         }
       );
     });
@@ -130,186 +128,117 @@ function pasteShortcut() {
   });
 }
 
-// One clipboard at a time. Every delivery runs to completion — snapshot, write,
-// paste, restore — before the next one starts, so two transcripts arriving
-// close together can never have one's restore land on top of the other's text.
-/** @type {Promise<any>} */
-let clipboardQueue = Promise.resolve();
 /**
- * @template T
- * @param {() => Promise<T>} job
- * @returns {Promise<T>}
- */
-function serialise(job) {
-  const run = clipboardQueue.then(job, job);
-  clipboardQueue = run.then(() => {}, () => {});
-  return run;
-}
-
-/**
- * Everything on the clipboard right now that we know how to put back: plain
- * text, an image (a screenshot reads back as EMPTY text, so it needs its own
- * capture), and the rich flavours a copy from a document carries. Files and
- * anything else Electron cannot round-trip are simply not captured — the
- * snapshot says what it holds and nothing more.
- * @param {any} clipboard
- * @returns {{ text?: string, html?: string, rtf?: string, image?: any }}
- */
-function snapshotClipboard(clipboard) {
-  /** @type {string[]} */
-  let formats = [];
-  try {
-    if (typeof clipboard.availableFormats === "function") formats = clipboard.availableFormats() || [];
-  } catch { formats = []; }
-  const has = (/** @type {string} */ mime) => formats.some((f) => String(f).startsWith(mime));
-
-  /** @type {{ text?: string, html?: string, rtf?: string, image?: any }} */
-  const snap = {};
-  try {
-    const text = clipboard.readText();
-    if (text) snap.text = text;
-  } catch {}
-  try {
-    if (has("text/html") && typeof clipboard.readHTML === "function") {
-      const html = clipboard.readHTML();
-      if (html) snap.html = html;
-    }
-  } catch {}
-  try {
-    if ((has("text/rtf") || has("public.rtf")) && typeof clipboard.readRTF === "function") {
-      const rtf = clipboard.readRTF();
-      if (rtf) snap.rtf = rtf;
-    }
-  } catch {}
-  try {
-    // Ask for the image when the formats say there is one, and also when there
-    // is no text at all — availableFormats is missing on the injected
-    // clipboards the tests use, and a screenshot must survive either way.
-    if (has("image/") || !snap.text) {
-      const image = clipboard.readImage();
-      if (image && typeof image.isEmpty === "function" && !image.isEmpty()) snap.image = image;
-    }
-  } catch {}
-  return snap;
-}
-
-/**
- * Put a snapshot back, but ONLY if the clipboard still holds the exact text we
- * put there. If the user copied something of their own while the paste was
- * settling, their copy wins and is never overwritten.
- * @param {any} clipboard
- * @param {{ text?: string, html?: string, rtf?: string, image?: any }} snap
- * @param {string} ourText
- * @returns {boolean} true when the snapshot was written back
- */
-function restoreClipboard(clipboard, snap, ourText) {
-  try {
-    if (clipboard.readText() !== ourText) return false;
-  } catch {
-    return false;
-  }
-  const keys = Object.keys(snap);
-  try {
-    if (keys.length === 0) {
-      // Nothing was on it before; leave nothing behind either.
-      if (typeof clipboard.clear === "function") clipboard.clear();
-      else clipboard.writeText("");
-      return true;
-    }
-    if (typeof clipboard.write === "function") {
-      clipboard.write(snap);
-      return true;
-    }
-    // Injected/older clipboards without write(): text and image cover them.
-    if (snap.image) clipboard.writeImage(snap.image);
-    else clipboard.writeText(snap.text || "");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Type or paste `text` into the focused app. With TYPE_VIA_CLIPBOARD=true
- * (default), snapshots the current clipboard, writes `text`, sends the paste
- * shortcut, then puts the snapshot back — but only if the clipboard still reads
- * back as our text, so a copy the user made mid-paste is never clobbered.
- * Deliveries are serialised: one clipboard transaction at a time. Otherwise,
- * types each character via nut-js.
+ * Build a typer: paste (or type) text into the focused app, one delivery at a
+ * time. Dependencies are injectable so the whole path runs under plain
+ * `node --test`, with no Electron and no real keystroke.
  *
- * `target` is the destination captured when the hotkey went down (see
- * src/foreground.js). If it is set, the destination is read AGAIN here — the
- * last moment before the text leaves — and a paste only happens when the user
- * is still in the same app, the same window, with the caret in something that
- * takes typing. If they moved, the words are left on the clipboard and
- * `{ pasted: false }` comes back so the caller can say "Ready to copy" instead
- * of firing ⌘V into a stranger's window.
+ * Two machines built this separately and it keeps the best of each:
  *
- * @param {string} text
- * @param {object} [options]
- * @param {import("./foreground.js").ForegroundTarget | null} [options.target]
- * @param {() => any} [options.readTarget] destination reader (tests inject one)
- * @param {any} [options.clipboard] clipboard (tests inject one)
- * @param {() => Promise<void>} [options.paste] paste keystroke (tests inject one)
- * @param {number} [options.settleMs] how long to let the app read the pasteboard
- * @returns {Promise<{ pasted: boolean, reason: string }>}
+ * - The clipboard is held as a LEASE (src/clipboard-lease.js) that the caller
+ *   settles once it knows whether the words landed. The user's own clipboard
+ *   comes back only for a VERIFIED paste. Restoring on a timer after a paste we
+ *   could not confirm is how the only copy of an undelivered dictation used to
+ *   get wiped, and both machines logged that bug independently.
+ * - The destination is checked twice. `target` (captured when the key went
+ *   down) is compared against a fresh reading right before the clipboard is
+ *   touched: a different app, a different window, or a text field that has
+ *   gone away all refuse the paste. `expectedPid` is then checked again inside
+ *   the very same call that sends the keystroke, leaving no gap to switch apps
+ *   in. An app that never looked editable to Accessibility (every terminal)
+ *   still gets its paste; see src/paste-guard.js.
+ *
+ * @param {object} [deps]
+ * @param {any} [deps.clipboardTarget] clipboard to use; Electron's by default
+ * @param {() => (number | null)} [deps.getChangeCount] OS clipboard sequence
+ * @param {(opts: { expectedPid: number | null }) => Promise<any>} [deps.sendShortcut]
+ * @param {() => any} [deps.readTarget] destination reader
+ * @param {number} [deps.releaseDelayMs]
  */
-export async function typeText(text, options = {}) {
-  if (!text) return { pasted: false, reason: "empty" };
-  return serialise(() => deliver(text, options));
+export function createTextTyper({
+  clipboardTarget = null,
+  getChangeCount = getClipboardChangeCount,
+  sendShortcut = pasteShortcut,
+  readTarget = realForegroundTarget,
+  releaseDelayMs = RELEASE_DELAY_MS
+} = {}) {
+  /** @type {Promise<any>} */
+  let typingQueue = Promise.resolve();
+  /** @type {any} */
+  let currentLease = null;
+
+  /**
+   * @param {string} text
+   * @param {object} [options]
+   * @param {() => boolean} [options.canPaste] still this press's to deliver?
+   * @param {boolean} [options.exact] no leading space (voice editing)
+   * @param {number | null} [options.expectedPid] refuse unless this app is in front
+   * @param {import("./foreground.js").ForegroundTarget | null} [options.target]
+   */
+  return function typeText(text, { canPaste = () => true, exact = false, expectedPid = null, target = null } = {}) {
+    const work = typingQueue.then(async () => {
+      if (!text) return null;
+      await sleep(releaseDelayMs);
+      // Ownership is checked AFTER the release delay and the queue wait.
+      if (!canPaste()) return null;
+      const clipboard = clipboardTarget || (await realClipboard());
+
+      // Last look before the words leave: every millisecond between this
+      // check and the keystroke is one the user could switch windows in.
+      const destination = await checkDestination(target, readTarget);
+      if (!destination.ok) return refusedDelivery(clipboard, text, destination.reason);
+
+      const needsLeadingSpace = !exact && !/^[\s.,;:!?\-)\]"'`]/.test(text);
+      const textToPaste = needsLeadingSpace ? " " + text : text;
+      if (USE_CLIPBOARD) {
+        currentLease?.finish("superseded");
+        const lease = createClipboardLease(clipboard, textToPaste, { getChangeCount });
+        currentLease = lease;
+        try {
+          const dispatch = await sendShortcut({ expectedPid });
+          lease.refused = dispatch?.refused === true;
+          lease.dispatched = !lease.refused;
+          return lease;
+        } catch (error) {
+          lease.dispatched = false;
+          lease.dispatchError = error;
+          return lease; // Caller settles without overwriting a newer user copy.
+        }
+      }
+      const { keyboard } = await nut();
+      if (!canPaste()) return null;
+      await keyboard.type(textToPaste);
+      // Typed key by key: nothing of ours ever reached the clipboard, so there is
+      // no hold to end and nothing there to keep. No `keep` is how the caller
+      // tells this apart from a real lease – with one it would log a phantom
+      // "clipboard lost" on every rescue, and skip the rescue write it needs.
+      return { dispatched: true, finish(/** @type {string} */ state) { return state; } };
+    });
+    typingQueue = work.then((lease) => lease?.settled).catch(() => {});
+    return work;
+  };
 }
 
 /**
- * One clipboard transaction, start to finish. Only ever called from the queue
- * in typeText().
+ * The destination changed, so the words wait on the clipboard for the user's
+ * own paste. Shaped like a lease so the caller settles every outcome the same
+ * way, but it holds nothing to restore: the clipboard IS the rescue, and
+ * putting the old contents back would erase it.
+ * @param {any} clipboard
  * @param {string} text
- * @param {NonNullable<Parameters<typeof typeText>[1]>} options
- * @returns {Promise<{ pasted: boolean, reason: string }>}
+ * @param {string} reason
  */
-async function deliver(text, options) {
-  const {
-    target = null,
-    readTarget = realForegroundTarget,
-    clipboard: injectedClipboard = null,
-    paste = pasteShortcut,
-    settleMs = PASTE_SETTLE_MS
-  } = options;
-  const clipboard = injectedClipboard || (await realClipboard());
-
-  await sleep(RELEASE_DELAY_MS);
-
-  const needsLeadingSpace = !/^[\s.,;:!?\-)\]"'`]/.test(text);
-  const textToPaste = needsLeadingSpace ? " " + text : text;
-
-  // Last check before the words leave. Deliberately after the release delay and
-  // immediately before the clipboard write: every millisecond between the check
-  // and the keystroke is a millisecond the user could switch windows in.
-  const destination = await checkDestination(target, readTarget);
-  if (!destination.ok) {
-    // The one case where GVoice takes the clipboard and keeps it: the text has
-    // nowhere safe to land, so it waits there for the user's own ⌘V. No leading
-    // space — a hand-driven paste doesn't need one — and no restore timer, or
-    // the rescue would erase itself a quarter-second later.
-    clipboard.writeText(text);
-    return { pasted: false, reason: destination.reason };
-  }
-
-  if (USE_CLIPBOARD) {
-    const snapshot = snapshotClipboard(clipboard);
-    clipboard.writeText(textToPaste);
-    try {
-      await paste();
-    } finally {
-      // Let the app actually take the text, then hand the clipboard back —
-      // inside the transaction, so the next delivery starts from a settled
-      // clipboard instead of racing this restore.
-      if (settleMs > 0) await sleep(settleMs);
-      restoreClipboard(clipboard, snapshot, textToPaste);
-    }
-    return { pasted: true, reason: destination.reason };
-  }
-
-  const { keyboard } = await nut();
-  await keyboard.type(textToPaste);
-  return { pasted: true, reason: destination.reason };
+function refusedDelivery(clipboard, text, reason) {
+  try { clipboard.writeText(text); } catch {}
+  return {
+    dispatched: false,
+    refused: true,
+    destinationChanged: true,
+    reason,
+    settled: Promise.resolve("refused"),
+    finish() { return "refused"; },
+    keep() { return true; }
+  };
 }
+
+export const typeText = createTextTyper();

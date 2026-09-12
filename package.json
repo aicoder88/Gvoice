@@ -14,7 +14,7 @@
     "preinstall": "npx only-allow pnpm",
     "dev": "node server.js",
     "start": "electron .",
-    "build": "node scripts/copy-native.cjs && electron-builder",
+    "build": "node scripts/build-identity.mjs && node scripts/copy-native.cjs && electron-builder",
     "test": "pnpm run test:unit && pnpm run test:parity",
     "test:parity": "node --test --test-force-exit scripts/parity/dictation-flow.test.js",
     "test:cleanup": "node scripts/cleanup-test.js",
@@ -22,7 +22,12 @@
     "compare:speech": "node scripts/compare-transcribers.js",
     "test:unit": "node --test scripts/unit/*.test.js",
     "test:pipeline-smoke": "node --experimental-test-module-mocks --test scripts/smoke/pipeline-smoke.test.js",
-    "test:live": "node scripts/run-live-tests.mjs"
+    "test:live": "node scripts/run-live-tests.mjs",
+    "test:electron": "node scripts/electron/regression.mjs",
+    "test:profiles-benchmark": "node scripts/electron/profiles-benchmark.mjs",
+    "benchmark:compare": "node scripts/benchmark/compare.mjs",
+    "benchmark:local": "node scripts/benchmark/run-local.mjs",
+    "prestart": "node scripts/build-identity.mjs"
   },
   "dependencies": {
     "@nut-tree-fork/nut-js": "^4.2.6",
@@ -34,7 +39,8 @@
   "devDependencies": {
     "@electron/rebuild": "^4.2.0",
     "electron": "^42.7.1",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "playwright": "1.62.1"
   },
   "build": {
     "appId": "com.purr.gvoice",
@@ -53,7 +59,10 @@
       "src/**/*",
       "public/**/*",
       "models/vocab.txt",
-      "package.json"
+      "package.json",
+      "preload-edit.cjs",
+      "preload-benchmark.cjs",
+      "build/build-info.json"
     ],
     "extraResources": [
       {

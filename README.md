@@ -82,3 +82,69 @@ Per-event tracing (key presses, paste timing, cleanup) is written to `debug.log`
 **Dictation key does nothing on macOS?** Open GVoice from Finder (or `open -a GVoice`) rather than from a terminal. macOS gives the right to watch the keyboard to whatever *started* the app, so a terminal without Accessibility permission leaves GVoice looking healthy and completely deaf. GVoice now spots this itself and tells you within about 30 seconds of you using the machine.
 
 **Mic goes quiet after sleep?** GVoice watches for it. If the system wakes from sleep (or the audio device changes) and the mic starts delivering pure silence, the capture pipeline is rebuilt automatically on the next press — no restart needed.
+
+## Edit selected text (macOS)
+
+Select text in an accessible text field and press **Cmd+Shift+E**, or choose
+**Edit selected text…** from the tray. Speak an instruction with **Speak
+instruction** (click again to stop), or type it and choose **Generate preview**.
+Review the replacement, then click **Apply replacement**. **Undo edit** restores
+that selection only if the original field still matches the applied result.
+
+The selected text and instruction go to the currently configured cleanup text
+provider. Ordinary dictation keeps its existing fast cleanup path. Editing does
+not send messages or press Enter. Unsupported fields, password fields, changed
+selections, and changed documents are rejected rather than edited blindly.
+Close the preview or click Cancel to discard a pending preview. Once Apply begins,
+GVoice checks the result before offering Undo. Native selection
+editing currently requires macOS Accessibility access and a text field or text area
+exposing a writable value and readable selection; unsupported editors and
+Windows show an explanatory message.
+
+## Destination profiles
+
+**Settings → Output profiles** offers Plain, Email, Chat, and Coding profiles.
+Pick a default or explicitly map applications with **Detect app in 5 seconds**.
+Switch to the destination during that countdown, choose its profile, add the rule,
+then save. Unknown destinations use your default. Automatic app detection currently
+requires macOS; manual profiles work on other platforms.
+Choosing a profile from the tray switches to one profile everywhere; saved app rules
+remain available in Settings.
+
+Profiles format through your existing AI cleanup provider and timeout. Enable AI
+cleanup to use them. Plain retains the existing cleanup path. A dictation keeps
+the profile captured when it began, even if you change settings before it finishes.
+App detection reads identity only, without window titles, browser URLs, or selected
+text. Browser tabs share an application rule.
+
+## Personal speech benchmark
+
+Open **Personal speech benchmark…** from the tray or Settings → Activity. Choose
+one recording, listen, write the correct transcript, and explicitly approve it.
+Tag Croatian, English, mixed language, brands, numbers, negation, self-corrections,
+and noise to build coverage of how you speak. Nothing is collected automatically.
+
+Run your installed local Whisper engine or import results from other engine/model
+combinations. Compare word/character error rates, timing, critical-change flags,
+and your own meaning reviews. Reference changes invalidate prior approval and
+scores. Benchmark copies have separate retention: remove them in the benchmark
+window when no longer needed. See [benchmark guide](docs/benchmark.md) for result
+formats, offline execution, timing limits, and coverage guidance.
+
+## Reliability and timing checks
+
+**Settings → Activity → Dictation speed** shows this launch's last 500 attempts,
+grouped by speech provider and whether capture was warm or cold. It reports median
+and p95 release-to-paste latency plus capture-tail, transcription, cleanup, and
+paste stage medians. A p95 from a handful of samples is preliminary. Failed
+attempts are counted separately from pasted results. Timing records contain no
+transcript text; existing history and recording settings still govern content.
+Cleanup retries and model failover share one timeout budget (default 2.5 seconds).
+
+- `pnpm test` runs unit and provider parity checks. Credential-dependent parity
+  cases may skip and are reported as such.
+- `pnpm test:electron` runs an explicit isolated desktop regression. It requires
+  Playwright, Electron, a local Whisper binary/model, and native paste access.
+  Missing prerequisites fail the command rather than producing a passing skip.
+- See [desktop regression coverage](scripts/electron/README.md) for actual audio
+  source details and the separate physical-device verification checklist.

@@ -8,7 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { sameDestination, checkDestination } from "../../src/paste-guard.js";
-import { typeText } from "../../src/typing.js";
+import { createTextTyper } from "../../src/typing.js";
 import { recordTranscript, getHistory } from "../../src/history.js";
 
 /** The window the user started dictating into. */
@@ -97,47 +97,61 @@ test("a reader that throws counts as unreadable, not as a match", async () => {
   assert.deepEqual(decision, { ok: false, reason: "unreadable" });
 });
 
+// A typer wired to fakes: no Electron, no real keystroke, no release delay.
+function typerWith({ clipboard, readTarget, onPaste }) {
+  return createTextTyper({
+    clipboardTarget: clipboard,
+    getChangeCount: () => null,
+    readTarget,
+    releaseDelayMs: 0,
+    sendShortcut: async () => { onPaste(); return { refused: false }; }
+  });
+}
+
 test("match: the text is pasted", async () => {
   const clipboard = fakeClipboard();
   let pastes = 0;
-  const out = await typeText("hello there", {
-    target: NOTES,
-    readTarget: () => like(),
-    clipboard,
-    paste: async () => { pastes += 1; }
-  });
-  assert.deepEqual(out, { pasted: true, reason: "match" });
+  const typeText = typerWith({ clipboard, readTarget: () => like(), onPaste: () => { pastes += 1; } });
+  const lease = await typeText("hello there", { target: NOTES });
+  assert.equal(lease.dispatched, true);
   assert.equal(pastes, 1, "the paste keystroke must fire on a match");
   assert.ok(clipboard.writes.includes(" hello there"), "the text goes to the clipboard to be pasted");
+  lease.finish("sent-unverified");
 });
 
 test("mismatch: clipboard holds the text, nothing is pasted", async () => {
   const clipboard = fakeClipboard();
   let pastes = 0;
-  const out = await typeText("hello there", {
-    target: NOTES,
-    readTarget: () => like({ pid: 777, app: "slack" }),
-    clipboard,
-    paste: async () => { pastes += 1; }
-  });
-  assert.equal(out.pasted, false);
+  const typeText = typerWith({ clipboard, readTarget: () => like({ pid: 777, app: "slack" }), onPaste: () => { pastes += 1; } });
+  const out = await typeText("hello there", { target: NOTES });
+  assert.equal(out.dispatched, false);
+  assert.equal(out.destinationChanged, true);
   assert.equal(out.reason, "app-changed");
   assert.equal(pastes, 0, "no keystroke may be fired at a window the user moved to");
   assert.equal(clipboard.readText(), "hello there", "the words wait on the clipboard");
   assert.deepEqual(clipboard.writes, ["hello there"], "and nothing overwrites them");
 });
 
+// Today's code-review finding, proved through the real paste engine rather than
+// the comparison alone: a terminal never looks editable, and must still paste.
+test("a terminal that never looked editable is pasted into, end to end", async () => {
+  const clipboard = fakeClipboard();
+  let pastes = 0;
+  const typeText = typerWith({ clipboard, readTarget: () => ({ ...TERMINAL }), onPaste: () => { pastes += 1; } });
+  const lease = await typeText("ls -la", { target: TERMINAL });
+  assert.equal(lease.dispatched, true, "a terminal must not be refused");
+  assert.equal(pastes, 1);
+  lease.finish("sent-unverified");
+});
+
 test("no press-time snapshot still pastes, whatever the reader says", async () => {
   const clipboard = fakeClipboard();
   let pastes = 0;
-  const out = await typeText("hello there", {
-    target: null,
-    readTarget: () => like({ pid: 777, app: "slack" }),
-    clipboard,
-    paste: async () => { pastes += 1; }
-  });
-  assert.deepEqual(out, { pasted: true, reason: "unchecked" });
+  const typeText = typerWith({ clipboard, readTarget: () => like({ pid: 777, app: "slack" }), onPaste: () => { pastes += 1; } });
+  const lease = await typeText("hello there", { target: null });
+  assert.equal(lease.dispatched, true);
   assert.equal(pastes, 1);
+  lease.finish("sent-unverified");
 });
 
 test("a copied dictation is in history, marked copied rather than pasted", () => {
@@ -145,7 +159,7 @@ test("a copied dictation is in history, marked copied rather than pasted", () =>
   const newest = getHistory()[0];
   assert.equal(newest.text, "hello there");
   assert.equal(newest.pasted, false);
-  assert.equal(newest.copy, true, "the tray has to say why this one never landed in an app");
-  assert.equal(newest.cancelled, false, "copied is not the same as cancelled");
-  assert.equal(newest.recovered, false, "copied is not the same as recovered");
+  // One outcome field now. "refused" is what a copied-not-pasted dictation is:
+  // the destination changed, so it waits on the clipboard.
+  assert.equal(newest.deliveryState, "refused", "the tray has to say why this one never landed in an app");
 });

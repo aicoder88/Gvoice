@@ -10,14 +10,19 @@ const { contextBridge, ipcRenderer } = require("electron");
 // reloads (the escalate-recovery path does exactly that) while main keeps its
 // own name, and dropping the errors on THAT path is the worst time for it.
 let sessionId = null;
+// Every stamped send below also takes an explicit name. The renderer passes one
+// when an operation outlives the press that started it (a slow startup, a
+// transcript still in flight): that operation keeps ITS press's name even after
+// a newer dictation:start has moved `sessionId` on. Leaving it out means "the
+// live press".
 // The press this one replaced. reportSuperseded belongs to the dictation that
 // was still waiting for its answer when a new press arrived, so it must carry
 // the OLD name — by the time it fires, sessionId is already the new press.
 let supersededSessionId = null;
 
 contextBridge.exposeInMainWorld("dictationBridge", {
-  sendError: (message) => ipcRenderer.send("dictation:error", message, sessionId),
-  sendMicWarning: (message) => ipcRenderer.send("dictation:mic-warning", message, sessionId),
+  sendError: (message, id = sessionId) => ipcRenderer.send("dictation:error", message, id),
+  sendMicWarning: (message, id = sessionId) => ipcRenderer.send("dictation:mic-warning", message, id),
   // The mic healed itself in the background — clear any warning shown to the user.
   sendMicRecovered: () => ipcRenderer.send("dictation:mic-recovered", sessionId),
   // Background recovery couldn't find a live mic — ask main to escalate
@@ -25,12 +30,16 @@ contextBridge.exposeInMainWorld("dictationBridge", {
   requestEscalation: (reason) => ipcRenderer.send("dictation:escalate-recovery", reason, sessionId),
   // payload is { text, chunks, sampleRate } on a real transcript, or "" for a
   // server-decided empty (silence / hallucination filter).
-  sendTranscript: (payload) => ipcRenderer.send("dictation:transcript", payload, sessionId),
-  reportFailure: (payload) => ipcRenderer.send("dictation:failure", payload, sessionId),
+  sendTranscript: (payload, id = sessionId) => ipcRenderer.send("dictation:transcript", payload, id),
+  reportFailure: (payload, id = sessionId) => ipcRenderer.send("dictation:failure", payload, id),
+  // Timing marks for the latency record. Stamped like everything else, so a
+  // mark from a press that has already been overtaken cannot be counted
+  // against the live one.
+  sendTiming: (stage, metadata = {}, id = sessionId) => ipcRenderer.send("dictation:timing", stage, metadata, id),
   // A new press arrived before the previous dictation was answered. Stamped
   // with the press it actually belongs to (the one being superseded), never the
-  // live one — main must never read this as the live dictation failing.
-  reportSuperseded: (payload) => ipcRenderer.send("dictation:superseded", payload, supersededSessionId),
+  // live one – main must never read this as the live dictation failing.
+  reportSuperseded: (payload, id = supersededSessionId) => ipcRenderer.send("dictation:superseded", payload, id),
   onStart: (callback) => {
     ipcRenderer.on("dictation:start", (_event, profile) => {
       if (profile && typeof profile.sessionId === "string" && profile.sessionId) {

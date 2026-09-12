@@ -1,0 +1,37 @@
+✔ an unreadable target consuming after 250 ms must receive its dictation (2.151583ms)
+✔ sent-unverified retains the acquired dictation without any restore timer (0.247ms)
+✔ refused retains the acquired dictation without any restore timer (0.1015ms)
+✔ failed retains the acquired dictation without any restore timer (0.089458ms)
+✔ superseded retains the acquired dictation without any restore timer (0.093417ms)
+✔ verified delivery restores only the lease it still owns (0.103667ms)
+✔ same-value user copy revokes restoration ownership (0.109791ms)
+✔ a newer user copy wins on verification failure too (0.100417ms)
+✔ consecutive leases cannot restore each others payloads (0.124209ms)
+✔ missing clipboard sequence support fails closed on restoration (0.192084ms)
+✔ only an exact new insertion is delivery proof (0.260833ms)
+✔ restore failure cannot throw away the delivery result or block the next dictation (0.154708ms)
+✔ one terminal claimant per generation, stale claim cannot become current (0.779416ms)
+✔ release is idempotent and does not extend the completion budget (0.18975ms)
+✔ latency stages measure release, exclude failed deliveries and stay bounded (0.550709ms)
+✔ a terminal target overrides a false pre-paste editor probe (2.657042ms)
+✔ cmux is recognized exactly as a terminal target (0.1615ms)
+✔ a readable field can prove the paste landed despite a false preflight (0.149ms)
+✔ no target before or after the paste keeps the text recoverable (0.114917ms)
+✔ an unreadable field cannot cost the clipboard when AX couldn't tell (0.099ms)
+✔ a focused editor that just won't expose its text keeps the clipboard (0.400375ms)
+✔ a terminal is never treated as a missing target (0.16325ms)
+✔ an empty field read-back is not a miss — it's an app hiding its composer (0.217042ms)
+✔ a failed paste shortcut can never be promoted by target signals (0.115959ms)
+✔ existing non-terminal uncertainty leaves the text recoverable (0.251584ms)
+✔ a paste into the app that started the dictation is allowed (0.125791ms)
+✔ no app recorded at press time means the guard has no opinion (0.164167ms)
+✔ a different app is refused (0.145125ms)
+✔ an unreadable foreground is refused, not waved through (0.337417ms)
+ℹ tests 29
+ℹ suites 0
+ℹ pass 29
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 92.0855

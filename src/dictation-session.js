@@ -116,6 +116,7 @@ export class DictationSession {
     this._safetyTimer = null;
     this._safetyTimeoutMs = safetyTimeoutMs;
     this._log = log;
+    this._terminalGenerations = new Set();
   }
 
   /**
@@ -335,13 +336,37 @@ export class DictationSession {
   }
 
   /**
-   * The inverse of owns(), for the handlers that only want to bail out early.
+   * Is this event from a press that is already over? Takes either form of a
+   * press's identity: its name (the inverse of owns()), or the counter the name
+   * was minted from. A counter is stale when it is not the live one; 0 and
+   * negatives are never a real press, so they are never called stale.
    *
    * @param {unknown} id
    * @returns {boolean}
    */
   isStale(id) {
+    if (typeof id === "number") return id > 0 && id !== this.generation;
     return !this.owns(id);
+  }
+
+  /**
+   * Claim a press's one terminal event before any await. Success, an empty
+   * transcript and a failure are all terminal; a duplicate must never paste or
+   * save the clip twice. Keyed on the generation rather than the name because
+   * the name is minted FROM the generation, so the two can never disagree, and
+   * a number is what the caller has in hand at the point of claiming.
+   *
+   * @param {number} [gen]
+   * @returns {boolean} true only for the call that got there first
+   */
+  claimTerminal(gen = this.generation) {
+    if (!Number.isInteger(gen) || gen < 1 || gen > this.generation) return false;
+    if (this._terminalGenerations.has(gen)) return false;
+    this._terminalGenerations.add(gen);
+    for (const old of this._terminalGenerations) {
+      if (old < this.generation - 128) this._terminalGenerations.delete(old);
+    }
+    return gen >= this.generation - 128;
   }
 
   /**
