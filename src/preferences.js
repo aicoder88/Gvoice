@@ -62,7 +62,7 @@ export function normalizePreferences(raw, base = DEFAULT_PREFERENCES) {
   const src = /** @type {Record<string, unknown>} */ (raw && typeof raw === "object" ? raw : {});
   const mode = typeof src.micMode === "string" ? src.micMode.toLowerCase() : "";
   const rawId = typeof src.preferredMicId === "string" ? src.preferredMicId.trim() : null;
-  // "default" and "communications" are not microphones — they are the browser's
+  // "default" and "communications" are not microphones – they are the browser's
   // words for "whatever the computer is set to", which is what an empty
   // preference already means. Stored as a device they read as a choice the app
   // then has to chase: the live capture reports the CONCRETE device it resolved

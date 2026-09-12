@@ -85,7 +85,7 @@ test("clearing the microphone clears its remembered name too", () => {
 
 test("the browser's \"default\" is no choice at all, not a microphone", () => {
   // "default" and "communications" are the browser's words for whatever the
-  // computer is set to — which is exactly what an empty preference means. Kept
+  // computer is set to – which is exactly what an empty preference means. Kept
   // as a device they read as a choice the app then chases: the live capture
   // reports the concrete device it resolved to, the two never match, and every
   // between-dictations check asks for another rebuild while Settings insists the

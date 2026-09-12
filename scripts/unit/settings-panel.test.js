@@ -65,7 +65,7 @@ async function boot(info, bench) {
   globalThis.document = {
     getElementById: el,
     querySelectorAll: () => [],
-    // ".sec.active" — which panel the user is looking at. No tab is open in the
+    // ".sec.active" – which panel the user is looking at. No tab is open in the
     // stub, so status messages fall back to the whole document.
     querySelector: () => null,
     addEventListener() {}

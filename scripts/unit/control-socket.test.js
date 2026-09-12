@@ -271,7 +271,7 @@ test("a stop naming nothing at all is refused, not read as \"whatever is live\""
   // companion's own start was refused as busy so it never got a session name,
   // and its button-up then sends a bare stop. The app reads a missing name as
   // "the press that is live now", so obeying this would cut the user off
-  // mid-sentence — a press the companion never owned.
+  // mid-sentence – a press the companion never owned.
   const spy = spyHooks({ start: () => ({ ok: false, reason: "busy" }) });
   const { socketPath, cleanup } = await startServer({ hooks: spy.hooks });
   const client = connect(socketPath);

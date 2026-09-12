@@ -95,7 +95,7 @@ if (process.platform === "darwin") {
 // GVOICE_NO_ENV=1 skips this entirely, for a run that must behave like a bare
 // clone. The offline checks don't rely on it: they never import this file, and
 // the two that do load dotenv themselves (scripts/parity, scripts/smoke) only
-// do so for a live run — see the note at the top of each.
+// do so for a live run – see the note at the top of each.
 const envFile = join(HOME, ".env");
 if (process.env.GVOICE_NO_ENV !== "1") {
   if (existsSync(envFile)) dotenv.config({ path: envFile });

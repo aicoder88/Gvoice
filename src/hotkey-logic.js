@@ -112,7 +112,7 @@ export function createMouseBackGate({ onPress, onRelease } = {}) {
      * given up on some other way (Escape, a click on the pill) while this
      * button is what started it: the press is over, but this gate never heard
      * about it, so its next down edge would be read as the RELEASE of a
-     * dictation that no longer exists — and the user would have to press twice
+     * dictation that no longer exists – and the user would have to press twice
      * to talk again. Deliberately silent: onRelease here would end the press
      * that the next down edge is about to start.
      */

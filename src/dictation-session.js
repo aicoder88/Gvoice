@@ -255,7 +255,7 @@ export class DictationSession {
   /**
    * Mark a press cancelled that the session is no longer holding. One caller:
    * the user gives up while the words are already out of the state machine's
-   * hands — done() runs the moment a transcript arrives, so cleanup and the
+   * hands – done() runs the moment a transcript arrives, so cleanup and the
    * paste run for another second or two with the session sitting idle. cancel()
    * refuses that (nothing is busy), but the user's "no" still has to be obeyed,
    * and the delivery path asks wasCancelled() right before it types.
@@ -272,7 +272,7 @@ export class DictationSession {
       this._cancelled.push(id);
       if (this._cancelled.length > CANCELLED_MEMORY) this._cancelled.shift();
     }
-    this._log(`[dictation-session] cancelled ${id} — after the words arrived`);
+    this._log(`[dictation-session] cancelled ${id} – after the words arrived`);
     return true;
   }
 

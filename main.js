@@ -184,7 +184,7 @@ const dictation = new DictationSession({ safetyTimeoutMs: 25000 });
 // The press whose words are being tidied and pasted right now, or null. The
 // session is already idle by then (done() runs the moment a transcript lands,
 // so the next press isn't kept waiting), yet the pill still says "click to
-// cancel" — this is how cancelDictation finds the press that click means.
+// cancel" – this is how cancelDictation finds the press that click means.
 /** @type {string | null} */
 let deliveringSessionId = null;
 
@@ -1186,9 +1186,9 @@ function cancelDictation(/** @type {string} */ source) {
   const wasRecording = dictation.isRecording;
   const cancelledId = dictation.id;
   // Two different presses can be given up on here. The one the session is
-  // holding — mic open, or waiting on its words. And the one whose words have
+  // holding – mic open, or waiting on its words. And the one whose words have
   // already arrived: done() runs the moment they do, so the session is idle
-  // while cleanup and the paste take another second or two — and the pill goes
+  // while cleanup and the paste take another second or two – and the pill goes
   // on offering "click to cancel" for all of it. cancel() refuses the second
   // one (nothing is busy), so mark it instead and the delivery path drops it
   // right before it types.
@@ -1199,7 +1199,7 @@ function cancelDictation(/** @type {string} */ source) {
   if (maxHoldTimer) { clearTimeout(maxHoldTimer); maxHoldTimer = null; }
   // The mouse back button is a toggle with its own memory of being held, and it
   // never hears about a cancel that came from Escape or the pill. Without this,
-  // its next click reads as the release of a dictation that is already gone —
+  // its next click reads as the release of a dictation that is already gone –
   // nothing happens and the user has to click twice to talk again.
   hotkeyEngine?.resetMouseBack?.();
   dlog("cancel", {
@@ -1457,7 +1457,7 @@ async function processTranscript(
     textToType += ".";
   }
 
-  // The user gave up while this was in the cleanup pass — the one slow step
+  // The user gave up while this was in the cleanup pass – the one slow step
   // between the words arriving and the paste. Stop before the paste machinery
   // and before the clipboard is touched: a cancel that still typed the words
   // would be the app arguing with the key they pressed. The cleaned text comes
@@ -1890,7 +1890,7 @@ function setupIpc() {
     }
 
     // The words are in. Re-open the session NOW, before the cleanup pass and the
-    // paste — both of which take about a second, and both of which the NEXT
+    // paste – both of which take about a second, and both of which the NEXT
     // press does not need to wait for. Until this line the trigger was dead for
     // that whole second: press, nothing at all, press again a beat later, fine.
     // The renderer is free the moment a transcript lands (mic shut, nothing
@@ -1903,8 +1903,8 @@ function setupIpc() {
     // again and that is a no-op.
     //
     // Not sooner than this. A press while the audio is still being drained or
-    // committed makes the renderer throw that recording away — one shared
-    // buffer, one utterance at a time — and losing a spoken sentence is worse
+    // committed makes the renderer throw that recording away – one shared
+    // buffer, one utterance at a time – and losing a spoken sentence is worse
     // than waiting a second for it.
     if (mineOnArrival) dictation.done();
     // From here to the `finally` a click on the pill (or Escape) still means
@@ -1932,7 +1932,7 @@ function setupIpc() {
       });
       // They did say no. Nothing was typed and nothing was copied; the words go
       // to history like any other cancel, and cancelDictation is already showing
-      // the "Cancelled" pill — a result pill here would paint straight over it.
+      // the "Cancelled" pill – a result pill here would paint straight over it.
       if (result && result.cancelled) {
         dlog("transcript-cancelled-late", { sessionId, len: (result.text || "").length });
         recordTranscript(result.text, false, recordingPath, { sessionId, cancelled: true });
@@ -2051,7 +2051,7 @@ function setupIpc() {
       if (stillMine()) dictation.done();
       // The paste window is over: a click on the pill from here on has nothing
       // left to stop, and must not mark a finished press cancelled. Only ever
-      // clear OUR name — a press that started during the paste owns it now.
+      // clear OUR name – a press that started during the paste owns it now.
       if (deliveringSessionId === sessionId) deliveringSessionId = null;
     }
   });
@@ -2134,7 +2134,7 @@ function setupIpc() {
     //
     // Only when the error SAYS which press it belongs to. An unstamped error
     // comes from a renderer that reloaded and lost its name (escalate-recovery)
-    // — exactly the dead-mic / relay-down case the user has to be told about —
+    // – exactly the dead-mic / relay-down case the user has to be told about –
     // and wasCancelled() reads a missing name as "the live press", which after a
     // cancel is still the cancelled one. That swallowed every such error from a
     // cancel until the next press.

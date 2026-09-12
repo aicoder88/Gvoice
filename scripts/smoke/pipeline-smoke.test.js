@@ -13,7 +13,7 @@
 // outside the Electron runtime. Run:
 //   pnpm run test:pipeline-smoke
 
-// Offline by default — a developer's real .env is loaded only for a live run
+// Offline by default – a developer's real .env is loaded only for a live run
 // (GVOICE_LIVE=1, via scripts/run-live-tests.mjs). This test only ever talks to
 // the local Whisper engine, never a network provider, and a stray .env setting
 // (e.g. a different STT_PROVIDER) must not be able to change which engine it

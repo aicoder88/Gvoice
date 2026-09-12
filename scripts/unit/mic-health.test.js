@@ -192,7 +192,7 @@ test("sitting on the fallback does not churn while the preferred one is away", (
 
 test("the id we pinned counts as being on the preferred microphone", () => {
   // getSettings() names the CONCRETE device, which is not always the string we
-  // asked for — the OS resolves some ids to others. Judging on that alone, the
+  // asked for – the OS resolves some ids to others. Judging on that alone, the
   // live graph never looked like the preferred one, so every between-dictations
   // check asked for another rebuild: the mic was torn down and reopened after
   // every single dictation, forever, and Settings kept saying the chosen mic

@@ -11,7 +11,7 @@
 // (GVOICE_LIVE=1, which is how scripts/run-live-tests.mjs invokes this file and
 // the only mode whose subtests call a real provider). Any other run stays on a
 // bare environment, so a stray key or STT_PROVIDER sitting in .env can never
-// change which subtests attempt a real call — the leak the old
+// change which subtests attempt a real call – the leak the old
 // "GVOICE_NO_ENV=1 unless told otherwise" line described but never got, because
 // nothing ever set that flag. It still works as a hard off for a live run.
 if (process.env.GVOICE_NO_ENV !== "1" && process.env.GVOICE_LIVE === "1") await import("dotenv/config");

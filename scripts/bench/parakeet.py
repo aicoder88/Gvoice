@@ -3,8 +3,8 @@
 #
 # Usage: python scripts/bench/parakeet.py <model-dir> <clips-dir> [--json]
 #
-# The model directory needs the four files from the int8 ONNX bundle — encoder,
-# decoder+joint, the mel extractor (nemo128.onnx) and vocab.txt — PLUS a
+# The model directory needs the four files from the int8 ONNX bundle – encoder,
+# decoder+joint, the mel extractor (nemo128.onnx) and vocab.txt – PLUS a
 # config.json the published bundle does not include:
 #
 #     {"features_size": 128, "subsampling_factor": 8}
@@ -37,7 +37,7 @@ def main() -> int:
 
     config = os.path.join(model_dir, "config.json")
     if not os.path.exists(config):
-        print(f"{config} missing — see the note at the top of this file", file=sys.stderr)
+        print(f"{config} missing – see the note at the top of this file", file=sys.stderr)
         return 2
 
     t0 = time.time()

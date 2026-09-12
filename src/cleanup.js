@@ -338,7 +338,7 @@ export async function polishTranscript(rawText) {
     "\n<<<END>>>";
 
   // The transcript comes back about as long as it went in, so half its
-  // character count is a safe token ceiling for the words themselves — PLUS
+  // character count is a safe token ceiling for the words themselves – PLUS
   // room to think. On the Groq gpt-oss models this same budget pays for the
   // reasoning tokens, and a short dictation's old 256 could be spent entirely
   // on those: the reply then came back truncated, which is dropped outright

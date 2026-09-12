@@ -133,7 +133,7 @@ export function chooseCaptureDevice({
     // Already on it counts two ways, because the id we ask for and the id we
     // get back are not always the same string. getSettings() reports the
     // CONCRETE device, so a preference the OS resolves ("default", or an id it
-    // maps to another entry) never equals the live one — and comparing only
+    // maps to another entry) never equals the live one – and comparing only
     // those two asked for a rebuild after every single dictation, forever.
     // Asking "did we open this graph FOR the preferred device?" converges.
     const onIt = currentId === preferredId || requestedId === preferredId;

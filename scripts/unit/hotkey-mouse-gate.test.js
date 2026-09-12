@@ -60,7 +60,7 @@ test("mouse gate: after a cancel, the next click talks instead of doing nothing"
   // The bug this closes: start a dictation with the mouse button, give up on it
   // with Escape or a click on the pill, then press the button again. The gate
   // still thought the button was held, so that press was read as a release of a
-  // dictation that no longer existed — nothing happened at all and the user had
+  // dictation that no longer existed – nothing happened at all and the user had
   // to press twice.
   const events = [];
   const gate = createMouseBackGate({

@@ -274,7 +274,7 @@ export function createControlServer({
       // Neither side can name a press: this companion never got an ack (its
       // start was refused as "busy", most likely because the user is holding
       // the key right now) and the frame carries no id either. An unnamed stop
-      // must NOT be obeyed — main.js reads an unstamped id as "whatever is live",
+      // must NOT be obeyed – main.js reads an unstamped id as "whatever is live",
       // so it would cut off the keyboard hold the companion never owned. There
       // is nothing of ours to end, so say so.
       if (!sessionId) {
