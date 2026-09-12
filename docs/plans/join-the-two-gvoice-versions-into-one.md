@@ -169,7 +169,7 @@ copied before. Seen live in check 4. Both machines had independently logged the
 opposite bug (a timer restoring the old clipboard wiped the only copy of words
 that never landed), so this is the deliberate side of the trade.
 
-## Step 9 – GATED: push the joined version [opus/medium]
+## Step 9 – GATED: push the joined version [opus/medium] NEEDS YOUR GO
 
 Needs Drago's word on the day. Nothing here runs on `/tier` alone.
 

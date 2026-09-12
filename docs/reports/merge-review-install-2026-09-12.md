@@ -74,3 +74,38 @@ three in the documents. No half was thrown away.
   code that switches to a chosen mic never runs here. Pick the Anker in
   Settings, restart, and confirm it is still chosen and still the one
   recording.
+
+## The second join, same evening
+
+The other machine pushed a week of work mid-session: voice editing, per-app
+output profiles, a personal accuracy benchmark and a clipboard lease. It had
+rewritten the same paste code this Mac had. Drago chose to plan the join
+first, then ran the plan. Full step-by-step results:
+`docs/plans/join-the-two-gvoice-versions-into-one.md`.
+
+**Joined, nothing dropped.** A press has one name that carries its number, so
+cancel and voice editing share one identity. One paste engine keeps both
+destination checks and restores copied formatting. Every dictation now has
+one recorded outcome instead of four separate flags.
+
+**Found in the join itself and fixed:**
+- A microphone that hung while opening made every later press time out.
+- Recent dictations would have shown a false warning on every cancelled or
+  copied dictation.
+- The reading of which app is in front now happens before the mic opens, as
+  the other machine proved it must.
+
+**Seen on the installed app:** 413 checks plus the other machine's end-to-end
+run (real speech pasted and read back, voice editing working). Menu-bar icon
+present. A dictation landed in a Terminal window.
+
+**Not seen:** a chosen microphone surviving a restart. A paste into cmux,
+which hides its text field; proved only in tests.
+
+**Behaviour change:** a paste that cannot be confirmed (every terminal) now
+leaves the words on your clipboard in place of what you had copied.
+
+**Incident:** scripted clicks on the menu-bar icon started two dictations,
+because that click is push to talk. The second was aimed at the live cmux.
+GVoice was force-stopped with nothing pasted. An Escape key may have reached
+cmux just before.
