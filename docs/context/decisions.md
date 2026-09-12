@@ -37,3 +37,27 @@ model reading the context.
 **Known gap:** a term that also appears in `models/vocab.txt` is skipped by
 `correctTranscript`, so "Purrify" gets no blind repair. The cleanup path now
 covers it, so this is cosmetic rather than urgent.
+
+## 2026-09-12 – Two machines' versions get joined, never picked between
+
+Two machines built GVoice in parallel and each rewrote the same tidy-up pass and
+the same paste path. Twice now a session has faced "which version wins" and the
+honest answer both times was neither.
+
+**Decided:** where both machines solved the same problem, keep both halves and
+make them work together, rather than taking one and deleting the other. Done
+once today for the tidy-up pass: the backup model from one machine and the
+word-preserving guard from the other now both run. A retired or busy engine
+falls through to a backup; whatever answers is still thrown away if it changed
+the speaker's words.
+
+**Also decided:** a join bigger than about ten clashes stops and becomes a
+written plan first. The second join that surfaced today is 32 clashes across two
+different designs of the same paste path, so it went to
+`docs/plans/join-the-two-gvoice-versions-into-one.md` instead of being attempted
+on the spot. This Mac's 34 commits went to the branch
+`gvoice-thismac-2026-09-12` so nothing depends on either machine staying alive.
+
+**Reverse if:** the parallel work stops. Once one machine is the only one
+building GVoice, this costs effort and buys nothing, and a plain merge is right
+again.
