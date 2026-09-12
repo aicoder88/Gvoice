@@ -7,13 +7,14 @@
 //
 // Provider subtests are skipped when their credentials / binaries are absent.
 
-// GVOICE_NO_ENV=1 (set by test:unit and by default here via the offline
-// convention) skips loading a developer's real .env, so a stray key never
-// changes which provider subtests attempt a real call. Live-only subtests are
-// gated separately on GVOICE_LIVE below, and are also invoked through
-// `pnpm test:live` (scripts/run-live-tests.mjs), which refuses to run unless
-// GVOICE_LIVE=1 is set.
-if (process.env.GVOICE_NO_ENV !== "1") await import("dotenv/config");
+// Offline by default: a developer's real .env is loaded ONLY for a live run
+// (GVOICE_LIVE=1, which is how scripts/run-live-tests.mjs invokes this file and
+// the only mode whose subtests call a real provider). Any other run stays on a
+// bare environment, so a stray key or STT_PROVIDER sitting in .env can never
+// change which subtests attempt a real call — the leak the old
+// "GVOICE_NO_ENV=1 unless told otherwise" line described but never got, because
+// nothing ever set that flag. It still works as a hard off for a live run.
+if (process.env.GVOICE_NO_ENV !== "1" && process.env.GVOICE_LIVE === "1") await import("dotenv/config");
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";

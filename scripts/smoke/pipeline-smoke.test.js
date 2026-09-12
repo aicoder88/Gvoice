@@ -13,11 +13,12 @@
 // outside the Electron runtime. Run:
 //   pnpm run test:pipeline-smoke
 
-// GVOICE_NO_ENV=1 skips loading a developer's real .env — this test only ever
-// talks to the local Whisper engine, never a network provider, but a stray
-// .env setting (e.g. a different STT_PROVIDER) must not be able to change
-// which engine it exercises.
-if (process.env.GVOICE_NO_ENV !== "1") await import("dotenv/config");
+// Offline by default — a developer's real .env is loaded only for a live run
+// (GVOICE_LIVE=1, via scripts/run-live-tests.mjs). This test only ever talks to
+// the local Whisper engine, never a network provider, and a stray .env setting
+// (e.g. a different STT_PROVIDER) must not be able to change which engine it
+// exercises. GVOICE_NO_ENV=1 still forces it off even on a live run.
+if (process.env.GVOICE_NO_ENV !== "1" && process.env.GVOICE_LIVE === "1") await import("dotenv/config");
 import { test, mock } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";

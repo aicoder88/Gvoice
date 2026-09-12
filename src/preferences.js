@@ -61,7 +61,14 @@ export function preferencesPath(userDataDir) {
 export function normalizePreferences(raw, base = DEFAULT_PREFERENCES) {
   const src = /** @type {Record<string, unknown>} */ (raw && typeof raw === "object" ? raw : {});
   const mode = typeof src.micMode === "string" ? src.micMode.toLowerCase() : "";
-  const id = typeof src.preferredMicId === "string" ? src.preferredMicId.trim() : null;
+  const rawId = typeof src.preferredMicId === "string" ? src.preferredMicId.trim() : null;
+  // "default" and "communications" are not microphones — they are the browser's
+  // words for "whatever the computer is set to", which is what an empty
+  // preference already means. Stored as a device they read as a choice the app
+  // then has to chase: the live capture reports the CONCRETE device it resolved
+  // to, so the two never match and every between-dictations check asks for
+  // another rebuild while Settings says the chosen mic isn't plugged in.
+  const id = rawId === "default" || rawId === "communications" ? "" : rawId;
   const label = typeof src.preferredMicLabel === "string" ? src.preferredMicLabel.trim() : null;
   return {
     micMode: /** @type {Preferences["micMode"]} */ (

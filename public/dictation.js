@@ -151,6 +151,7 @@ const SILENT_STREAK_LIMIT = 3;
 // on our own, the moment the mic goes dead — no key-press required.
 let lastGoodDeviceId = null;  // deviceId of the last input that produced signal
 let currentDeviceId = null;   // deviceId the live graph is bound to right now
+let currentRequestedId = null; // deviceId we asked for and got (null = system default)
 let currentLabel = "";        // human label of that device (for the log)
 let liveProbePeak = 0;        // loudest frame seen since the last probe reset
 let recovering = false;       // an auto-recovery loop is in flight
@@ -512,7 +513,12 @@ async function getMicStream(deviceId) {
   };
   if (deviceId) {
     try {
-      return await navigator.mediaDevices.getUserMedia({ audio: { ...base, deviceId: { exact: deviceId } } });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { ...base, deviceId: { exact: deviceId } } });
+      // The id we PINNED, handed back so the caller can tell "we are on the
+      // device the user asked for" from "the OS gave us something else". The
+      // track's own deviceId can't answer that: it names the concrete device,
+      // which differs from the asked-for id whenever the OS resolves it.
+      return { stream, requestedId: deviceId };
     } catch (err) {
       const name = err && err.name;
       if (name === "OverconstrainedError" || name === "NotFoundError") {
@@ -523,7 +529,9 @@ async function getMicStream(deviceId) {
       }
     }
   }
-  return await navigator.mediaDevices.getUserMedia({ audio: base });
+  // Nothing pinned: whatever the computer is set to. requestedId stays null so
+  // nobody mistakes this for the user's chosen device.
+  return { stream: await navigator.mediaDevices.getUserMedia({ audio: base }), requestedId: null };
 }
 
 async function buildCaptureGraph(deviceId = null) {
@@ -552,7 +560,9 @@ async function buildCaptureGraph(deviceId = null) {
     });
   }
 
-  mediaStream = await getMicStream(deviceId);
+  const opened = await getMicStream(deviceId);
+  mediaStream = opened.stream;
+  currentRequestedId = opened.requestedId;
 
   // The stream is bound to this one device. If the OS drops it (ended) or
   // another app seizes it (mute), tear down so the next press rebuilds, and
@@ -563,9 +573,14 @@ async function buildCaptureGraph(deviceId = null) {
   // device) — remembered as last-good so recovery can re-pin it first.
   try { currentDeviceId = (track && track.getSettings && track.getSettings().deviceId) || deviceId || null; }
   catch { currentDeviceId = deviceId || null; }
+  // "Are we on the user's microphone?" has to accept either id: the concrete
+  // one the OS reports, or the one we successfully pinned the stream to. They
+  // differ whenever the OS resolves the preference to another entry, and
+  // judging on the concrete id alone flagged a perfectly good capture as a
+  // fallback for the rest of the run.
   deviceSource = !preferredMicId
     ? "default"
-    : currentDeviceId === preferredMicId ? "preferred" : "fallback";
+    : currentDeviceId === preferredMicId || currentRequestedId === preferredMicId ? "preferred" : "fallback";
   log("Capture bound to: " + currentLabel + " (" + deviceSource + ")");
   if (track) {
     track.onended = () => handleMicLost("The microphone was disconnected.");
@@ -659,6 +674,9 @@ function teardownCapture(full = false) {
   prerollChunks = [];
   prerollBytes = 0;
   captureReady = false;
+  // Nothing is pinned any more. Leaving the old id here would tell the next
+  // between-dictations check we are still on the user's microphone.
+  currentRequestedId = null;
   if (full && audioContext) {
     try { audioContext.close(); } catch {}
     audioContext = null;
@@ -1026,6 +1044,7 @@ async function checkPreferredDevice(why) {
     preferredId: preferredMicId,
     fallbackId: lastGoodDeviceId,
     currentId: currentDeviceId,
+    requestedId: currentRequestedId,
     availableIds: await availableInputIds(),
     captureReady: true
   });
@@ -1055,7 +1074,12 @@ async function reportMicState() {
   let devices = [];
   try {
     devices = (await navigator.mediaDevices.enumerateDevices())
-      .filter((d) => d.kind === "audioinput" && d.deviceId && d.deviceId !== "communications")
+      // "default" and "communications" are the browser's aliases for whatever
+      // the computer is set to, not devices. The Settings list already offers
+      // that as its first entry, and offering the alias as well let the user
+      // save a "preferred mic" the app could never confirm it was on.
+      .filter((d) => d.kind === "audioinput" && d.deviceId
+        && d.deviceId !== "communications" && d.deviceId !== "default")
       .map((d) => ({ id: d.deviceId, label: d.label || "" }));
   } catch {}
   try {

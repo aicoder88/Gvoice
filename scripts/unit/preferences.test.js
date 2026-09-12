@@ -83,6 +83,27 @@ test("clearing the microphone clears its remembered name too", () => {
   assert.equal(after.preferredMicLabel, "", "otherwise Settings shows a name next to no choice");
 });
 
+test("the browser's \"default\" is no choice at all, not a microphone", () => {
+  // "default" and "communications" are the browser's words for whatever the
+  // computer is set to — which is exactly what an empty preference means. Kept
+  // as a device they read as a choice the app then chases: the live capture
+  // reports the concrete device it resolved to, the two never match, and every
+  // between-dictations check asks for another rebuild while Settings insists the
+  // chosen microphone isn't plugged in.
+  const p = preferencesPath(tempDir());
+  const after = writePreferences(p, { preferredMicId: "default", preferredMicLabel: "Default" });
+  assert.equal(after.preferredMicId, "");
+  assert.equal(after.preferredMicLabel, "", "and no name beside a choice that isn't one");
+  assert.equal(normalizePreferences({ preferredMicId: "communications" }).preferredMicId, "");
+  assert.equal(readPreferences(p).preferredMicId, "", "including on the way back in");
+});
+
+test("a real device id that merely looks ordinary is kept", () => {
+  const after = normalizePreferences({ preferredMicId: "  anker-1  ", preferredMicLabel: " Anker " });
+  assert.equal(after.preferredMicId, "anker-1");
+  assert.equal(after.preferredMicLabel, "Anker");
+});
+
 test("a folder that cannot be written throws, so the user can be told", () => {
   const dir = join(tempDir(), "locked");
   mkdirSync(dir);

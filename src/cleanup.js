@@ -62,6 +62,12 @@ function resolveProvider() {
 // old 6s just freezes the paste. On timeout we fall back to the raw transcript.
 const TIMEOUT_MS = Number(process.env.CLEANUP_TIMEOUT_MS || 2500);
 
+// Added on top of the transcript's own token budget. Reasoning models (the Groq
+// gpt-oss pair, at reasoning_effort "low") count their thinking against the
+// same ceiling as their answer, and a ceiling that only fits the answer comes
+// back truncated.
+const REASONING_HEADROOM_TOKENS = 512;
+
 // Compact on purpose. The previous prompt was 1,315 words and explicitly
 // invited semicolons/dashes. On the same GPT-OSS 120B model it took 2,383ms;
 // this version took 674ms and produced lighter punctuation.
@@ -331,7 +337,14 @@ export async function polishTranscript(rawText) {
     rawText +
     "\n<<<END>>>";
 
-  const maxOutputTokens = Math.min(4096, Math.max(256, Math.ceil(rawText.length / 2)));
+  // The transcript comes back about as long as it went in, so half its
+  // character count is a safe token ceiling for the words themselves — PLUS
+  // room to think. On the Groq gpt-oss models this same budget pays for the
+  // reasoning tokens, and a short dictation's old 256 could be spent entirely
+  // on those: the reply then came back truncated, which is dropped outright
+  // (stop_reason max_tokens) and fell back to the raw transcript. Cleanup
+  // silently stopped working on the shortest dictations of all.
+  const maxOutputTokens = Math.min(4096, REASONING_HEADROOM_TOKENS + Math.max(256, Math.ceil(rawText.length / 2)));
   const req = buildRequest(provider, apiKey, model, systemPrompt + vocabHint, userContent, maxOutputTokens);
 
   // One quick retry on a transient hiccup (5xx, dropped connection) so a single

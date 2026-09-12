@@ -190,6 +190,36 @@ test("sitting on the fallback does not churn while the preferred one is away", (
   assert.equal(r.deviceId, BUILTIN, "stay where we are rather than reopening the same device");
 });
 
+test("the id we pinned counts as being on the preferred microphone", () => {
+  // getSettings() names the CONCRETE device, which is not always the string we
+  // asked for — the OS resolves some ids to others. Judging on that alone, the
+  // live graph never looked like the preferred one, so every between-dictations
+  // check asked for another rebuild: the mic was torn down and reopened after
+  // every single dictation, forever, and Settings kept saying the chosen mic
+  // wasn't plugged in.
+  const r = chooseCaptureDevice({
+    preferredId: ANKER,
+    currentId: BUILTIN,
+    requestedId: ANKER,
+    availableIds: [BUILTIN, ANKER],
+    captureReady: true
+  });
+  assert.equal(r.source, "preferred");
+  assert.equal(r.rebuild, false, "this comparison has to converge or the mic churns forever");
+});
+
+test("a graph opened for something else still gets pulled onto the preferred mic", () => {
+  const r = chooseCaptureDevice({
+    preferredId: ANKER,
+    currentId: BUILTIN,
+    requestedId: null,
+    availableIds: [BUILTIN, ANKER],
+    captureReady: true
+  });
+  assert.equal(r.deviceId, ANKER);
+  assert.equal(r.rebuild, true);
+});
+
 test("an unreadable device list never throws the preference away", () => {
   // enumerateDevices can fail or return nothing before labels are allowed. That
   // is not proof the Anker was unplugged, and treating it as proof would drop

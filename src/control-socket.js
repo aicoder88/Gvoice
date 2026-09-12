@@ -271,6 +271,16 @@ export function createControlServer({
         return;
       }
       const sessionId = conn.sessionId || asked;
+      // Neither side can name a press: this companion never got an ack (its
+      // start was refused as "busy", most likely because the user is holding
+      // the key right now) and the frame carries no id either. An unnamed stop
+      // must NOT be obeyed — main.js reads an unstamped id as "whatever is live",
+      // so it would cut off the keyboard hold the companion never owned. There
+      // is nothing of ours to end, so say so.
+      if (!sessionId) {
+        send(conn, { type: "refuse", requestId, reason: "session" });
+        return;
+      }
       conn.sessionId = null;
       try {
         if (msg.type === "stop") hooks.stop?.(sessionId, "companion");

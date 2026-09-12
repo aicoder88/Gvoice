@@ -326,8 +326,14 @@
           retentionDays: Number(el("retentionDays").value)
         };
       }
-      function setStatus(text, ok) {
-        document.querySelectorAll(".statusEl").forEach((s) => {
+      // Each panel has its own save bar. Write only to the one this message
+      // belongs to: `section` names it outright (the microphone panel loads at
+      // boot from whatever tab is open), otherwise it is the panel the user is
+      // looking at. Writing to every bar put "Saved." and "Couldn't read your
+      // microphones." on panels that had just done nothing.
+      function setStatus(text, ok, section) {
+        const scope = (section && el(section)) || document.querySelector(".sec.active") || document;
+        scope.querySelectorAll(".statusEl").forEach((s) => {
           s.textContent = text; s.className = "status statusEl" + (ok ? " ok" : "");
         });
       }
@@ -353,7 +359,7 @@
         return "microphone " + String(id).slice(0, 6) + "…";
       }
       function renderMic(res) {
-        if (!res || res.error) { setStatus(res && res.error ? res.error : "Couldn't read your microphones.", false); return; }
+        if (!res || res.error) { setStatus(res && res.error ? res.error : "Couldn't read your microphones.", false, "mic"); return; }
         const prefs = res.prefs || {};
         const state = res.state || {};
         el("micMode").value = prefs.micMode || "always";
@@ -391,26 +397,26 @@
       async function loadMic() {
         micLoading = true;
         try { renderMic(await window.settingsBridge.micGet()); }
-        catch { setStatus("Couldn't read your microphones.", false); }
+        catch { setStatus("Couldn't read your microphones.", false, "mic"); }
         finally { micLoading = false; }
       }
       async function saveMic() {
         if (micLoading) return;
         const sel = el("micDevice");
         const opt = sel.options[sel.selectedIndex];
-        setStatus("Saving…", false);
+        setStatus("Saving…", false, "mic");
         try {
           const res = await window.settingsBridge.micSet({
             micMode: el("micMode").value,
             preferredMicId: sel.value,
             preferredMicLabel: sel.value ? (opt ? opt.textContent.replace(" (not plugged in)", "") : "") : ""
           });
-          if (res && res.error) { setStatus(res.error, false); return; }
+          if (res && res.error) { setStatus(res.error, false, "mic"); return; }
           micLoading = true;
           renderMic(res);
           micLoading = false;
-          setStatus("Saved.", true);
-        } catch { setStatus("Couldn't save – try again.", false); }
+          setStatus("Saved.", true, "mic");
+        } catch { setStatus("Couldn't save – try again.", false, "mic"); }
       }
       el("micMode").addEventListener("change", saveMic);
       el("micDevice").addEventListener("change", saveMic);

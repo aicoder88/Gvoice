@@ -423,6 +423,35 @@ test("cancel during cleanup: the transcript is parked as cancelled, never pasted
   assert.equal(history[1].cancelled, false);
 });
 
+// The paste window: done() runs the moment the words arrive so the next press
+// isn't kept waiting, and cleanup plus the paste then run for another second or
+// two with the session idle. The pill still offers "click to cancel" for all of
+// it, and this is what makes that click mean something.
+test("a press can still be cancelled after the session has let go of it", () => {
+  const s = new DictationSession({ log: quiet });
+  s.tryStart();
+  const mine = s.id;
+  s.release();
+  s.done();
+  assert.equal(s.busy, false, "the session is free for the next press");
+  assert.equal(s.cancel("escape"), false, "cancel() has nothing live to end");
+  assert.equal(s.markCancelled(mine), true);
+  assert.equal(s.wasCancelled(mine), true);
+  assert.equal(s.canDeliver(mine), false, "so the paste is dropped");
+  assert.equal(s.markCancelled(mine), true, "asking twice is fine");
+  assert.equal(s._cancelled.filter((id) => id === mine).length, 1, "and remembers it once");
+});
+
+test("marking nothing cancelled changes nothing, so a stray Escape stays free", () => {
+  const s = new DictationSession({ log: quiet });
+  s.tryStart();
+  const live = s.id;
+  assert.equal(s.markCancelled(null), false);
+  assert.equal(s.markCancelled(""), false);
+  assert.equal(s.markCancelled(undefined), false);
+  assert.equal(s.canDeliver(live), true, "the live press is untouched");
+});
+
 test("an unstamped event follows the live press's cancellation", () => {
   const s = new DictationSession({ log: quiet });
   s.tryStart();

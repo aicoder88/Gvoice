@@ -266,6 +266,52 @@ test("cancel throws the press away", async () => {
   }
 });
 
+test("a stop naming nothing at all is refused, not read as \"whatever is live\"", async () => {
+  // The failure this prevents: the user is holding the dictation key, the
+  // companion's own start was refused as busy so it never got a session name,
+  // and its button-up then sends a bare stop. The app reads a missing name as
+  // "the press that is live now", so obeying this would cut the user off
+  // mid-sentence — a press the companion never owned.
+  const spy = spyHooks({ start: () => ({ ok: false, reason: "busy" }) });
+  const { socketPath, cleanup } = await startServer({ hooks: spy.hooks });
+  const client = connect(socketPath);
+  try {
+    client.send({ type: "hello", version: PROTOCOL_VERSION });
+    await client.next();
+    client.send({ type: "start", requestId: "r1" });
+    assert.deepEqual(await client.next(), { type: "refuse", requestId: "r1", reason: "busy" });
+    client.send({ type: "stop", requestId: "r2" });
+    assert.deepEqual(await client.next(), { type: "refuse", requestId: "r2", reason: "session" });
+    client.send({ type: "cancel", requestId: "r3" });
+    assert.deepEqual(await client.next(), { type: "refuse", requestId: "r3", reason: "session" });
+    assert.deepEqual(spy.calls, [], "nothing was ended on the app's side");
+    assert.equal(client.closed, false, "and the companion stays connected");
+  } finally {
+    client.end();
+    cleanup();
+  }
+});
+
+test("a stop with no name is still obeyed for the press this companion started", async () => {
+  // The companion may answer the ack and then drop the name from its own stop
+  // frame. That press IS its own, so it still ends.
+  const spy = spyHooks();
+  const { socketPath, cleanup } = await startServer({ hooks: spy.hooks });
+  const client = connect(socketPath);
+  try {
+    client.send({ type: "hello", version: PROTOCOL_VERSION });
+    await client.next();
+    client.send({ type: "start", requestId: "r1" });
+    await client.next();
+    client.send({ type: "stop", requestId: "r2" });
+    assert.deepEqual(await client.next(), { type: "ack", requestId: "r2", sessionId: "s1" });
+    assert.deepEqual(spy.calls, [["start", "s1"], ["stop", "s1", "companion"]]);
+  } finally {
+    client.end();
+    cleanup();
+  }
+});
+
 test("a refused start is an answer, not a broken connection", async () => {
   const spy = spyHooks({ start: () => ({ ok: false, reason: "not-ready" }) });
   const { socketPath, cleanup } = await startServer({ hooks: spy.hooks });

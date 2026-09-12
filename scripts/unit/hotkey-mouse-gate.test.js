@@ -55,3 +55,35 @@ test("mouse gate: re-enabling starts fresh, no phantom press", () => {
   gate.down();
   assert.deepEqual(events, ["press"]);
 });
+
+test("mouse gate: after a cancel, the next click talks instead of doing nothing", () => {
+  // The bug this closes: start a dictation with the mouse button, give up on it
+  // with Escape or a click on the pill, then press the button again. The gate
+  // still thought the button was held, so that press was read as a release of a
+  // dictation that no longer existed — nothing happened at all and the user had
+  // to press twice.
+  const events = [];
+  const gate = createMouseBackGate({
+    onPress: () => events.push("press"),
+    onRelease: () => events.push("release")
+  });
+  gate.down();
+  assert.deepEqual(events, ["press"]);
+  gate.reset(); // cancelDictation: the press is over, by another route
+  assert.equal(gate.isHeld(), false);
+  assert.deepEqual(events, ["press"], "reset itself must not end anything");
+  gate.down();
+  assert.deepEqual(events, ["press", "press"], "the next click starts a new dictation");
+});
+
+test("mouse gate: the physical up edge after a reset is ignored, not a phantom release", () => {
+  const events = [];
+  const gate = createMouseBackGate({
+    onPress: () => events.push("press"),
+    onRelease: () => events.push("release")
+  });
+  gate.down();
+  gate.reset();
+  gate.up(); // the user was still physically holding it when they cancelled
+  assert.deepEqual(events, ["press"]);
+});

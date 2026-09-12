@@ -253,6 +253,30 @@ export class DictationSession {
   }
 
   /**
+   * Mark a press cancelled that the session is no longer holding. One caller:
+   * the user gives up while the words are already out of the state machine's
+   * hands — done() runs the moment a transcript arrives, so cleanup and the
+   * paste run for another second or two with the session sitting idle. cancel()
+   * refuses that (nothing is busy), but the user's "no" still has to be obeyed,
+   * and the delivery path asks wasCancelled() right before it types.
+   *
+   * Returns false when there is no such press to mark, so the caller can tell a
+   * real cancel from a stray Escape.
+   *
+   * @param {unknown} id name of the press, as the delivery path knows it
+   * @returns {boolean}
+   */
+  markCancelled(id) {
+    if (typeof id !== "string" || id.length === 0) return false;
+    if (!this._cancelled.includes(id)) {
+      this._cancelled.push(id);
+      if (this._cancelled.length > CANCELLED_MEMORY) this._cancelled.shift();
+    }
+    this._log(`[dictation-session] cancelled ${id} — after the words arrived`);
+    return true;
+  }
+
+  /**
    * Was this press cancelled? Asked right before anything is pasted. An
    * unstamped id means "the press that is live now", the same reading owns()
    * gives it.

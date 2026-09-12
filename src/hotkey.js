@@ -114,7 +114,8 @@ function startHotkeyWindows({ onPress, onRelease }) {
     // deaf-hook watchdog never fires here.
     sawEvent: () => true,
     // Windows has no mouse-back trigger to gate — keyboard-only, untouched.
-    setMouseBackEnabled() {}
+    setMouseBackEnabled() {},
+    resetMouseBack() {}
   };
 }
 
@@ -133,7 +134,7 @@ function startHotkeyWindows({ onPress, onRelease }) {
  *     a held Ctrl+Cmd keystroke triggers the chord path instead.
  *
  * @param {HotkeyCallbacks} callbacks
- * @returns {{ stop: () => void, sawEvent: () => boolean, setMouseBackEnabled: (enabled: boolean) => void }}
+ * @returns {{ stop: () => void, sawEvent: () => boolean, setMouseBackEnabled: (enabled: boolean) => void, resetMouseBack: () => void }}
  */
 function startHotkeyUiohook({ onPress, onRelease, onCancel }) {
   // Lazy require so Windows builds don't choke if uiohook-napi isn't present
@@ -333,6 +334,12 @@ function startHotkeyUiohook({ onPress, onRelease, onCancel }) {
     sawEvent: () => sawEvent,
     setMouseBackEnabled(enabled) {
       mouseBackGate.setEnabled(enabled);
+    },
+    // A dictation this button started was cancelled another way (Escape, a
+    // click on the pill). Clear the toggle so the next click starts a press
+    // instead of "releasing" the one that is already gone.
+    resetMouseBack() {
+      mouseBackGate.reset();
     }
   };
 }

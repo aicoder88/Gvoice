@@ -92,9 +92,10 @@ if (process.platform === "darwin") {
 }
 
 // Load .env from the app home (not cwd), so config is found wherever launched.
-// GVOICE_NO_ENV=1 skips this entirely — offline checks (test:unit, test:parity,
-// test:pipeline-smoke) set it so a real key or provider setting sitting in a
-// developer's .env can never leak into a check that must pass on a bare clone.
+// GVOICE_NO_ENV=1 skips this entirely, for a run that must behave like a bare
+// clone. The offline checks don't rely on it: they never import this file, and
+// the two that do load dotenv themselves (scripts/parity, scripts/smoke) only
+// do so for a live run — see the note at the top of each.
 const envFile = join(HOME, ".env");
 if (process.env.GVOICE_NO_ENV !== "1") {
   if (existsSync(envFile)) dotenv.config({ path: envFile });

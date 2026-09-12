@@ -181,6 +181,13 @@ let isQuitting = false;
 // always ends the session sooner; this is only the anti-jam backstop.
 const dictation = new DictationSession({ safetyTimeoutMs: 25000 });
 
+// The press whose words are being tidied and pasted right now, or null. The
+// session is already idle by then (done() runs the moment a transcript lands,
+// so the next press isn't kept waiting), yet the pill still says "click to
+// cancel" — this is how cancelDictation finds the press that click means.
+/** @type {string | null} */
+let deliveringSessionId = null;
+
 // Every event the renderer sends back carries the name of the press that
 // produced it (stamped in preload.cjs from the dictation:start profile), and
 // every slow continuation in this file snapshots the same name on entry. A late
@@ -1178,10 +1185,29 @@ function cancelDictation(/** @type {string} */ source) {
   // afterwards always says "not recording" and the renderer is never stopped.
   const wasRecording = dictation.isRecording;
   const cancelledId = dictation.id;
-  if (!dictation.cancel(source)) return false;
+  // Two different presses can be given up on here. The one the session is
+  // holding — mic open, or waiting on its words. And the one whose words have
+  // already arrived: done() runs the moment they do, so the session is idle
+  // while cleanup and the paste take another second or two — and the pill goes
+  // on offering "click to cancel" for all of it. cancel() refuses the second
+  // one (nothing is busy), so mark it instead and the delivery path drops it
+  // right before it types.
+  const endedLive = dictation.cancel(source);
+  const endedDelivery = !endedLive && dictation.markCancelled(deliveringSessionId);
+  if (!endedLive && !endedDelivery) return false;
   trayHolding = false;
   if (maxHoldTimer) { clearTimeout(maxHoldTimer); maxHoldTimer = null; }
-  dlog("cancel", { source, sessionId: cancelledId, wasRecording });
+  // The mouse back button is a toggle with its own memory of being held, and it
+  // never hears about a cancel that came from Escape or the pill. Without this,
+  // its next click reads as the release of a dictation that is already gone —
+  // nothing happens and the user has to click twice to talk again.
+  hotkeyEngine?.resetMouseBack?.();
+  dlog("cancel", {
+    source,
+    sessionId: endedLive ? cancelledId : deliveringSessionId,
+    wasRecording,
+    afterWords: endedDelivery
+  });
   debug("[main] dictation cancelled (" + source + ")");
   if (wasRecording && dictationWindow && !dictationWindow.isDestroyed()) {
     dictationWindow.webContents.send("dictation:stop");
@@ -1219,10 +1245,11 @@ async function startControlSocket() {
     hooks: {
       status: () => ({
         ready: dictationReady() && !dictation.busy,
-        // One mode today: the microphone stays warm for two minutes after the
-        // last dictation and then lets go. Step 15 of the plan makes this a real
-        // preference; until then reporting anything else would be a guess.
-        micMode: "balanced",
+        // The user's real setting (Settings → Microphone → "Keep the microphone
+        // ready"), not a guess: "always", "balanced" or "hold". A companion that
+        // reasons about warm-up latency needs the answer that is actually in
+        // force, and it changes while the socket is open.
+        micMode: micPrefs.micMode,
         session: dictation.busy ? dictation.id : null
       }),
       start: () => {
@@ -1343,11 +1370,20 @@ function openAccessibilitySettings() {
 // refuses to paste into anything else — the returned `copied` flag says the
 // text is sitting on the clipboard waiting for the user's own ⌘V.
 //
+// `abandoned` (live path only): asked once the cleanup pass is done, right
+// before the paste machinery. The user can still click the pill or hit Escape
+// during that second, and a "yes" here means the cleaned words come back with
+// `cancelled` set and nothing is typed or copied.
+//
 // @param {string} transcript
 // @param {number | null} [restoreHwnd]
-// @param {{ deliver?: boolean, target?: import("./src/foreground.js").ForegroundTarget | null }} [options]
-// @returns {Promise<{ text: string, pasted: boolean, copied?: boolean, verified: boolean | null, likelyMissed: boolean, notice: string } | null>}
-async function processTranscript(transcript, restoreHwnd = null, { deliver = true, target = null } = {}) {
+// @param {{ deliver?: boolean, target?: import("./src/foreground.js").ForegroundTarget | null, abandoned?: (() => boolean) | null }} [options]
+// @returns {Promise<{ text: string, pasted: boolean, copied?: boolean, cancelled?: boolean, verified: boolean | null, likelyMissed: boolean, notice: string } | null>}
+async function processTranscript(
+  transcript,
+  restoreHwnd = null,
+  { deliver = true, target = null, abandoned = null } = {}
+) {
   if (!transcript || !transcript.trim()) return null;
   let textToType = stripWhisperNoiseTokens(transcript.trim());
   if (!textToType) {
@@ -1419,6 +1455,16 @@ async function processTranscript(transcript, restoreHwnd = null, { deliver = tru
   if (!textToType) return null;
   if (!/[.!?…,;:"')\]]$/.test(textToType)) {
     textToType += ".";
+  }
+
+  // The user gave up while this was in the cleanup pass — the one slow step
+  // between the words arriving and the paste. Stop before the paste machinery
+  // and before the clipboard is touched: a cancel that still typed the words
+  // would be the app arguing with the key they pressed. The cleaned text comes
+  // back so history keeps it, exactly like a cancel during the recording.
+  if (deliver && typeof abandoned === "function" && abandoned()) {
+    dlog("processed-cancelled", { len: textToType.length });
+    return { text: textToType, pasted: false, cancelled: true, verified: null, likelyMissed: false, notice: cleanupNotice };
   }
 
   // Nobody is going to receive this text — stop before the paste machinery and
@@ -1753,7 +1799,13 @@ function setupIpc() {
     if (dictation.wasCancelled(sessionId)) {
       const cancelledPath = chunks && chunks.length ? await saveTempRecording(chunks, sampleRate) : null;
       dlog("transcript-cancelled", { sessionId, len: (text || "").trim().length });
-      recordTranscript(text, false, cancelledPath, { sessionId, cancelled: true });
+      // Strip the Whisper noise tokens first, like every other path that logs a
+      // transcript nobody received. Without it "Copy last result" after a cancel
+      // can hand back a bare "[BLANK_AUDIO]".
+      recordTranscript(stripWhisperNoiseTokens((text || "").trim()) || text, false, cancelledPath, {
+        sessionId,
+        cancelled: true
+      });
       rebuildTrayMenu();
       return;
     }
@@ -1855,6 +1907,10 @@ function setupIpc() {
     // buffer, one utterance at a time — and losing a spoken sentence is worse
     // than waiting a second for it.
     if (mineOnArrival) dictation.done();
+    // From here to the `finally` a click on the pill (or Escape) still means
+    // "don't paste this": the session is idle, so cancelDictation has nothing
+    // else to go on.
+    if (mineOnArrival) deliveringSessionId = sessionId;
 
     // Save the audio first so "Open recording" works even on a clean success.
     const recordingPath = rescuedPath || (await saveTempRecording(chunks, sampleRate));
@@ -1869,8 +1925,20 @@ function setupIpc() {
       // now. Clean them up anyway and park them in history below.
       const result = await processTranscript(text, targetHwnd, {
         deliver: mineOnArrival,
-        target: targetDestination
+        target: targetDestination,
+        // Asked again after the cleanup pass, the slowest thing between here
+        // and the paste. The user can still say no during it.
+        abandoned: () => dictation.wasCancelled(sessionId)
       });
+      // They did say no. Nothing was typed and nothing was copied; the words go
+      // to history like any other cancel, and cancelDictation is already showing
+      // the "Cancelled" pill — a result pill here would paint straight over it.
+      if (result && result.cancelled) {
+        dlog("transcript-cancelled-late", { sessionId, len: (result.text || "").length });
+        recordTranscript(result.text, false, recordingPath, { sessionId, cancelled: true });
+        rebuildTrayMenu();
+        return;
+      }
       // Only clear the global if this press still owns the session. Comparing
       // the VALUE instead would be wrong in the commonest case of all: two
       // dictations into the same app back to back capture the same window, so
@@ -1981,6 +2049,10 @@ function setupIpc() {
       // Never on a stale transcript: `busy` belongs to the newer press, and
       // clearing it mid-hold makes fireRelease bail out of dictation:stop.
       if (stillMine()) dictation.done();
+      // The paste window is over: a click on the pill from here on has nothing
+      // left to stop, and must not mark a finished press cancelled. Only ever
+      // clear OUR name — a press that started during the paste owns it now.
+      if (deliveringSessionId === sessionId) deliveringSessionId = null;
     }
   });
 
@@ -2059,7 +2131,15 @@ function setupIpc() {
     if (!dictation.owns(eventSessionId)) return;
     // The user already cancelled this press. Ending it and flashing red would
     // be the app arguing with a key they pressed on purpose.
-    if (dictation.wasCancelled(eventSessionId)) return;
+    //
+    // Only when the error SAYS which press it belongs to. An unstamped error
+    // comes from a renderer that reloaded and lost its name (escalate-recovery)
+    // — exactly the dead-mic / relay-down case the user has to be told about —
+    // and wasCancelled() reads a missing name as "the live press", which after a
+    // cancel is still the cancelled one. That swallowed every such error from a
+    // cancel until the next press.
+    if (typeof eventSessionId === "string" && eventSessionId.length > 0
+      && dictation.wasCancelled(eventSessionId)) return;
     dictation.fail();
     // No audio, no transcript (mic blocked, relay down, offline). Show the
     // reason on the pill so the user knows WHY, not just that it failed.
