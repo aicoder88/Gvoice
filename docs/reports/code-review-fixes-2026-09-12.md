@@ -239,3 +239,61 @@ work.
    place.
 9. **The physical side button was never pressed** in any of this. Both repos'
    checks drive the code directly.
+
+---
+
+## Saved and put in place (2026-09-12, 17:28–17:30)
+
+Both approved in one message ("1,2 yes"). Nothing pushed to GitHub; both repos
+are local commits only.
+
+**GVoice** — `/Users/macmini/dev/voice`, `main`, commit `9b6f46b` (21 files).
+Rebuilt with `pnpm build` and installed over `/Applications/GVoice.app`. The old
+copy is kept at `/Users/macmini/.app-backups/GVoice/2026-09-12-172825` (292 MB),
+so putting it back is one copy.
+
+The signature question that mattered: the installed app was signed by team
+`JZ4Z22F6BM`, and macOS ties Accessibility and Microphone to the signature it
+approved. The new build came out of electron-builder signed by the same team, so
+the grants held — proved, not assumed:
+
+```
+press {"sessionId":"1-e5faf791","target":{"pid":702,"app":"cmux","role":"AXTextArea","editable":true}}
+cancel {"sessionId":"1-e5faf791","wasRecording":true,"afterWords":false}
+mic-state {"activeLabel":"Default - Anker PowerConf C200 (291a:3369)","open":true,"micMode":"always"}
+```
+
+A window read through the Accessibility API, the Anker opened, the press
+cancelled with nothing typed. The socket answered `"micMode":"always"` — the real
+setting, finding 6. No `hotkey-failed` this boot. The menu bar icon is there.
+
+**Better Options** — `/Users/macmini/dev/better-options`, `main`, commit
+`49981b4`, fast-forwarded from the side copy, which is now removed along with its
+branch. Rebuilt and installed; signed with the same "Better Options Local
+Signing" identity as the copy it replaced, which is what keeps its mouse grants.
+Running as its own process, and GVoice logged it straight away:
+
+```
+[control-socket] companion connected: BetterOptions
+```
+
+### Not verified, and why
+
+- **Neither physical button was pressed.** A synthetic left Ctrl+Cmd through
+  AppleScript produced no press at all: the key hook reads hardware events, so
+  scripted ones never reach it. The side button is the same. Both stay hand
+  checks.
+- **Input Monitoring for the new helper binary can't be read from here** (that
+  table is sealed). The identical signature is the reason to expect it held.
+
+### Two more things to know
+
+- `scripts/install.sh` printed `Load failed: 5: Input/output error` when it
+  reloaded the login item. The item was already loaded from before, which is why;
+  nothing new auto-starts, and the app was started by hand instead. At the next
+  login it starts exactly as it did yesterday.
+- The helper was built from a tree still carrying another session's uncommitted
+  mouse-device work (`Sources/HIDDeviceMonitor.swift`). That work is in the
+  binary that was ALREADY installed, so nothing regressed by including it — but
+  it is code this review never looked at, and it is still uncommitted on that
+  repo's `main`.
