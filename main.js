@@ -1837,6 +1837,25 @@ function setupIpc() {
       }
     }
 
+    // The words are in. Re-open the session NOW, before the cleanup pass and the
+    // paste — both of which take about a second, and both of which the NEXT
+    // press does not need to wait for. Until this line the trigger was dead for
+    // that whole second: press, nothing at all, press again a beat later, fine.
+    // The renderer is free the moment a transcript lands (mic shut, nothing
+    // draining), so a press from here on records cleanly.
+    //
+    // Delivery of THESE words is already decided: mineOnArrival and
+    // targetDestination were read at the top of this handler, so the sentence
+    // still lands in the window this press captured, even if a new press owns
+    // the session by the time the paste runs. The `finally` below calls done()
+    // again and that is a no-op.
+    //
+    // Not sooner than this. A press while the audio is still being drained or
+    // committed makes the renderer throw that recording away — one shared
+    // buffer, one utterance at a time — and losing a spoken sentence is worse
+    // than waiting a second for it.
+    if (mineOnArrival) dictation.done();
+
     // Save the audio first so "Open recording" works even on a clean success.
     const recordingPath = rescuedPath || (await saveTempRecording(chunks, sampleRate));
     try {
@@ -1867,7 +1886,14 @@ function setupIpc() {
         console.error("[main] transcript landed after a newer press — parked in history");
         dlog("transcript-stale", { sessionId, live: dictation.id });
         if (result && result.text) {
-          recordTranscript(result.text, false, recordingPath, { recovered: true, sessionId });
+          // It may well have landed: the session is re-opened as soon as the
+          // words arrive, so an ordinary fast second press lands here with the
+          // paste already done. Recording that as "not pasted" would hang a
+          // false ⚠ on a sentence sitting in the user's document.
+          recordTranscript(result.text, !!result.pasted, recordingPath, {
+            recovered: !result.pasted,
+            sessionId
+          });
           rebuildTrayMenu();
         }
         return;
