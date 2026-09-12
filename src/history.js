@@ -65,6 +65,36 @@ function resolveDeliveryState(pasted, meta = {}) {
   return legacyState({ ...meta, pasted });
 }
 
+/**
+ * What the tray's "Recent dictations" row says about an entry. The one place an
+ * outcome becomes words, so a new outcome cannot show up with the wrong label
+ * or a warning it does not deserve. Only a paste that genuinely failed earns the
+ * ⚠: the user cancelling, moving on, or being overtaken by a newer dictation
+ * are all things that happened on purpose.
+ *
+ * @param {{ deliveryState?: string, text?: string, pasted?: boolean }} entry
+ * @returns {{ note: string | null, warn: boolean }}
+ */
+export function trayLabelFor(entry) {
+  const state = DELIVERY_STATES.includes(entry.deliveryState) ? entry.deliveryState : legacyState(entry);
+  const hasText = !!(entry.text || "").trim();
+  switch (state) {
+    case "verified":
+    case "sent-unverified":
+      return { note: null, warn: false };
+    case "cancelled":
+      return { note: hasText ? "Cancelled – never pasted" : null, warn: false };
+    case "refused":
+      return { note: hasText ? "Not pasted – copied instead" : null, warn: false };
+    case "superseded":
+      return { note: hasText ? "A newer dictation took over – never pasted" : null, warn: false };
+    case "recovered":
+      return { note: hasText ? "Recovered later – never pasted" : null, warn: false };
+    default:
+      return { note: "⚠ Wasn't pasted into any app", warn: true };
+  }
+}
+
 /** @type {string | null} */
 let historyPath = null;
 /** @type {Promise<void>} */

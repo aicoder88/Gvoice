@@ -41,7 +41,7 @@ Both rewrote how a press is identified and how a paste is judged.
 
 ---
 
-## Step 1 – Choose the spine: named press or numbered press [opus/high]
+## Step 1 – Choose the spine: named press or numbered press [opus/high] DONE
 
 Everything else depends on this one call, so it is made first and on evidence,
 not taste. Count what hangs off each scheme before choosing.
@@ -58,7 +58,7 @@ winner in Steps 2 to 6.
 -> verify: `docs/context/decisions.md` names the winner, the count behind it,
 and what would make us reverse it.
 
-## Step 2 – Join the press-identity code onto the chosen spine [opus/high]
+## Step 2 – Join the press-identity code onto the chosen spine [opus/high] DONE
 
 Clashes 3, 10, 11, 12, 13, 19, 21, 22, 26, 27 (`main.js`, `preload.cjs`,
 `src/dictation-session.js`).
@@ -72,7 +72,7 @@ Both behaviours must survive whichever spine wins:
 -> verify: `pnpm run test:unit` passes, including
 `scripts/unit/dictation-session.test.js` and `scripts/unit/cancel-and-copy.test.js`.
 
-## Step 3 – Join the paste path [opus/high]
+## Step 3 – Join the paste path [opus/high] DONE
 
 Clashes 2, 4, 6, 7, 8, 14, 16, 31, 32 (`main.js`, `src/typing.js`).
 
@@ -93,7 +93,7 @@ Both must survive:
 `scripts/unit/paste-destination.test.js` (all four terminal cases),
 `scripts/unit/clipboard-race.test.js` and `scripts/unit/clipboard-transaction.test.js`.
 
-## Step 4 – Join the two ways a dictation is recorded [opus/medium]
+## Step 4 – Join the two ways a dictation is recorded [opus/medium] DONE
 
 Clashes 16, 29, 30 (`src/history.js`, `main.js`).
 
@@ -105,14 +105,14 @@ destination changed. Add them rather than losing them.
 -> verify: `pnpm run test:unit` passes, and the tray's "Recent dictations" list
 shows the right label for a cancelled, a copied and a superseded dictation.
 
-## Step 5 – Take the union of the foreground reading [sonnet/medium]
+## Step 5 – Take the union of the foreground reading [sonnet/medium] DONE
 
 Clash 28 (`src/foreground.js`). This Mac needs `pid` for the destination guard;
 the other machine needs `path` for per-app profiles. Return both.
 
 -> verify: `pnpm run test:unit` passes, including the destination and profile tests.
 
-## Step 6 – Bring across the features only one side has [sonnet/medium]
+## Step 6 – Bring across the features only one side has [sonnet/medium] DONE
 
 Clashes 5, 9, 18, 20, 23, 24, 25 (`main.js`, `package.json`,
 `public/dictation.js`, `public/settings.html`).
@@ -127,7 +127,7 @@ Settings must show every panel both sides added, not one side's set.
 -> verify: the app opens, Settings shows the microphone panel AND the output
 panel, and both windows open without an error in the log.
 
-## Step 7 – Settle the documents [haiku/low]
+## Step 7 – Settle the documents [haiku/low] DONE
 
 Clash 1 (`docs/context/decisions.md`) and the two README and architecture files.
 Keep both machines' entries; do not renumber or reword the other machine's.
@@ -136,7 +136,7 @@ Keep both machines' entries; do not renumber or reword the other machine's.
 --include='*.md' --include='*.json' --include='*.cjs' . | grep -v node_modules`
 returns nothing.
 
-## Step 8 – Prove it on the running app, not the diff [opus/high]
+## Step 8 – Prove it on the running app, not the diff [opus/high] PARTIAL – 5 of 6 seen
 
 This repo's own rule: a fix is not done until it is seen working.
 
@@ -151,6 +151,23 @@ This repo's own rule: a fix is not done until it is seen working.
 
 -> verify: every one of the six observed, each written into the run report with
 what was seen, not what was expected.
+
+### Step 8 results, 12 September 2026
+
+| # | Check | Result | What was seen |
+| --- | --- | --- | --- |
+| 1 | All checks | SEEN | 408 unit, parity, end-to-end smoke, and the Electron regression all pass. The Electron run's own screenshot shows "The quick brown fox jumps over the lazy dog." pasted into its test window. |
+| 2 | Build and install | SEEN | Built, signed, installed to `/Applications/GVoice.app`; installed file identical to the build. |
+| 3 | Menu-bar icon | SEEN | The G-and-bars icon is on screen after launch. |
+| 4 | Dictate into a terminal | SEEN, with a limit | Tray-started dictation into a fresh Terminal.app window: "Purple Elephant 7." landed. Press name carried from key-press to paste, app matched, timing recorded. Limit: Terminal.app reports a normal text field, so the hidden-field branch (cmux) was proved only by the unit test running through the real paste engine, not live. |
+| 5 | Microphone choice survives restart | NOT SEEN | Settings opens only from the menu-bar menu. A synthetic click on the menu-bar icon starts push to talk instead; it did so twice, the second time aimed at the live cmux, and GVoice was force-stopped before anything pasted. Needs 30 seconds by hand. |
+| 6 | Voice editing | SEEN in the Electron run | Its screenshot shows the edit window with the original selection, the replacement preview and Apply. Not tried by hand on the installed app. |
+
+**Behaviour change to know about:** a paste that cannot be confirmed – every
+terminal – now leaves the dictated words on the clipboard in place of what was
+copied before. Seen live in check 4. Both machines had independently logged the
+opposite bug (a timer restoring the old clipboard wiped the only copy of words
+that never landed), so this is the deliberate side of the trade.
 
 ## Step 9 – GATED: push the joined version [opus/medium]
 

@@ -475,18 +475,6 @@ export function capturePasteVerification() {
   });
 }
 
-export function readbackPasteTarget() {
-  return withFocusedElement((focused) => {
-    const { bundle, basename } = elementApp(focused);
-    const isTerminal = isTerminalApp(bundle, basename);
-    return {
-      isTerminal,
-      value: isTerminal ? null : readFocusedStringValue(focused),
-      app: bundle || basename
-    };
-  }) || { isTerminal: false, value: null, app: "" };
-}
-
 /**
  * Snapshot of the foreground window at hotkey press time. Pass back to
  * restoreForegroundWindow() before pasting.

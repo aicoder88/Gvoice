@@ -51,11 +51,11 @@ import { createControlServer, controlSocketPath } from "./src/control-socket.js"
 import * as vocab from "./src/vocab.js";
 import { createCorrectionWatcher } from "./src/correction-watch.js";
 import { looksLikeRetraction } from "./src/cleanup.js";
-import { captureForegroundApp, captureForegroundWindow, captureForegroundTarget, restoreForegroundWindow, getWindowRect, isEditableFieldFocused, isForegroundWindow, readbackPasteTarget, capturePasteVerification } from "./src/foreground.js";
+import { captureForegroundApp, captureForegroundWindow, restoreForegroundWindow, getWindowRect, isEditableFieldFocused, isForegroundWindow, capturePasteVerification } from "./src/foreground.js";
 import { assessPasteOutcome, decidePasteOwnership } from "./src/paste-confidence.js";
 import { getClipboardChangeCount } from "./src/clipboard-sequence.js";
 import { readBuildIdentity } from "./src/build-identity.js";
-import { initHistory, getHistory, getHistoryPath, recordTranscript, lastResult } from "./src/history.js";
+import { initHistory, getHistory, getHistoryPath, recordTranscript, lastResult, trayLabelFor } from "./src/history.js";
 import { computeStats } from "./src/stats.js";
 import { ensureWhisperServer, stopWhisperServer } from "./src/providers/whisper-local.js";
 import { ENV_FILE, MODELS_DIR, BIN_DIR } from "./src/bootstrap-env.js";
@@ -2830,31 +2830,13 @@ function rebuildTrayMenu() {
       ? (flat.length > 60 ? flat.slice(0, 60) + "…" : flat)
       : "(no transcript — recording only)";
     const hasRecording = !!entry.recordingPath && existsSync(entry.recordingPath);
-    // Words that came back after the press they belonged to was over, or that
-    // the retry pulled out of a saved clip. They were never meant to land in an
-    // app, so they get no warning triangle — only text can be "recovered", a
-    // clip with no transcript says so in its own preview.
-    const recovered = !!entry.recovered && !!flat;
-    // Words whose press the user stopped on purpose. Also never pasted, but
-    // their own key did it, so no warning triangle either.
-    const cancelled = !!entry.cancelled && !!flat;
-    // Words the user moved away from mid-dictation: left on the clipboard on
-    // purpose rather than pasted into a window they had left. Nothing went
-    // wrong, so no warning triangle here either.
-    const copied = !!entry.copy && !!flat;
+    // What became of this dictation, in words, and whether it earns a warning.
+    // Decided in history.js next to the list of outcomes, so the row and the
+    // record can never disagree.
+    const { note, warn } = trayLabelFor(entry);
     /** @type {import("electron").MenuItemConstructorOptions[]} */
     const sub = [];
-    // The ⚠ on the parent row needs a legend — say what it means right where
-    // the user looks for the text.
-    if (cancelled) {
-      sub.push({ label: "Cancelled — never pasted", enabled: false });
-    } else if (copied) {
-      sub.push({ label: "You'd moved on — copied, not pasted", enabled: false });
-    } else if (recovered) {
-      sub.push({ label: "Recovered later — never pasted", enabled: false });
-    } else if (!entry.pasted) {
-      sub.push({ label: "⚠ Wasn't pasted into any app", enabled: false });
-    }
+    if (note) sub.push({ label: note, enabled: false });
     if (flat) sub.push({ label: "Copy text", click: () => clipboard.writeText(entry.text) });
     sub.push({
       label: hasRecording ? "Play recording" : "Recording unavailable",
@@ -2870,7 +2852,7 @@ function rebuildTrayMenu() {
       });
     }
     return {
-      label: `${time}${entry.pasted || recovered || cancelled || copied ? "" : " ⚠"}  ${preview}`,
+      label: `${time}${warn ? " ⚠" : ""}  ${preview}`,
       submenu: sub
     };
   });
