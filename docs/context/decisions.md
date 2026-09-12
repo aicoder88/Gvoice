@@ -61,3 +61,28 @@ on the spot. This Mac's 34 commits went to the branch
 **Reverse if:** the parallel work stops. Once one machine is the only one
 building GVoice, this costs effort and buys nothing, and a plain merge is right
 again.
+
+## 2026-09-12 – The named press wins, because it already contains the numbered one
+
+The join plan's first step asked which way a press should be identified: this
+Mac names each one, the other machine numbers them. It turned out not to be a
+choice.
+
+**The evidence:** this Mac's session object already carries both. `generation`
+is a counter that only ever climbs, and `id` is minted from it as
+`"<generation>-<random>"`. Every place the other machine keys off a number can
+keep doing so, unchanged, against the same counter. The name adds what a bare
+counter cannot do: recognise one specific press after it has ended, which is
+what cancelling a dictation whose words already arrived depends on.
+
+Counted references: 128 on the name, 40 on the number, plus the other machine's
+timing, voice editing and benchmark hanging off the number indirectly. All of
+them survive, because the counter survives.
+
+**Decided:** the named press is the spine. `claimTerminal` is the one thing the
+other machine's session had and this one did not, so it comes across rather
+than being dropped.
+
+**Reverse if:** the name ever stops being minted from the counter. The moment
+those two drift apart, code keying off the number is no longer safe and the
+whole scheme has to be picked apart again.
