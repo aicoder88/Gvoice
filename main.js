@@ -1549,6 +1549,7 @@ async function processTranscript(
   let likelyMissed = false;
   let readTarget = "";
   let readLen = null;
+  let pastedIntoTerminal = false;
   let clipboardRetained = false;
   latency.mark(gen, "pasteStart");
   try {
@@ -1587,6 +1588,7 @@ async function processTranscript(
       const snapshot = verification?.read();
       readTarget = snapshot?.app || "";
       readLen = typeof snapshot?.value === "string" ? snapshot.value.length : null;
+      pastedIntoTerminal = snapshot?.isTerminal === true;
       ({ verified, likelyMissed, deliveryState } = assessPasteOutcome({
         typed: !windowsFocusLost, restoreRequired: restoreHwnd != null, restored,
         fieldFocused, isTerminal: snapshot?.isTerminal || false,
@@ -1621,7 +1623,10 @@ async function processTranscript(
   if (deliveryState === "cancelled") return cancelledResult();
   const pasted = typed && (deliveryState === "verified" || deliveryState === "sent-unverified");
   const skipped = deliveryState === "refused" || deliveryState === "superseded";
-  const notice = deliveryState === "verified" ? cleanupNotice
+  // A terminal's text can never be read back, so every terminal paste is
+  // "unverified". Saying so on each one is noise: the owner asked for a plain
+  // Success there (2026-09-12). The words still stay on the clipboard.
+  const notice = deliveryState === "verified" || (deliveryState === "sent-unverified" && pastedIntoTerminal) ? cleanupNotice
     : deliveryState === "superseded" ? "Saved in Recent dictations. Your newer clipboard was kept."
     : deliveryState === "refused" ? "Not pasted. It's on your clipboard and in Recent dictations."
     : clipboardRetained ? "Delivery unverified. Text kept on your clipboard and in Recent dictations."

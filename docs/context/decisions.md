@@ -154,3 +154,20 @@ Reverse if: the owner finds terminal dictations eating clipboard contents he
 needed. To reverse: in `finish`, restore the snapshot for `'sent-unverified'`
 as well as `'verified'`, and accept that an undelivered dictation can then be
 wiped.
+
+## 2026-09-12 – A terminal paste shows plain Success, not "Delivery unverified"
+
+`main.js` → `processTranscript`, the `notice` line
+
+A paste into a recognised terminal (cmux, Terminal, iTerm and the rest in
+`src/paste-confidence.js`) can never be read back, so it always ends
+"sent-unverified". The pill no longer says "Delivery unverified" for those. It
+says Success. The words still stay on the clipboard, per the entry above.
+Other apps whose text can't be read still get the warning.
+
+Why: the owner dictates into cmux all day and saw the warning on every
+working paste. His words, 2026-09-12: "Get rid of that warning when I'm using
+it in terminal."
+
+Reverse if: a terminal paste goes missing and the plain Success hid it. To
+reverse: drop the `pastedIntoTerminal` clause from the `notice` line.
