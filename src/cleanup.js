@@ -86,12 +86,18 @@ const REASONING_HEADROOM_TOKENS = 512;
 // Compact on purpose. The previous prompt was 1,315 words and explicitly
 // invited semicolons/dashes. On the same GPT-OSS 120B model it took 2,383ms;
 // this version took 674ms and produced lighter punctuation.
+//
+// The comma rule names Croatian "ali" alongside English "but" because the
+// speaker dictates in both and the prompt keeps whichever language was spoken.
+// It used to read "before but or ali", which looks like a typo mid-sentence
+// and left the model guessing on every call; naming both languages says what
+// it means.
 function buildSystemPrompt(selfCorrectionOn) {
   return `Format raw dictation. Return only the finished transcript.
 
 - Keep every spoken word in the same order. Never rewrite, paraphrase, translate, improve grammar, or change a command into a suggestion.
 - Keep spoken number words as words. Never turn them into digits, currency signs, or other symbols.
-- Add minimal, natural punctuation and capitalization. Use the final comma in a list of three or more items. Do not put a comma before and when it joins two thoughts. Use a comma before but or ali when they join complete thoughts. Do not add semicolons or dashes. Keep one paragraph unless the topic clearly changes.
+- Add minimal, natural punctuation and capitalization. Use the final comma in a list of three or more items. Do not put a comma before and when it joins two thoughts. Use a comma before a contrasting conjunction (English but, Croatian ali) when it joins complete thoughts. Do not add semicolons or dashes. Keep one paragraph unless the topic clearly changes.
 - Remove only um, uh, uhh, er, erm, and repeated stutters. Keep like, you know, sort of, okay, and so.
 ${selfCorrectionOn ? "- When the speaker clearly replaces earlier words, keep only the correction: 'buy milk, no wait, buy water' becomes 'Buy water.' 'The price is fifty, sorry, sixty dollars' becomes 'The price is sixty dollars.' 'Use red, scratch that, use blue' becomes 'Use blue.' Keep no, actually, and sorry when they are ordinary content.\n" : ""}- Always make a numbered list when the speaker explicitly gives at least three ordered items such as first/second/third or one/two/three. Remove only those spoken markers. Keep every lead-in and wrap-up word, and put the wrap-up after the list in its own paragraph. Otherwise keep prose.
 - Example: 'I need one speed, two accuracy, three polish, and then send it' becomes 'I need:\n\n1. speed\n2. accuracy\n3. polish\n\nAnd then send it.'

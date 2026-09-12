@@ -1301,6 +1301,13 @@ async function setupHotkey() {
       onCancel: () => { cancelDictation("escape"); }
     });
     updateTrayTooltip();
+    // The control socket comes up before this (a companion must be able to
+    // connect and hear "not ready"), so a companion can already own the button
+    // by the time the hotkey engine exists. onCompanion fired into a null
+    // engine and did nothing, leaving the raw mouse-back toggle live alongside
+    // the companion — the double-trigger stuck-mic bug the socket exists to
+    // end. Ask the socket where things actually stand instead of assuming.
+    try { hotkeyEngine.setMouseBackEnabled?.(!controlServer?.hasCompanion?.()); } catch {}
     startHookWatchdog(hotkeyEngine.sawEvent);
     const altLabel = process.platform === "darwin"
       ? "right Option (⌥), left Ctrl+Cmd, or mouse back button"
@@ -1383,7 +1390,7 @@ function openAccessibilitySettings() {
 async function processTranscript(
   transcript,
   restoreHwnd = null,
-  { deliver = true, target = null, abandoned = null } = {}
+  { deliver = true, target = null, abandoned = null, committed = null } = {}
 ) {
   if (!transcript || !transcript.trim()) return null;
   let textToType = stripWhisperNoiseTokens(transcript.trim());
@@ -1466,6 +1473,17 @@ async function processTranscript(
   if (deliver && typeof abandoned === "function" && abandoned()) {
     dlog("processed-cancelled", { len: textToType.length });
     return { text: textToType, pasted: false, cancelled: true, verified: null, likelyMissed: false, notice: cleanupNotice };
+  }
+
+  // Point of no return. Everything past this line writes the clipboard and
+  // sends ⌘V, and that takes a few hundred milliseconds the user can press
+  // Escape inside. Until now a press there painted "Cancelled — nothing
+  // pasted" over a paste that was in fact landing in their document, and the
+  // Success pill then painted over the lie a moment later. Tell the caller the
+  // window is shut, so a late Escape finds nothing to cancel and costs
+  // nothing — the same as a stray Escape in another app.
+  if (deliver && typeof committed === "function") {
+    try { committed(); } catch {}
   }
 
   // Nobody is going to receive this text — stop before the paste machinery and
@@ -1902,9 +1920,12 @@ function setupIpc() {
     // buffer, one utterance at a time – and losing a spoken sentence is worse
     // than waiting a second for it.
     if (mineOnArrival) dictation.done();
-    // From here to the `finally` a click on the pill (or Escape) still means
-    // "don't paste this": the session is idle, so cancelDictation has nothing
-    // else to go on.
+    // From here until the clipboard is written a click on the pill (or
+    // Escape) still means "don't paste this": the session is idle, so
+    // cancelDictation has nothing else to go on. processTranscript closes the
+    // window itself (the `committed` callback below) the moment the paste is
+    // unstoppable; the `finally` is only the backstop for the paths that never
+    // reach it.
     if (mineOnArrival) deliveringSessionId = sessionId;
 
     // Save the audio first so "Open recording" works even on a clean success.
@@ -1923,7 +1944,11 @@ function setupIpc() {
         target: targetDestination,
         // Asked again after the cleanup pass, the slowest thing between here
         // and the paste. The user can still say no during it.
-        abandoned: () => dictation.wasCancelled(sessionId)
+        abandoned: () => dictation.wasCancelled(sessionId),
+        // The clipboard is about to be written. Give up the right to cancel
+        // here rather than in the `finally`, which does not run until the
+        // paste has already happened.
+        committed: () => { if (deliveringSessionId === sessionId) deliveringSessionId = null; }
       });
       // They did say no. Nothing was typed and nothing was copied; the words go
       // to history like any other cancel, and cancelDictation is already showing
@@ -2044,9 +2069,11 @@ function setupIpc() {
       // Never on a stale transcript: `busy` belongs to the newer press, and
       // clearing it mid-hold makes fireRelease bail out of dictation:stop.
       if (stillMine()) dictation.done();
-      // The paste window is over: a click on the pill from here on has nothing
-      // left to stop, and must not mark a finished press cancelled. Only ever
-      // clear OUR name – a press that started during the paste owns it now.
+      // Backstop. `committed` normally clears this the instant the paste
+      // becomes unstoppable; this catches the paths that return before it (a
+      // noise-only transcript, an empty cleanup, deliver:false) and the ones
+      // that throw. Only ever clear OUR name – a press that started during the
+      // paste owns it now.
       if (deliveringSessionId === sessionId) deliveringSessionId = null;
     }
   });

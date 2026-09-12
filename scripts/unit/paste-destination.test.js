@@ -57,6 +57,27 @@ test("caret no longer in something that takes typing → no paste", () => {
   });
 });
 
+// The other half of that rule, and the one that matters most day to day.
+// Terminals and custom Electron editors expose no editable AX element at any
+// point, so BOTH readings say editable:false. Judging the second reading alone
+// refused every dictation into iTerm, Ghostty and Claude Code and left the
+// words on the clipboard. Nothing changed here, so the paste goes ahead.
+const TERMINAL = { pid: 620, app: "ghostty", windowNumber: 9, role: "AXGroup", editable: false };
+
+test("an app that never looked editable still gets its paste", () => {
+  assert.deepEqual(sameDestination(TERMINAL, { ...TERMINAL }), { ok: true, reason: "match" });
+});
+
+test("a never-editable app that the user switched away from is still refused", () => {
+  assert.equal(sameDestination(TERMINAL, { ...TERMINAL, pid: 777, app: "slack" }).reason, "app-changed");
+  assert.equal(sameDestination(TERMINAL, { ...TERMINAL, windowNumber: 10 }).reason, "window-changed");
+  assert.equal(sameDestination(TERMINAL, null).reason, "unreadable");
+});
+
+test("a never-editable app that gained a text field is fine too", () => {
+  assert.equal(sameDestination(TERMINAL, { ...TERMINAL, role: "AXTextArea", editable: true }).ok, true);
+});
+
 test("a destination we can no longer read is treated as changed", () => {
   assert.deepEqual(sameDestination(NOTES, null), { ok: false, reason: "unreadable" });
 });

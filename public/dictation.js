@@ -1059,10 +1059,29 @@ async function checkPreferredDevice(why) {
     await withCaptureLock(async () => {
       if (isRecording || startInFlight) return;
       teardownCapture(true);
-      await buildCaptureGraph(choice.deviceId);
+      try {
+        await buildCaptureGraph(choice.deviceId);
+      } catch (error) {
+        // The working graph is already torn down at this point, so leaving it
+        // here strands the app with no microphone at all: captureReady stays
+        // false, nothing schedules a recovery, and every press from now on
+        // ends in "Mic blocked" until the app is restarted. getMicStream only
+        // falls back by itself when the device is GONE (OverconstrainedError /
+        // NotFoundError); a device that exists but is held exclusively by
+        // another app — Zoom or Teams on a call — throws NotReadableError and
+        // comes straight here. Rebuild on whatever the computer will give us
+        // so dictation keeps working, and let the next check switch back once
+        // the call ends.
+        log("Could not open your microphone: " + (error && error.message) + " — staying on the system default");
+        teardownCapture(true);
+        await buildCaptureGraph(null);
+      }
     });
   } catch (error) {
-    log("Could not open your microphone: " + (error && error.message));
+    // Even the system default refused. Mark the graph stale so the next press
+    // rebuilds from scratch instead of trusting a half-built one.
+    captureStale = true;
+    log("No microphone would open: " + (error && error.message));
   }
   await reportMicState();
 }

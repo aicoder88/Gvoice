@@ -34,6 +34,11 @@
  * destination a moment ago and cannot now. That is not a licence to guess —
  * the words stay on the clipboard.
  *
+ * The editable check is a CHANGE check, not a quality bar: it only refuses a
+ * field that was editable at press time and is not any more. An app that never
+ * looked editable to Accessibility (terminals, custom Electron editors) still
+ * gets its paste.
+ *
  * @param {ForegroundTarget | null | undefined} before
  * @param {ForegroundTarget | null | undefined} after
  * @returns {DestinationDecision}
@@ -57,7 +62,18 @@ export function sameDestination(before, after) {
   // Right app, right window, but the caret is no longer in something that
   // takes typing (the user clicked the canvas, a dialog took focus inside the
   // same window). ⌘V there goes nowhere or, worse, fires a keyboard shortcut.
-  if (after.editable !== true) return { ok: false, reason: "no-editable-field" };
+  //
+  // Only a field that WAS editable and now is not counts as that. Plenty of
+  // apps never look editable to Accessibility and still take a paste
+  // perfectly: terminals (the focused element is an AXGroup with a read-only
+  // AXValue) and custom Electron/browser editors. Judging those on `after`
+  // alone refused every dictation into them and left the words sitting on the
+  // clipboard — which is exactly the case main.js's read-back comments say
+  // must never be treated as a failure. This module's question is whether the
+  // destination CHANGED, not whether Accessibility approves of it.
+  if (before.editable === true && after.editable !== true) {
+    return { ok: false, reason: "no-editable-field" };
+  }
   return { ok: true, reason: "match" };
 }
 
