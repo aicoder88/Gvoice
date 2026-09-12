@@ -68,7 +68,7 @@ export function sameDestination(before, after) {
   // perfectly: terminals (the focused element is an AXGroup with a read-only
   // AXValue) and custom Electron/browser editors. Judging those on `after`
   // alone refused every dictation into them and left the words sitting on the
-  // clipboard — which is exactly the case main.js's read-back comments say
+  // clipboard – which is exactly the case main.js's read-back comments say
   // must never be treated as a failure. This module's question is whether the
   // destination CHANGED, not whether Accessibility approves of it.
   if (before.editable === true && after.editable !== true) {

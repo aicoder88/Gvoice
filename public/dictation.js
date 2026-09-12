@@ -1068,11 +1068,11 @@ async function checkPreferredDevice(why) {
         // ends in "Mic blocked" until the app is restarted. getMicStream only
         // falls back by itself when the device is GONE (OverconstrainedError /
         // NotFoundError); a device that exists but is held exclusively by
-        // another app — Zoom or Teams on a call — throws NotReadableError and
+        // another app – Zoom or Teams on a call – throws NotReadableError and
         // comes straight here. Rebuild on whatever the computer will give us
         // so dictation keeps working, and let the next check switch back once
         // the call ends.
-        log("Could not open your microphone: " + (error && error.message) + " — staying on the system default");
+        log("Could not open your microphone: " + (error && error.message) + " – staying on the system default");
         teardownCapture(true);
         await buildCaptureGraph(null);
       }

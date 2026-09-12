@@ -118,8 +118,8 @@ test("an explicit cleanup model never silently falls back", async () => {
 // The pin above is honoured because the name is plausible. This one is not: it
 // is a setting left behind by an older build, and honouring it would pin a
 // dead engine forever with no way for the user to see why tidy-up stopped. It
-// is dropped and the provider's own chain runs instead. (The sibling case — a
-// model belonging to a DIFFERENT provider — is covered further down, in
+// is dropped and the provider's own chain runs instead. (The sibling case – a
+// model belonging to a DIFFERENT provider – is covered further down, in
 // "switching cleanup providers never carries the other provider's built-in
 // model".)
 test("a retired Groq model left in Settings is ignored, not pinned", async () => {

@@ -135,4 +135,4 @@ Both versions were merged rather than one being thrown away. The word-preservati
 guard from this Mac and the backup-model failover from the other machine now both run:
 a retired or rate-limited model falls through to the backup, and whatever comes back
 is still rejected if it changed the speaker's words. A stale model name saved in
-Settings no longer pins a dead model — it is dropped and the default chain runs.
+Settings no longer pins a dead model – it is dropped and the default chain runs.

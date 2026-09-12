@@ -1305,7 +1305,7 @@ async function setupHotkey() {
     // connect and hear "not ready"), so a companion can already own the button
     // by the time the hotkey engine exists. onCompanion fired into a null
     // engine and did nothing, leaving the raw mouse-back toggle live alongside
-    // the companion — the double-trigger stuck-mic bug the socket exists to
+    // the companion – the double-trigger stuck-mic bug the socket exists to
     // end. Ask the socket where things actually stand instead of assuming.
     try { hotkeyEngine.setMouseBackEnabled?.(!controlServer?.hasCompanion?.()); } catch {}
     startHookWatchdog(hotkeyEngine.sawEvent);
@@ -1477,11 +1477,11 @@ async function processTranscript(
 
   // Point of no return. Everything past this line writes the clipboard and
   // sends ⌘V, and that takes a few hundred milliseconds the user can press
-  // Escape inside. Until now a press there painted "Cancelled — nothing
+  // Escape inside. Until now a press there painted "Cancelled – nothing
   // pasted" over a paste that was in fact landing in their document, and the
   // Success pill then painted over the lie a moment later. Tell the caller the
   // window is shut, so a late Escape finds nothing to cancel and costs
-  // nothing — the same as a stray Escape in another app.
+  // nothing – the same as a stray Escape in another app.
   if (deliver && typeof committed === "function") {
     try { committed(); } catch {}
   }
