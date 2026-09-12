@@ -1516,10 +1516,11 @@ async function processTranscript(
   // would be the app arguing with the key they pressed. The cleaned text comes
   // back so history keeps it, exactly like a cancel during the recording.
   const wasAbandoned = () => deliver && typeof abandoned === "function" && abandoned();
-  if (wasAbandoned()) {
+  const cancelledResult = () => {
     dlog("processed-cancelled", { len: textToType.length });
     return { text: textToType, pasted: false, cancelled: true, verified: null, likelyMissed: false, deliveryState: "cancelled", notice: cleanupNotice };
-  }
+  };
+  if (wasAbandoned()) return cancelledResult();
 
   // Nobody is going to receive this text – stop before the paste machinery and
   // hand back the cleaned words for the history entry.
@@ -1535,6 +1536,7 @@ async function processTranscript(
   const tType = Date.now();
   const { typeText } = await import("./src/typing.js");
   if (!canPaste()) return superseded();
+  if (wasAbandoned()) return cancelledResult();
   const clipboardBefore = getClipboardChangeCount();
   let restored = false;
   if (restoreHwnd != null) restored = restoreForegroundWindow(restoreHwnd);
@@ -1573,7 +1575,10 @@ async function processTranscript(
     } else if (lease?.refused) pasteOwnership = "different";
     typed = !!lease && lease.dispatched !== false;
     if (typed) latency.mark(gen, "pasteEnd");
-    if (!canPaste()) deliveryState = "superseded";
+    // Cancelled after the check above but before the clipboard was written:
+    // the typer refused, nothing left. Obey it, and keep the clipboard as is.
+    if (!lease && wasAbandoned()) deliveryState = "cancelled";
+    else if (!canPaste()) deliveryState = "superseded";
     else if (pasteOwnership !== "same") deliveryState = "refused";
     else if (!typed) deliveryState = "failed";
     else {
@@ -1604,7 +1609,7 @@ async function processTranscript(
     } else if (lease) {
       clipboardRetained = lease.isCurrent?.() === true && deliveryState !== "verified";
       deliveryState = lease.finish(deliveryState);
-    } else if (deliveryState !== "superseded" && canPaste()) {
+    } else if (deliveryState !== "superseded" && deliveryState !== "cancelled" && canPaste()) {
       // A refused paste has acquired no lease. Rescue only if nobody copied
       // anything during the asynchronous transport or ownership check.
       if (clipboardBefore != null && getClipboardChangeCount() === clipboardBefore) {
@@ -1613,6 +1618,7 @@ async function processTranscript(
       } else deliveryState = "superseded";
     }
   }
+  if (deliveryState === "cancelled") return cancelledResult();
   const pasted = typed && (deliveryState === "verified" || deliveryState === "sent-unverified");
   const skipped = deliveryState === "refused" || deliveryState === "superseded";
   const notice = deliveryState === "verified" ? cleanupNotice
@@ -1923,7 +1929,12 @@ function setupIpc() {
       ? dictation.finalize()
       : { releaseAt: Date.now(), sinceRelease: 0 };
     const sourceApp = sourceApps.get(gen);
-    const canPaste = () => stillMine() && Date.now() - releaseAt < 30000;
+    // Ownership is settled on arrival, not re-asked at paste time. The session
+    // re-opens the moment the words land (below), so a quick second press takes
+    // it over while THESE words are still in cleanup. Asking stillMine() here
+    // threw the first sentence away on every fast second press. The paste still
+    // checks the app in front is the one this press started in.
+    const canPaste = () => mineOnArrival && Date.now() - releaseAt < 30000;
     debug("[main] received transcript (" + sinceRelease + "ms after release):", JSON.stringify({ length: text?.length || 0 }));
     dlog("transcript", { len: (text || "").trim().length, sinceRelease, sessionId, mine: mineOnArrival });
 
@@ -1949,6 +1960,10 @@ function setupIpc() {
         if (mineOnArrival) hidePill();
         return;
       }
+      // The pill says "click to cancel" through the save and the retry, so a
+      // click there has to find this press. Same window the normal path opens
+      // below, just seconds earlier.
+      if (mineOnArrival) deliveringSessionId = sessionId;
       const failedPath = await saveTempRecording(chunks, sampleRate);
       // The live stream heard nothing, but the audio is on disk — try the batch
       // API before calling it a failure. That recovers every dictation the
@@ -1958,7 +1973,19 @@ function setupIpc() {
       // stream that came back blank costs the user a second, not a manual
       // paste. (It also means the rescued text gets the cleanup pass, which the
       // clipboard route skipped.)
-      const recovered = failedPath ? await retranscribeRecording(failedPath, { deliver: false }) : null;
+      const recovered = failedPath
+        ? await retranscribeRecording(failedPath, { deliver: false, canDeliver: () => !dictation.wasCancelled(sessionId) })
+        : null;
+      if (deliveringSessionId === sessionId) deliveringSessionId = null;
+      // Cancelled during the save or the retry. The pill already says so; the
+      // words and the clip go to history like any other cancel.
+      if (dictation.wasCancelled(sessionId)) {
+        dlog("transcript-cancelled-late", { sessionId, len: (recovered || "").length });
+        latency.finish(gen, "cancelled");
+        recordTranscript(recovered || "", false, failedPath, { sessionId, deliveryState: "cancelled" });
+        rebuildTrayMenu();
+        return;
+      }
       // A press during the round trip started a NEW dictation (the session was
       // re-opened above so presses aren't swallowed). Pasting this older text
       // now would land it in the middle of what the user is saying right now —
@@ -3322,6 +3349,7 @@ if (TEST_MODE) globalThis.__gvoiceTest = {
   },
   release: () => fireRelease("test"),
   expire: () => dictation.fail(),
+  cancel: () => cancelDictation("test"),
   snapshot: () => ({ generation: dictation.generation, busy: dictation.busy,
     history: getHistory(), tray: !!tray && !tray.isDestroyed(), trayBounds: tray?.getBounds(), latency: latency.summary() }),
   // The Electron tests name a press by its counter; the app names it by its

@@ -148,6 +148,15 @@ export function looksLikeRetraction(text) {
 }
 
 const SAFE_FILLERS = new Set(["um", "uh", "uhh", "er", "erm"]);
+// Spoken symbols the Coding profile turns into the symbol itself: "main dot js"
+// becomes "main.js". The word has no letters left in the output, so the guard
+// may drop it, but only once per matching symbol that sits inside a token.
+const SPOKEN_SYMBOLS = new Map([
+  ["dot", "."], ["period", "."], ["slash", "/"], ["backslash", "\\"],
+  ["dash", "-"], ["hyphen", "-"], ["minus", "-"], ["underscore", "_"],
+  ["colon", ":"], ["at", "@"], ["hash", "#"], ["equals", "="], ["plus", "+"],
+  ["tilde", "~"], ["pipe", "|"], ["ampersand", "&"], ["percent", "%"], ["dollar", "$"]
+]);
 const ORDER_WORDS = new Map([
   ["one", 1], ["first", 1],
   ["two", 2], ["second", 2],
@@ -214,12 +223,38 @@ function strictWordMatch(source, output, cleanedText) {
     }
   }
 
+  // A symbol only counts when a character follows it with no space between:
+  // "main.js" and "--force" count, a sentence's closing period does not.
+  const symbolBudget = new Map();
+  for (const [symbol] of String(cleanedText || "").matchAll(/[.\/\\\-_:@#=+~|&%$](?=\S)/g)) {
+    symbolBudget.set(symbol, (symbolBudget.get(symbol) || 0) + 1);
+  }
+
   let j = 0;
   let i = 0;
   while (i < source.length) {
     if (source[i] === output[j]) {
       i += 1;
       j += 1;
+      continue;
+    }
+    // "e mail" written as "email", "java script" as "JavaScript": the same
+    // letters in the same order, only the gap between them gone.
+    let joined = source[i];
+    let run = 1;
+    while (j < output.length && run < 3 && i + run < source.length && joined.length < output[j].length) {
+      joined += source[i + run];
+      run += 1;
+    }
+    if (run > 1 && joined === output[j]) {
+      i += run;
+      j += 1;
+      continue;
+    }
+    const symbol = SPOKEN_SYMBOLS.get(source[i]);
+    if (symbol && symbolBudget.get(symbol) > 0) {
+      symbolBudget.set(symbol, symbolBudget.get(symbol) - 1);
+      i += 1;
       continue;
     }
     // A word the user saved in their dictionary may stand in for the word or

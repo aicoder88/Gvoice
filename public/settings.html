@@ -386,6 +386,9 @@
       // Saves the moment you change it: there is nothing to review, and a mic
       // choice that needed a second click would look broken.
       let micLoading = false;
+      // A pick made while the list is still loading. The load would otherwise
+      // redraw the old choice over it and the pick would never be saved.
+      let micPickDuringLoad = null;
       function micName(id, label) {
         if (!id) return "the computer's own choice";
         if (label) return label;
@@ -432,9 +435,19 @@
         try { renderMic(await window.settingsBridge.micGet()); }
         catch { setStatus("Couldn't read your microphones.", false, "mic"); }
         finally { micLoading = false; }
+        const pick = micPickDuringLoad;
+        micPickDuringLoad = null;
+        if (!pick) return;
+        el("micMode").value = pick.mode;
+        const sel = el("micDevice");
+        if ([...sel.options].some((o) => o.value === pick.id)) sel.value = pick.id;
+        saveMic();
       }
       async function saveMic() {
-        if (micLoading) return;
+        if (micLoading) {
+          micPickDuringLoad = { mode: el("micMode").value, id: el("micDevice").value };
+          return;
+        }
         const sel = el("micDevice");
         const opt = sel.options[sel.selectedIndex];
         setStatus("Saving…", false, "mic");

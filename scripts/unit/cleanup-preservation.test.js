@@ -180,3 +180,14 @@ test("with an empty dictionary the guard is exactly as strict as before", () => 
     cleanup();
   }
 });
+
+test("accepts spoken symbols and joined words written the coding way", () => {
+  assert.equal(preservesSpeakerWords("open main dot js", "Open main.js."), true);
+  assert.equal(preservesSpeakerWords("run git push dash dash force", "Run git push --force."), true);
+  assert.equal(preservesSpeakerWords("email john at example dot com", "Email john@example.com."), true);
+  assert.equal(preservesSpeakerWords("send me an e-mail", "Send me an email."), true);
+  // A sentence's own period is not a spoken "dot", so the word must stay.
+  assert.equal(preservesSpeakerWords("I drew a dot here", "I drew a here."), false);
+  // A joined word still has to be the same letters.
+  assert.equal(preservesSpeakerWords("send me an e mail", "Send me an emails."), false);
+});
