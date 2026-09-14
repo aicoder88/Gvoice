@@ -186,6 +186,11 @@ let hotkeyNeedsAccessibility = false;
 // Deliberately NOT hotkeyFailed: that one gates the ready path, and by the time
 // we can tell, the app has long since reported itself ready.
 let hotkeyDeaf = false;
+// A window whose web process kept dying on reload and was left dead, or null.
+// Reloading it forever would hide the problem behind an app that just ignores
+// every press, so the tray says so instead.
+/** @type {string | null} */
+let windowGaveUp = null;
 let isQuitting = false;
 // The busy guard must outlive the renderer's 20s transcriber watchdog
 // (public/dictation.js FAILURE_MS): with the old 500ms default it expired on
@@ -569,6 +574,11 @@ function createPillWindow() {
   // Click-through by default. Flipped on only for the success/error states so
   // the Copy / Open-recording buttons are clickable (see setPillState).
   pillWindow.setIgnoreMouseEvents(true);
+  // A pill reloaded after its process died starts blank. If it was on screen,
+  // put back what it was showing, so a press during the reload still shows up.
+  pillWindow.webContents.on("did-finish-load", () => {
+    if (lastPillState && pillWindow?.isVisible()) setPillState(lastPillState.state, lastPillState.opts);
+  });
 
   if (serverPort) {
     pillWindow.loadURL(`http://127.0.0.1:${serverPort}/pill.html`);
@@ -637,6 +647,35 @@ function showPillForWindow(/** @type {number | null} */ _hwnd) {
   clearTimeout(pillSafetyTimer);
   setPillState("listening");
   pillWindow.showInactive();
+  verifyPillShown();
+}
+
+// On 2026-09-14 from 00:46 the pill stopped reaching the screen: macOS logged no
+// GVoice window for any press until a restart, while showInactive() raised no
+// error. Look again a moment later; a pill that is not there is replaced by a
+// fresh window. Rebuilt at most once per PILL_REBUILD_GAP_MS, so a screen that
+// can't show it at all (locked, asleep) doesn't spin.
+const PILL_CHECK_MS = 150;
+const PILL_REBUILD_GAP_MS = 10000;
+let pillRebuiltAt = 0;
+
+function verifyPillShown() {
+  setTimeout(() => {
+    if (!lastPillState || !pillWindow || pillWindow.isDestroyed()) return;
+    if (pillWindow.isVisible() && !pillWindow.webContents.isCrashed()) return;
+    const detail = { visible: pillWindow.isVisible(), crashed: pillWindow.webContents.isCrashed() };
+    if (Date.now() - pillRebuiltAt < PILL_REBUILD_GAP_MS) return dlog("pill-not-shown", { ...detail, rebuilt: false });
+    pillRebuiltAt = Date.now();
+    dlog("pill-not-shown", { ...detail, rebuilt: true });
+    try { pillWindow.destroy(); } catch {}
+    createPillWindow();
+    pillWindow.webContents.once("did-finish-load", () => {
+      // Whatever the pill should show by now; nothing if the press is over.
+      if (!lastPillState || !pillWindow || pillWindow.isDestroyed()) return;
+      setPillState(lastPillState.state, lastPillState.opts);
+      pillWindow.showInactive();
+    });
+  }, PILL_CHECK_MS);
 }
 
 // Drive the pill's look + behaviour. listening/transcribing are passive and
@@ -648,6 +687,7 @@ function setPillState(
   /** @type {{ canCopy?: boolean, canOpen?: boolean, holdMs?: number, reason?: string }} */ opts = {}
 ) {
   if (!pillWindow || pillWindow.isDestroyed()) return;
+  lastPillState = { state, opts };
   const size = PILL_SIZES[state] || PILL_SIZES.listening;
   positionPill(size.width, size.height);
   // "listening" and "transcribing" join the result states: the pill is
@@ -661,6 +701,8 @@ function setPillState(
   // of the screen for the whole 6–30s linger.
   if (interactive) pillWindow.setIgnoreMouseEvents(true, { forward: true });
   else pillWindow.setIgnoreMouseEvents(true);
+  // Dead or mid-reload: the state is kept above and replayed on did-finish-load.
+  if (pillWindow.webContents.isCrashed() || pillWindow.webContents.isLoading()) return;
   pillWindow.webContents.send("pill:state", {
     state,
     canCopy: !!opts.canCopy,
@@ -730,6 +772,8 @@ function showPillResult(
 }
 
 let pillSafetyTimer = null;
+/** @type {{ state: Parameters<typeof setPillState>[0], opts: Parameters<typeof setPillState>[1] } | null} what the pill shows now */
+let lastPillState = null;
 
 // Backstop: if the renderer ever fails to report back (crash, lost IPC), make
 // sure the pill doesn't linger on screen. Normal completions clear this via
@@ -745,6 +789,7 @@ function armPillSafetyHide(/** @type {number} */ ms = 15000) {
 function hidePill() {
   clearTimeout(pillSafetyTimer);
   pillSafetyTimer = null;
+  lastPillState = null;
   currentTranscript = null;
   currentRecordingPath = null;
   if (pillWindow && !pillWindow.isDestroyed()) {
@@ -1029,6 +1074,11 @@ function updateTrayTooltip() {
     try { tray.setImage(makeTrayIcon()); } catch {}
     return;
   }
+  if (windowGaveUp) {
+    tray.setToolTip(WINDOW_GAVE_UP_TITLE + "\n" + WINDOW_GAVE_UP_BODY);
+    try { tray.setImage(makeTrayIcon()); } catch {}
+    return;
+  }
   if (hotkeyDeaf) {
     tray.setToolTip(DEAF_HOTKEY_TITLE + "\n" + DEAF_HOTKEY_BODY);
     try { tray.setImage(makeTrayIcon()); } catch {}
@@ -1118,13 +1168,43 @@ function reportDeafHotkey() {
   } catch {}
 }
 
+// --- Dead windows -------------------------------------------------------------
+// Every window's web process is reloaded when it dies (web-contents-created in
+// app.whenReady). One that dies again and again within a minute is broken, not
+// unlucky: stop reloading it and say so, once.
+const RENDERER_RELOADS_ALLOWED = 3;
+const RENDERER_DEATH_WINDOW_MS = 60000;
+/** @type {Map<number, number[]>} webContents id -> recent death times */
+const rendererDeaths = new Map();
+const WINDOW_GAVE_UP_TITLE = "Part of GVoice keeps stopping";
+const WINDOW_GAVE_UP_BODY = "Dictation may show nothing. Click Restart GVoice in the menu bar.";
+
+function reportWindowGaveUp(/** @type {string} */ page, /** @type {number} */ deaths) {
+  console.error(`[${page}] died ${deaths} times in a minute – no more reloads`);
+  dlog("window-gave-up", { page, deaths });
+  if (windowGaveUp) return;
+  windowGaveUp = page;
+  updateTrayTooltip();
+  rebuildTrayMenu();
+  try {
+    if (Notification.isSupported()) new Notification({ title: WINDOW_GAVE_UP_TITLE, body: WINDOW_GAVE_UP_BODY }).show();
+  } catch {}
+}
+
 // Begin a dictation. Module-level (not a setupHotkey closure) so the tray's
 // left-click toggle can start one too — including on a run where the global
 // hotkey failed to arm, which is exactly when a clickable fallback matters.
 // Returns false if the press was rejected (previous dictation still in flight,
 // or no renderer to talk to).
-function startDictation(/** @type {number} */ maxHoldMs = MAX_HOLD_MS, mode = "dictation") {
+function startDictation(/** @type {number} */ maxHoldMs = MAX_HOLD_MS, mode = "dictation", trigger = "unknown") {
   if (!dictationWindow || dictationWindow.isDestroyed()) return false;
+  // The recorder's process died and is being reloaded. A press sent now is lost,
+  // and the session would sit "busy" with nothing listening. Refuse it, visibly.
+  if (dictationWindow.webContents.isCrashed() || dictationWindow.webContents.isLoading()) {
+    dlog("press-refused", { trigger, reason: "recorder-reloading" });
+    showPillResult("error", null, null, { reason: "GVoice was restarting its recorder. Press again." });
+    return false;
+  }
   if (!dictation.tryStart()) return false;
   // A new dictation supersedes any correction-watch window from the last
   // one, and clears a pop-up the user never answered.
@@ -1162,7 +1242,7 @@ function startDictation(/** @type {number} */ maxHoldMs = MAX_HOLD_MS, mode = "d
   debug("[main] dictation:start lang=" + profile.language + " (hwnd=" + savedForegroundHwnd + ")");
   showPillForWindow(savedForegroundHwnd);
   dictationWindow.webContents.send("dictation:start", profile);
-  dlog("press", { profile, hwnd: savedForegroundHwnd, target: dictation.target });
+  dlog("press", { trigger, profile, hwnd: savedForegroundHwnd, target: dictation.target });
   // Self-heal a lost key-up: if the hold never reports a release, end it
   // the same way a real release would (commit + transcribe + re-open the
   // session) so a dropped event can't jam dictation until the next quit.
@@ -1176,6 +1256,10 @@ function fireRelease(/** @type {string} */ source) {
   // toggle is no longer holding the mic open.
   trayHolding = false;
   if (maxHoldTimer) { clearTimeout(maxHoldTimer); maxHoldTimer = null; }
+  // Ended by anything but the keys and button themselves (the tray, the hold
+  // limit, the companion): the mouse toggle must not go on thinking it is held,
+  // or its next click "releases" nothing and the Option key is swallowed.
+  if (source !== "hotkey") hotkeyEngine?.resetMouseBack?.();
   if (!dictation.release()) return;
   latency.mark(dictation.generation, "released");
   dlog("release", { source });
@@ -1283,7 +1367,7 @@ async function startControlSocket() {
       start: () => {
         if (!dictationReady()) return { ok: false, reason: "not-ready" };
         if (dictation.busy) return { ok: false, reason: "busy" };
-        if (!startDictation()) return { ok: false, reason: "refused" };
+        if (!startDictation(MAX_HOLD_MS, "dictation", "companion")) return { ok: false, reason: "refused" };
         return { ok: true, sessionId: dictation.id };
       },
       // A stop or cancel naming a press that is no longer the live one is
@@ -1324,7 +1408,7 @@ async function setupHotkey() {
   try {
     const mod = await import("./src/hotkey.js");
     hotkeyEngine = mod.startHotkey({
-      onPress: () => { startDictation(MAX_HOLD_MS, voiceEditor?.wantsDictation() ? "edit" : "dictation"); },
+      onPress: () => { startDictation(MAX_HOLD_MS, voiceEditor?.wantsDictation() ? "edit" : "dictation", "hotkey"); },
       onRelease: () => { fireRelease("hotkey"); },
       onCancel: () => { cancelDictation("escape"); }
     });
@@ -1837,7 +1921,7 @@ function setupIpc() {
   });
   ipcMain.handle("benchmark:open", event => { if (settingsSender(event)) benchmarkWindow.open(); });
   voiceEditor = createVoiceEditWindow({ root: __dirname,
-    start: () => startDictation(MAX_HOLD_MS, "edit"), stop: () => fireRelease("voice-edit"),
+    start: () => startDictation(MAX_HOLD_MS, "edit", "voice-edit"), stop: () => fireRelease("voice-edit"),
     ...(TEST_MODE ? { request: async ({ selection, instruction }) => {
       if (typeof testEditResponse !== "string") throw new Error("No offline editing response configured.");
       return { original: selection, instruction, replacement: testEditResponse };
@@ -2821,7 +2905,7 @@ function createTray() {
   tray.on("click", (/** @type {import("electron").KeyboardEvent} */ event) => {
     if (event && event.ctrlKey) { if (trayMenu) tray?.popUpContextMenu(trayMenu); return; }
     if (trayHolding) { fireRelease("tray"); return; }
-    if (startDictation(CLICK_MAX_HOLD_MS)) { trayHolding = true; return; }
+    if (startDictation(CLICK_MAX_HOLD_MS, "dictation", "tray")) { trayHolding = true; return; }
     // Nothing to record — the renderer is gone, or the last dictation is still
     // transcribing. A click that does nothing looks like a dead app, and with no
     // dock icon and no window the menu is the only way to reach Quit or Settings.
@@ -2897,6 +2981,11 @@ function rebuildTrayMenu() {
     // Same placement, for the hook that started and then heard nothing: the
     // fix is either to relaunch from Finder or to grant the launcher the
     // permission, so offer the pane here too.
+    ...(windowGaveUp ? [
+      { label: "⚠ " + WINDOW_GAVE_UP_TITLE, enabled: false },
+      { label: "Restart GVoice", click: () => { app.relaunch(); app.exit(0); } },
+      { type: /** @type {const} */ ("separator") }
+    ] : []),
     ...(hotkeyDeaf && !hotkeyNeedsAccessibility ? [
       { label: "⚠ Not hearing your keyboard — open from Finder", enabled: false },
       {
@@ -3177,7 +3266,12 @@ app.whenReady().then(async () => {
       const page = contents.getURL().split("/").pop()?.split("?")[0] || "unknown";
       console.error(`[${page}] process gone:`, details && details.reason);
       dlog("render-process-gone", { page, ...details });
-      // Small delay so we don't tight-loop if it dies again on load.
+      const now = Date.now();
+      const deaths = (rendererDeaths.get(contents.id) || []).filter((t) => now - t < RENDERER_DEATH_WINDOW_MS);
+      deaths.push(now);
+      rendererDeaths.set(contents.id, deaths);
+      if (deaths.length > RENDERER_RELOADS_ALLOWED) return reportWindowGaveUp(page, deaths.length);
+      // Small delay so a page that dies again on load can't spin the CPU.
       setTimeout(() => {
         if (contents.isDestroyed()) return;
         if (contents === dictationWindow?.webContents) reloadDictationWindow();
@@ -3346,7 +3440,7 @@ for (const sig of /** @type {const} */ (["SIGINT", "SIGTERM"])) {
 // Narrow, unpackaged-only test controller. No production IPC evaluation hook.
 if (TEST_MODE) globalThis.__gvoiceTest = {
   ready: false,
-  start: () => startDictation(),
+  start: () => startDictation(MAX_HOLD_MS, "dictation", "test"),
   startSynthetic: () => {
     if (!dictation.tryStart()) return false;
     latency.start(dictation.generation, sttProvider());

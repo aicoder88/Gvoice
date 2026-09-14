@@ -29,6 +29,14 @@ export function createHoldTracker({ onPress, onRelease } = {}) {
       if (!held.delete(name)) return;
       if (held.size === 0) onRelease?.(name);
     },
+    /**
+     * Drop a trigger without firing anything. For a press that ended another
+     * way (Escape, the pill, the tray): leaving it held swallowed every later
+     * press of every trigger, because onPress only fires from idle.
+     */
+    forget(/** @type {string} */ name) {
+      held.delete(name);
+    },
     /** How many triggers are held right now. */
     size() {
       return held.size;

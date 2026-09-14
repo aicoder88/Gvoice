@@ -340,6 +340,9 @@ function startHotkeyUiohook({ onPress, onRelease, onCancel }) {
     // instead of "releasing" the one that is already gone.
     resetMouseBack() {
       mouseBackGate.reset();
+      // The shared tracker too, or it keeps counting the button as held and
+      // swallows the next right Option press with nothing logged.
+      hold.forget("mouseBack");
     }
   };
 }
