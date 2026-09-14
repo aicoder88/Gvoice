@@ -996,19 +996,8 @@ function createDictationWindow() {
   dictationWindow.webContents.on("console-message", (_e, level, message) => {
     console.error("[dictation/renderer]", message);
   });
-  // The hidden renderer owns mic capture + the WebSocket. If it crashes, the
-  // hotkey would keep IPCing into a dead webContents and every press would
-  // silently do nothing until an app restart — the same "works until it doesn't"
-  // trap. Reload it so the next press has a live renderer, and capture the crash
-  // in the log (invisible on the console in a packaged launch).
-  dictationWindow.webContents.on("render-process-gone", (_e, details) => {
-    console.error("[dictation/renderer] process gone:", details && details.reason);
-    dlog("render-process-gone", details || {});
-    // Small delay so we don't tight-loop if it dies again on load.
-    setTimeout(() => {
-      try { if (dictationWindow && !dictationWindow.isDestroyed()) reloadDictationWindow(); } catch {}
-    }, 800);
-  });
+  // A crashed renderer is reloaded by the web-contents-created handler in
+  // app.whenReady, which covers every window.
   dictationWindow.webContents.on("unresponsive", () => {
     console.error("[dictation/renderer] unresponsive");
     dlog("renderer-unresponsive", {});
@@ -3179,6 +3168,22 @@ app.whenReady().then(async () => {
       const local = url.startsWith("file://") ||
         url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:");
       if (!local) event.preventDefault();
+    });
+    // Every window, not one at a time. On 2026-09-14 something outside the app
+    // stopped all of its web processes at once; only the dictation window had
+    // its own reload, so the pill stayed blank until a restart and the user saw
+    // nothing on every press. A window whose renderer dies is reloaded here.
+    contents.on("render-process-gone", (_event, details) => {
+      const page = contents.getURL().split("/").pop()?.split("?")[0] || "unknown";
+      console.error(`[${page}] process gone:`, details && details.reason);
+      dlog("render-process-gone", { page, ...details });
+      // Small delay so we don't tight-loop if it dies again on load.
+      setTimeout(() => {
+        if (contents.isDestroyed()) return;
+        if (contents === dictationWindow?.webContents) reloadDictationWindow();
+        else contents.reload();
+        dlog("window-rebuilt", { page });
+      }, 800);
     });
   });
 
