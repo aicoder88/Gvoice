@@ -63,17 +63,62 @@ This cause is proven for tonight. It does **not** explain the night before (2026
 
 **What proves it came back:** `render-process-gone` in `~/Library/Application Support/GVoice/debug.log` with no `window-rebuilt` after it, or any `Render frame was disposed` line.
 
+## Last night (2026-09-14 00:46 to 01:43): the pill never reached the screen
+
+This is proven from the Mac's own record of when GVoice has a window on screen (`runningboardd ... com.purr.gvoice ... visiblity`):
+- **Before:** every press was followed within about 70 ms by `visiblity is yes` (00:40:17.184, 00:42:10.574, 00:42:37.879, 00:43:11.039, 00:44:45.321).
+- **The last one:** `00:46:29.931 visiblity is no`. The presses at 01:26:07, 01:26:24, 01:26:30, 01:26:33, 01:38:08 and 01:42:55 got no line at all.
+- **After the restart:** `01:52:54.490 visiblity is yes`.
+- **Nothing else stands out:** no GVoice, Chrome or ChatGPT helper died, no pill errors, and no screen lock, sleep or display change in the log.
+
+On both nights the pill was missing, so Drago tapped instead of speaking. The two mechanisms differ:
+- **Tonight:** the pill's process was killed.
+- **Last night:** its window never came on screen. Why is **not provable** from the records.
+
+## The first report's faults, and what happened to each (commit f57db61, installed)
+
+1. **Not verified with a real spoken press.** FIXED:
+   - 23:08:25Z: all three pages of the installed app were killed with SIGTERM, and three `window-rebuilt` lines followed within 0.81 s.
+   - 23:10:43Z: a spoken press ran into a scratch TextEdit file. The Mac's own voice (`say`) played through the speaker, and the menu bar icon started the press.
+   - The log shows `press {"trigger":"tray"}`, then `visiblity is yes` at 01:10:43.227, so the pill was on screen.
+   - `transcript {"len":85}` read "Testing the dictation app after a crash, the quick brown fox jumps over the lazy dog."
+   - It ended with `typed {"pasted":true,"verified":true}`. There was no `Render frame was disposed` and no `pill-not-shown`.
+2. **The sender was not named.** FIXED FOR NEXT TIME; the 00:19 sender stays unnamed.
+   - The new hub guard (commit 45f22edd) is installed in all three Claude accounts: `~/.claude/hooks/block-app-helper-kill.sh`.
+   - It writes every kill command to `~/.claude/logs/kill-commands.log` with time and session.
+   - It refuses a pattern kill that reaches Chrome, ChatGPT or GVoice processes.
+   - It was tested live: a harmless pattern kill was blocked and logged.
+3. **Last night unexplained.** PARTLY FIXED:
+   - The hidden-pill finding is above.
+   - Every press now checks 150 ms later that the pill is visible and alive, and builds a fresh pill window if not. The log line is `pill-not-shown {visible, crashed, rebuilt}`, at most one rebuild per 10 s.
+   - Test step 5 swaps the pill's show call for one that does nothing. It fails with the check off and passes with it on.
+4. **A window that keeps dying reloaded forever.** FIXED. After four deaths in a minute, GVoice stops reloading it and warns in the log (`window-gave-up`), the menu bar tooltip and a notification. It also adds a "Restart GVoice" menu item. Test step 4.
+5. **A press during a reload showed nothing.** FIXED:
+   - A pill reloaded mid-press shows that press again.
+   - A press while the recorder reloads is refused with an error pill ("GVoice was restarting its recorder. Press again."), logged as `press-refused`.
+   - Test steps 2 and 3.
+6. **The test waited a fixed 5 s.** FIXED: it waits on conditions now.
+7. **The old app was removed during the swap.** FIXED: this install moved the old app into the backup folder instead. Both backups pass `codesign --verify`:
+   - `~/.claude/archive-2026-08/GVoice-8ccd9b4-before-window-rebuild-2026-09-15.app`
+   - `~/.claude/archive-2026-08/GVoice-5833fbe-2026-09-15.app`
+
+## Also found and fixed while reading
+
+- **A cancelled mouse-button dictation deafened both triggers.**
+  - Escape or a pill click reset only the mouse toggle. The shared hold tracker still counted the button as held, so every later right Option press and mouse click was swallowed with nothing logged.
+  - Proof, today's code run directly: `held after cancel = 1, events = ["press:mouseBack"]`.
+  - Fix: `hold.forget("mouseBack")` in `resetMouseBack`. `fireRelease` also resets the toggle when a press ends by tray, hold limit or companion. Unit test in `scripts/unit/hotkey-logic.test.js`.
+  - This did NOT cause last night: no cancel was logged then.
+- **The press log now names what started it:** `press {"trigger":"hotkey"|"companion"|"tray"|"voice-edit"}`.
+- **Tests:** `pnpm run test:unit` 416 pass, `test:parity` 3 pass, `scripts/electron/dead-window-rebuild.mjs` 5 of 5 pass.
+
 ## Still open
 
-1. **The night of 2026-09-14 has no proven cause.** No GVoice, Chrome or ChatGPT helper died between 00:20 and 01:45. There were no bubble errors in the log. The failed clips again held no speech: the holds were 0.03 to 1.2 s. The right Option key was last logged at 01:26:34 (it was never logged from 01:38 on, which matches the earlier prompt). The questions in `docs/prompts/find-why-dictation-key-goes-deaf.md` about the key and the short mouse holds stay unanswered.
-2. The unified Mac log shows "Better Options" asking macOS for permission at each press and release. Its own info log is not kept, so the mouse app's side of a short hold can't be read after the fact.
-
-## My own faults, worst first
-
-1. Not verified with a real spoken press after the fix. Only the forced kill and the automated press were seen.
-2. The sender of the stop signal is narrowed to "a command run by an AI assistant window at 00:19:09.43", not named.
-3. Last night's failure is unexplained, so the "one cause" covers tonight only.
-4. A page that dies every time it loads would now reload every 0.8 s forever, with no warning. This was already true for the recording page; it now applies to every page.
-5. A press during the 0.8 s gap plus the reload shows no bubble.
-6. The test waits a fixed 5 s. A very slow machine could fail it for the wrong reason.
-7. The old installed app was removed from /Applications during the swap. A full copy is kept first at `~/.claude/archive-2026-08/GVoice-8ccd9b4-before-window-rebuild-2026-09-15.app`, logged in `ARCHIVE-LOG.md`.
+1. **Why the pill window stayed hidden last night.**
+   - The new check is proven against a pill whose show call does nothing, not against what really happened.
+   - If macOS reports the window as visible while it is off screen, the check won't fire.
+   - Sign of that: presses with no `visiblity is yes` and no `pill-not-shown`.
+2. **Why right Option was never logged from 01:38 last night.** The stuck-trigger fault above would do exactly that, but it needs a cancel, and none was logged.
+3. **Better Options keeps no button records.** Its log is info level, which the Mac discards. Not changed: `Sources/HIDDeviceMonitor.swift` in /Users/macmini/dev/better-options holds unsaved work from another window, dated 2026-09-12.
+4. **Some kills escape the guard.** Kills from the ChatGPT/Codex app are neither logged nor refused.
+5. **The spoken test used the Mac's voice**, started from the menu bar icon, not Drago's voice on the mouse button.
