@@ -32,8 +32,10 @@ const PROVIDER_DEFAULTS = {
   // representative cleanup checks. If the primary disappears (404), one failed
   // request tries the backup and remembers the winner for the rest of this app
   // session; a rate-limited (429) failover is NOT remembered, so a busy minute
-  // never pins the weaker model. An explicit CLEANUP_MODEL remains exact and
-  // never silently falls back.
+  // never pins the weaker model. An explicit CLEANUP_MODEL is tried first and
+  // stays pinned through a busy minute; it only falls back when the provider
+  // confirms it is gone (404), and only THAT attempt counts as pinned — once
+  // it has fallen over, the model actually in hand follows the normal rules.
   groq: { kind: "openai", url: "https://api.groq.com/openai/v1/chat/completions", model: "openai/gpt-oss-120b", fallbackModels: ["openai/gpt-oss-20b"], keyEnv: "GROQ_API_KEY", fallbackKey: GROQ_FALLBACK_KEY },
   openai: { kind: "openai", url: "https://api.openai.com/v1/chat/completions", model: "gpt-4.1-mini", keyEnv: "OPENAI_API_KEY" },
   anthropic: { kind: "anthropic", url: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4-5", keyEnv: "ANTHROPIC_API_KEY" },
@@ -70,9 +72,25 @@ function resolveProvider() {
   return {
     name,
     provider,
-    models: live.length ? live : ordered,
-    usesExplicitModel: Boolean(explicitModel)
+    // No fallback to the full (dead) `ordered` list here: once every
+    // candidate for a provider is confirmed retired, `live` stays empty and
+    // callers stop issuing requests instead of retrying known-dead models
+    // forever.
+    models: live,
+    explicitModel
   };
+}
+
+/**
+ * Record that `model` no longer exists at `providerName` so later calls on
+ * either the dictation-cleanup path or the voice-edit path skip it, instead
+ * of each re-discovering the same 404 on its own.
+ * @param {string} providerName
+ * @param {string} model
+ */
+export function recordRetiredModel(providerName, model) {
+  if (!retiredModels.has(providerName)) retiredModels.set(providerName, new Set());
+  retiredModels.get(providerName).add(model);
 }
 
 /** Build an explicit editing request using the user's current cleanup configuration.
@@ -85,9 +103,10 @@ function resolveProvider() {
  * left to try.
  */
 export function createCleanupRequest(systemPrompt, userText, { attempt = 0 } = {}) {
-  const { name, provider, models, usesExplicitModel } = resolveProvider();
+  const { name, provider, models, explicitModel } = resolveProvider();
   const apiKey = process.env[provider.keyEnv] || provider.fallbackKey;
   if (!apiKey) throw new Error("No API key configured for text editing.");
+  if (!models.length) throw new Error("No working text-cleanup model available.");
   const model = models[Math.min(Math.max(0, attempt), models.length - 1)];
   return {
     ...buildRequest(provider, apiKey, model, systemPrompt, userText),
@@ -95,9 +114,11 @@ export function createCleanupRequest(systemPrompt, userText, { attempt = 0 } = {
     kind: provider.kind,
     model,
     attempts: models.length,
-    // The caller may only leave a pinned model behind when it is RETIRED. A
-    // busy pinned model stays pinned.
-    pinnedModel: usesExplicitModel
+    // Pinned only when the model THIS attempt would use is the literal
+    // configured name. A busy pinned model stays pinned; once it has fallen
+    // over to a built-in default (retired), that default is not pinned and
+    // follows the normal rate-limit failover rules.
+    pinnedModel: Boolean(explicitModel) && model === explicitModel
   };
 }
 
@@ -348,7 +369,7 @@ const ENGINE_DOWN_MESSAGE = "Tidy-up isn't working — text typed exactly as you
 // Shown once when the tidy-up engine named in settings no longer exists at the
 // provider and the built-in one took over. Not an error: the dictation was
 // formatted. It tells the user their setting is stale so it can be corrected.
-const PINNED_MODEL_GONE_MESSAGE = "Your chosen tidy-up engine is gone - used the built-in one.";
+export const PINNED_MODEL_GONE_MESSAGE = "Your chosen tidy-up engine is gone - used the built-in one.";
 
 /**
  * Most recent cleanup failure, consumed (cleared) by the caller so one outage
@@ -425,10 +446,13 @@ export async function polishTranscript(rawText, { profile = "plain" } = {}) {
 }
 
 async function polishWithinBudget(rawText, budgetSignal, profile) {
-  const { name: providerName, provider, models, usesExplicitModel } = resolveProvider();
+  const { name: providerName, provider, models, explicitModel } = resolveProvider();
   const apiKey = process.env[provider.keyEnv] || provider.fallbackKey;
   if (!apiKey) return rawText;
   if (!rawText || rawText.length < 2) return rawText;
+  // Every candidate for this provider is confirmed retired (all 404'd
+  // earlier this session): don't spend another dead request re-proving it.
+  if (!models.length) { lastCleanupError = ENGINE_DOWN_MESSAGE; return rawText; }
 
   // Self-correction handling is on unless the user turned it off in Settings.
   // Read live (next dictation reflects the toggle without a restart).
@@ -514,20 +538,24 @@ async function polishWithinBudget(rawText, budgetSignal, profile) {
         );
         const cleaned = parseResponse(provider, data);
         transientFailures = 0;
-        if (!usesExplicitModel && reachedByRetirement) workingDefaultModel.set(providerName, model);
+        if (!explicitModel && reachedByRetirement) workingDefaultModel.set(providerName, model);
         return (cleaned && cleaned.trim()) || rawText;
       } catch (error) {
         const hasFallback = index < models.length - 1;
+        // Pinned only when the model THIS attempt used is the literal
+        // configured name — not "was any model ever pinned". Once a pinned
+        // model has fallen over (retired), later attempts are ordinary
+        // built-in defaults and must keep normal 429 failover.
+        const isPinnedAttempt = Boolean(explicitModel) && model === explicitModel;
         if (isRetiredModelError(error)) {
-          if (!retiredModels.has(providerName)) retiredModels.set(providerName, new Set());
-          retiredModels.get(providerName).add(model);
+          recordRetiredModel(providerName, model);
           // Say it once when the model the user pinned is the one that died,
           // so a swap is never silent.
-          if (usesExplicitModel && index === 0) lastCleanupError = PINNED_MODEL_GONE_MESSAGE;
+          if (isPinnedAttempt) lastCleanupError = PINNED_MODEL_GONE_MESSAGE;
         }
         // A pinned model is only ever left behind when it is gone for good.
         const mayFailOver = isRetiredModelError(error) ||
-          (!usesExplicitModel && isModelFailoverError(error));
+          (!isPinnedAttempt && isModelFailoverError(error));
         if (hasFallback && mayFailOver) {
           console.error(`Cleanup model unavailable or busy (${providerName}/${model}); trying ${models[index + 1]}`);
           if (!isRetiredModelError(error)) reachedByRetirement = false;

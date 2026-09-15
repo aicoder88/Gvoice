@@ -131,6 +131,26 @@ test("a retired pinned model falls over to the built-in one and says so", async 
   assert.deepEqual(requestedModels, ["openai/gpt-oss-120b"]);
 });
 
+// The bug this closes: pinnedModel/mayFailOver used to be keyed off "was ANY
+// model ever pinned" rather than "is THIS attempt the pinned one", so once a
+// pinned model was confirmed retired, the built-in substitute it fell over to
+// permanently lost ordinary 429 failover for the rest of the app session.
+test("after a pinned model retires, its built-in substitute still gets normal 429 failover", async () => {
+  useGroq();
+  process.env.CLEANUP_MODEL = "my-pinned-model";
+  const requestedModels = [];
+  globalThis.fetch = async (_url, init) => {
+    const model = JSON.parse(String(init.body)).model;
+    requestedModels.push(model);
+    if (model === "my-pinned-model") return new Response('{"error":{"message":"model_not_found"}}', { status: 404 });
+    if (model === "openai/gpt-oss-120b") return new Response('{"error":{"message":"rate limit"}}', { status: 429 });
+    return new Response('{"choices":[{"message":{"content":"Cleaned by the second backup."}}]}', { status: 200 });
+  };
+
+  assert.equal(await polishTranscript(SAMPLE), "Cleaned by the second backup.");
+  assert.deepEqual(requestedModels, ["my-pinned-model", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
+});
+
 test("a rate-limited default model uses the backup model's separate quota", async () => {
   useGroq();
   const requestedModels = [];
@@ -146,6 +166,28 @@ test("a rate-limited default model uses the backup model's separate quota", asyn
   assert.equal(await polishTranscript(SAMPLE), "Cleaned by backup.");
   assert.deepEqual(requestedModels, ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
   assert.equal(takeCleanupError(), null);
+});
+
+// Before this fix, once every candidate model for a provider was confirmed
+// retired, resolveProvider fell back to the full (already-dead) ordered list
+// instead of staying empty — so every dictation re-issued the same doomed
+// requests forever, instead of "one dead request per app session".
+test("once every model for a provider is retired, later dictations make no network request at all", async () => {
+  useGroq();
+  let calls = 0;
+  globalThis.fetch = async (_url, init) => {
+    calls++;
+    return new Response('{"error":{"message":"model_not_found"}}', { status: 404 });
+  };
+
+  // Both groq defaults (gpt-oss-120b, gpt-oss-20b) 404 and get retired.
+  assert.equal(await polishTranscript(SAMPLE), SAMPLE);
+  assert.equal(calls, 2);
+
+  calls = 0;
+  assert.equal(await polishTranscript(SAMPLE), SAMPLE, "still survives with no working model");
+  assert.equal(calls, 0, "no dead model is retried once every candidate is known gone");
+  assert.match(String(takeCleanupError()), /tidy-up isn't working/i);
 });
 
 test("a 404 (model retired) is reported, and the raw text still comes back", async () => {

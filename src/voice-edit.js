@@ -1,4 +1,4 @@
-import { createCleanupRequest } from "./cleanup.js";
+import { createCleanupRequest, recordRetiredModel, PINNED_MODEL_GONE_MESSAGE } from "./cleanup.js";
 
 export const VOICE_EDIT_LIMITS = Object.freeze({ selection: 20000, instruction: 2000, output: 40000 });
 const SYSTEM_PROMPT = `You edit the user's selected text according to their spoken instruction.
@@ -62,7 +62,13 @@ export async function requestVoiceEdit(
   try {
     return await Promise.race([interrupted, (async () => {
       const body = JSON.stringify({ selection, instruction });
-      let request, response;
+      let request, response, pinnedModelGone = false;
+      // Retirements are recorded into cleanup.js's shared cache only once this
+      // loop is done (see below), never mid-loop: recording mid-loop would
+      // shrink resolveProvider()'s live model list between attempts, while
+      // `attempt` keeps counting up unaware of that — desyncing the index
+      // from the list and silently skipping a model.
+      const retiredThisRequest = [];
       // A retired model (404) or a full token bucket (429) means try the next
       // vetted model on the same provider, exactly as dictation cleanup does.
       // Anything else is a real failure and stops here. A model the user pinned
@@ -75,13 +81,26 @@ export async function requestVoiceEdit(
           method: "POST", headers: request.headers, body: request.body, signal: controller.signal
         });
         if (response.ok) break;
+        if (response.status === 404) {
+          // Shared with dictation cleanup so a model retired on one path is
+          // never retried, dead, on the other.
+          retiredThisRequest.push([request.provider, request.model]);
+          if (request.pinnedModel) pinnedModelGone = true;
+        }
         const failoverStatus = response.status === 404 ||
           (response.status === 429 && !request.pinnedModel);
         const canFailover = failoverStatus && attempt + 1 < (request.attempts || 1);
-        if (!canFailover) throw fail("PROVIDER_ERROR", `Text editing failed (HTTP ${response.status}). Try again.`);
+        if (!canFailover) {
+          for (const [providerName, model] of retiredThisRequest) recordRetiredModel(providerName, model);
+          throw fail("PROVIDER_ERROR", `Text editing failed (HTTP ${response.status}). Try again.`);
+        }
       }
+      for (const [providerName, model] of retiredThisRequest) recordRetiredModel(providerName, model);
       const replacement = readReplacement(request.kind, await response.json());
-      return Object.freeze({ original: selection, instruction, replacement, provider: request.provider, model: request.model });
+      return Object.freeze({
+        original: selection, instruction, replacement, provider: request.provider, model: request.model,
+        ...(pinnedModelGone ? { notice: PINNED_MODEL_GONE_MESSAGE } : {})
+      });
     })()]);
   } catch (error) {
     if (error instanceof VoiceEditError) throw error;

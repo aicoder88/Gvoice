@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { requestVoiceEdit, VOICE_EDIT_LIMITS } from "../../src/voice-edit.js";
-import { createCleanupRequest } from "../../src/cleanup.js";
+import { createCleanupRequest, resetCleanupModelCache } from "../../src/cleanup.js";
 
 const input = { selection: "  Original text\n", instruction: "Shorten it" };
 const factory = (kind = "openai") => (system, user) => ({
@@ -115,6 +115,41 @@ test("cancellation rejects promptly and aborts network work", async () => {
 test("provider and network errors never expose response bodies or credentials", async () => {
   await assert.rejects(requestVoiceEdit(input, { requestFactory: factory(), fetchImpl: async () => ({ ok: false, status: 429, text: () => assert.fail("must not read response body") }) }), { code: "PROVIDER_ERROR", message: "Text editing failed (HTTP 429). Try again." });
   await assert.rejects(requestVoiceEdit(input, { requestFactory: factory(), fetchImpl: async () => { throw new Error("secret-query-string"); } }), error => error.code === "NETWORK_ERROR" && !error.message.includes("secret"));
+});
+
+test("a pinned model's 404 is shared with dictation cleanup, and its built-in substitute still gets 429 failover", async () => {
+  const fields = ["CLEANUP_PROVIDER", "CLEANUP_MODEL", "GROQ_API_KEY"];
+  const saved = Object.fromEntries(fields.map(key => [key, process.env[key]]));
+  process.env.CLEANUP_PROVIDER = "groq";
+  process.env.CLEANUP_MODEL = "voice-edit-dead-model";
+  process.env.GROQ_API_KEY = "test-key-not-real";
+  resetCleanupModelCache();
+  try {
+    const requested = [];
+    const result = await requestVoiceEdit(input, {
+      requestFactory: createCleanupRequest,
+      fetchImpl: async (_url, options) => {
+        const model = JSON.parse(options.body).model;
+        requested.push(model);
+        if (model === "voice-edit-dead-model") return { ok: false, status: 404, json: async () => ({}) };
+        if (model === "openai/gpt-oss-120b") return { ok: false, status: 429, json: async () => ({}) };
+        return { ok: true, json: async () => success() };
+      }
+    });
+    // The pinned model 404s, its built-in substitute is only busy (429) and
+    // still fails over to the next vetted default — the exact scenario the
+    // old global "usesExplicitModel" flag broke.
+    assert.deepEqual(requested, ["voice-edit-dead-model", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
+    assert.equal(result.model, "openai/gpt-oss-20b");
+    assert.match(result.notice, /chosen tidy-up engine is gone/i);
+
+    // Dictation cleanup, called right after, must not retry the same dead
+    // pinned model voice-edit just discovered — the two paths share one cache.
+    assert.notEqual(createCleanupRequest("system", "user").model, "voice-edit-dead-model");
+  } finally {
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    resetCleanupModelCache();
+  }
 });
 
 test("request adapter follows current provider and exact configured model", () => {
