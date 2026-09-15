@@ -119,7 +119,7 @@ test("match: the text is pasted", async () => {
   lease.finish("sent-unverified");
 });
 
-test("mismatch: clipboard holds the text, nothing is pasted", async () => {
+test("mismatch: nothing is pasted and the clipboard is never touched", async () => {
   const clipboard = fakeClipboard();
   let pastes = 0;
   const typeText = typerWith({ clipboard, readTarget: () => like({ pid: 777, app: "slack" }), onPaste: () => { pastes += 1; } });
@@ -128,8 +128,7 @@ test("mismatch: clipboard holds the text, nothing is pasted", async () => {
   assert.equal(out.destinationChanged, true);
   assert.equal(out.reason, "app-changed");
   assert.equal(pastes, 0, "no keystroke may be fired at a window the user moved to");
-  assert.equal(clipboard.readText(), "hello there", "the words wait on the clipboard");
-  assert.deepEqual(clipboard.writes, ["hello there"], "and nothing overwrites them");
+  assert.deepEqual(clipboard.writes, [], "the user's clipboard is left alone; history keeps the words");
 });
 
 // Today's code-review finding, proved through the real paste engine rather than
@@ -160,6 +159,6 @@ test("a copied dictation is in history, marked copied rather than pasted", () =>
   assert.equal(newest.text, "hello there");
   assert.equal(newest.pasted, false);
   // One outcome field now. "refused" is what a copied-not-pasted dictation is:
-  // the destination changed, so it waits on the clipboard.
+  // the destination changed, so it waits in history.
   assert.equal(newest.deliveryState, "refused", "the tray has to say why this one never landed in an app");
 });

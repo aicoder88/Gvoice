@@ -137,9 +137,9 @@ export function pasteShortcut({ expectedPid = null } = {}) {
  *
  * - The clipboard is held as a LEASE (src/clipboard-lease.js) that the caller
  *   settles once it knows whether the words landed. The user's own clipboard
- *   comes back only for a VERIFIED paste. Restoring on a timer after a paste we
- *   could not confirm is how the only copy of an undelivered dictation used to
- *   get wiped, and both machines logged that bug independently.
+ *   always comes back: at once after a VERIFIED paste, after a short wait
+ *   otherwise, so a slow app still pastes the words and not the old clipboard.
+ *   An undelivered dictation is recovered from history, never the clipboard.
  * - The destination is checked twice. `target` (captured when the key went
  *   down) is compared against a fresh reading right before the clipboard is
  *   touched: a different app, a different window, or a text field that has
@@ -186,7 +186,7 @@ export function createTextTyper({
       // Last look before the words leave: every millisecond between this
       // check and the keystroke is one the user could switch windows in.
       const destination = await checkDestination(target, readTarget);
-      if (!destination.ok) return refusedDelivery(clipboard, text, destination.reason);
+      if (!destination.ok) return refusedDelivery(destination.reason);
 
       const needsLeadingSpace = !exact && !/^[\s.,;:!?\-)\]"'`]/.test(text);
       const textToPaste = needsLeadingSpace ? " " + text : text;
@@ -209,9 +209,7 @@ export function createTextTyper({
       if (!canPaste()) return null;
       await keyboard.type(textToPaste);
       // Typed key by key: nothing of ours ever reached the clipboard, so there is
-      // no hold to end and nothing there to keep. No `keep` is how the caller
-      // tells this apart from a real lease – with one it would log a phantom
-      // "clipboard lost" on every rescue, and skip the rescue write it needs.
+      // no hold to end and nothing to put back.
       return { dispatched: true, finish(/** @type {string} */ state) { return state; } };
     });
     typingQueue = work.then((lease) => lease?.settled).catch(() => {});
@@ -220,16 +218,12 @@ export function createTextTyper({
 }
 
 /**
- * The destination changed, so the words wait on the clipboard for the user's
- * own paste. Shaped like a lease so the caller settles every outcome the same
- * way, but it holds nothing to restore: the clipboard IS the rescue, and
- * putting the old contents back would erase it.
- * @param {any} clipboard
- * @param {string} text
+ * The destination changed, so nothing is pasted and the clipboard is never
+ * touched: the words wait in history. Shaped like a lease so the caller
+ * settles every outcome the same way, but it holds nothing to restore.
  * @param {string} reason
  */
-function refusedDelivery(clipboard, text, reason) {
-  try { clipboard.writeText(text); } catch {}
+function refusedDelivery(reason) {
   return {
     dispatched: false,
     refused: true,
@@ -237,7 +231,7 @@ function refusedDelivery(clipboard, text, reason) {
     reason,
     settled: Promise.resolve("refused"),
     finish() { return "refused"; },
-    keep() { return true; }
+    keep() { return false; }
   };
 }
 

@@ -198,7 +198,7 @@ try {
   await new Promise(r => setTimeout(r, 1000));
   assert.equal(await target.locator('#target').inputValue(), pasted, 'One utterance must be delivered once');
   const delivery = await electronApp.evaluate(({ clipboard }) => ({ current: clipboard.readText(), state: globalThis.__gvoiceTest.snapshot().history[0]?.deliveryState }));
-  assert.ok(delivery.state === 'verified' ? delivery.current === originalClipboard : delivery.current.trim() === pasted.trim(), 'Only verified delivery may restore the clipboard');
+  assert.ok(delivery.current === originalClipboard, `Every delivery must give the clipboard back (state ${delivery.state})`);
   await poll(() => electronApp.evaluate(() => !globalThis.__gvoiceTest.snapshot().busy), 'Speech session did not finish');
   await target.screenshot({ path: join(profile, 'paste-proof.png') });
   progress('Checking a second dictation with warm capture');

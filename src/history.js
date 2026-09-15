@@ -21,8 +21,8 @@ const MAX_ENTRIES = 50;
  * "cancelled" so the user knows their own key did it.
  *
  * `copy` marks text that was never pasted because the user had moved to a
- * different app or window by the time it was ready. It is on the clipboard
- * instead, and the tray says "copied" so the entry doesn't read as a failure.
+ * different app or window by the time it was ready. It waits here instead,
+ * and the tray says so, so the entry doesn't read as a failure.
  *
  * `sessionId` names the press that produced the entry (see
  * src/dictation-session.js), so a line in history can be matched to a line in
@@ -40,7 +40,7 @@ let entries = [];
 //
 //   verified        pasted, and read back out of the field afterwards
 //   sent-unverified pasted, but nothing readable to confirm it with
-//   refused         the destination changed, so it waits on the clipboard
+//   refused         the destination changed, so it waits here in history
 //   cancelled       the user gave up, before or after the words arrived
 //   superseded      a newer press took over before this one was delivered
 //   recovered       transcribed again later from the saved clip
@@ -85,7 +85,7 @@ export function trayLabelFor(entry) {
     case "cancelled":
       return { note: hasText ? "Cancelled – never pasted" : null, warn: false };
     case "refused":
-      return { note: hasText ? "Not pasted – copied instead" : null, warn: false };
+      return { note: hasText ? "Not pasted – window changed" : null, warn: false };
     case "superseded":
       return { note: hasText ? "A newer dictation took over – never pasted" : null, warn: false };
     case "recovered":
@@ -177,7 +177,7 @@ export function recordTranscript(text, pasted, recordingPath = null, meta = {}) 
  * skipped: there is nothing to put on the clipboard, and stopping at one would
  * hide the result the user is reaching for.
  *
- * Whether the text was pasted, cancelled, recovered or left on the clipboard
+ * Whether the text was pasted, cancelled, recovered or held back
  * makes no difference here. Those are all "the last thing I said", and this menu
  * item exists precisely to rescue the ones that never landed.
  *

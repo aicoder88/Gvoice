@@ -24,7 +24,7 @@ test("only a genuinely failed paste earns the warning", () => {
 
 test("cancelled, copied, overtaken and recovered each say what happened", () => {
   assert.match(trayLabelFor({ deliveryState: "cancelled", text }).note, /Cancelled/);
-  assert.match(trayLabelFor({ deliveryState: "refused", text }).note, /copied instead/);
+  assert.match(trayLabelFor({ deliveryState: "refused", text }).note, /Not pasted/);
   assert.match(trayLabelFor({ deliveryState: "superseded", text }).note, /newer dictation/);
   assert.match(trayLabelFor({ deliveryState: "recovered", text }).note, /Recovered/);
 });
@@ -32,7 +32,7 @@ test("cancelled, copied, overtaken and recovered each say what happened", () => 
 test("history written before the outcome field still reads correctly", () => {
   assert.equal(trayLabelFor({ cancelled: true, pasted: false, text }).warn, false);
   assert.match(trayLabelFor({ cancelled: true, pasted: false, text }).note, /Cancelled/);
-  assert.match(trayLabelFor({ copy: true, pasted: false, text }).note, /copied instead/);
+  assert.match(trayLabelFor({ copy: true, pasted: false, text }).note, /Not pasted/);
   assert.equal(trayLabelFor({ pasted: true, text }).warn, false);
   assert.equal(trayLabelFor({ pasted: false, text }).warn, true);
 });

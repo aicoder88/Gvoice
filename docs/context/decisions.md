@@ -118,6 +118,8 @@ returns `"same"` instead of `"unknown"` when `currentPid == null`.
 
 ### 2026-09-07 – A refused paste puts the text on the clipboard
 
+**Reversed 2026-09-15** by "A dictation never keeps the clipboard" below.
+
 `main.js` → `releaseClipboard`
 
 When a paste is refused or typed by keyboard, nothing of ours has reached the
@@ -135,6 +137,8 @@ Reverse if: the owner finds his clipboard being taken over. To reverse: drop the
 no-hold branch at the end of `releaseClipboard` in `main.js`.
 
 ## 2026-09-12 – An unconfirmed paste keeps the words on the clipboard
+
+**Reversed 2026-09-15** by "A dictation never keeps the clipboard" below.
 
 `src/clipboard-lease.js` → `finish`
 
@@ -171,3 +175,29 @@ it in terminal."
 
 Reverse if: a terminal paste goes missing and the plain Success hid it. To
 reverse: drop the `pastedIntoTerminal` clause from the `notice` line.
+
+## 2026-09-15 – A dictation never keeps the clipboard
+
+`src/clipboard-lease.js` → `finish`; `src/typing.js` → `refusedDelivery`;
+`main.js` → `processTranscript`, `retranscribeRecording`
+
+The clipboard is borrowed only for the paste keystroke. Whatever you had copied
+comes back after every dictation: at once after a paste GVoice read back, 600 ms
+later after one it could not (every terminal). A dictation that is not pasted
+never touches the clipboard at all. The words live in Recent dictations and on
+the pill's Copy button. A copy you make during the wait wins.
+
+Why: the owner's words, 2026-09-15: "transcriptions should not be copied onto
+the clipboard, overwriting it. they should be saved in history, and pasted into
+the active window, so i can use or copy them if I want, but keep my current
+clipboard". This reverses the 2026-09-07 and 2026-09-12 entries above. Their
+worry, losing the only copy of words that never landed, is covered by history.
+
+Cost: a dictation that did not land needs one click on Copy (pill or tray)
+instead of ⌘V. An app that takes longer than the wait to accept a paste would
+paste your old clipboard instead of the words.
+
+Reverse if: a paste ever lands your old clipboard instead of the dictation.
+First try raising the wait (`CLIPBOARD_RESTORE_DELAY_MS`). To reverse fully:
+in `finish`, restore only for `'verified'`, and write the text in
+`refusedDelivery` again.

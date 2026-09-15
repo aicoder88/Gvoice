@@ -22,12 +22,16 @@ function fixture(initial = 'previous') {
   return { clipboard, options: { getChangeCount: () => count } };
 }
 for (const state of ['sent-unverified', 'refused', 'failed', 'superseded']) {
-  test(`${state} retains the acquired dictation without any restore timer`, async () => {
+  test(`${state} gives the clipboard back only after the wait`, async () => {
     const { clipboard, options } = fixture();
-    const lease = createClipboardLease(clipboard, 'dictation', options);
+    const timers = [];
+    const lease = createClipboardLease(clipboard, 'dictation', { ...options, schedule: fn => timers.push(fn) });
     assert.equal(lease.finish(state), state);
+    assert.ok(clipboard.readText() === 'dictation', 'a slow app must still receive the words');
+    assert.equal(timers.length, 1);
+    timers[0]();
     assert.equal(await lease.settled, state);
-    assert.ok(clipboard.readText() === 'dictation');
+    assert.ok(clipboard.readText() === 'previous');
   });
 }
 test('verified delivery restores only the lease it still owns', () => {
@@ -50,15 +54,16 @@ test('a newer user copy wins on verification failure too', () => {
   assert.equal(lease.finish('failed'), 'superseded');
   assert.ok(clipboard.readText() === 'user');
 });
-test('consecutive leases cannot restore each others payloads', () => {
+test('consecutive leases never restore a dictation, only the user copy', () => {
   const { clipboard, options } = fixture();
-  const first = createClipboardLease(clipboard, 'first', options);
+  const timers = [];
+  const first = createClipboardLease(clipboard, 'first', { ...options, schedule: fn => timers.push(fn) });
   first.finish('sent-unverified');
   const next = createClipboardLease(clipboard, 'next', options);
-  first.finish('verified');
-  assert.ok(clipboard.readText() === 'next');
+  for (const fire of timers) fire();
+  assert.ok(clipboard.readText() === 'next', 'the older lease no longer owns the clipboard');
   next.finish('verified');
-  assert.ok(clipboard.readText() === 'next');
+  assert.ok(clipboard.readText() === 'previous', 'the user copy from before both dictations returns');
 });
 test('missing clipboard sequence support fails closed on restoration', () => {
   const { clipboard } = fixture();

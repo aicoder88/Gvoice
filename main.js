@@ -754,8 +754,8 @@ function showPillResult(
   //    every paste is unverifiable, so 8s was the normal case and the pill
   //    overstayed on every dictation. The text is in Recent dictations either
   //    way, so a success is a success: 3s.
-  //  - `opts.holdMs` overrides all of it, for a success whose text only landed
-  //    on the clipboard (the retry recovery) and so needs reading time.
+  //  - `opts.holdMs` overrides all of it, for a success whose text never
+  //    landed in an app (the retry recovery) and so needs reading time.
   //  - An error with NOTHING to act on — "No speech detected." above all — has
   //    no text to copy and nothing to read back. Thirty seconds of red sitting
   //    on screen made it look as though GVoice had to finish sulking before the
@@ -1493,7 +1493,7 @@ function openAccessibilitySettings() {
 // `target` (live path only): the app, window and focused element captured at
 // press time. typeText re-reads them immediately before the clipboard write and
 // refuses to paste into anything else — the returned `copied` flag says the
-// text is sitting on the clipboard waiting for the user's own ⌘V.
+// text was held back and waits in history and on the pill's Copy button.
 //
 // `abandoned` (live path only): asked once the cleanup pass is done, right
 // before the paste machinery. The user can still click the pill or hit Escape
@@ -1610,7 +1610,6 @@ async function processTranscript(
   const { typeText } = await import("./src/typing.js");
   if (!canPaste()) return superseded();
   if (wasAbandoned()) return cancelledResult();
-  const clipboardBefore = getClipboardChangeCount();
   let restored = false;
   if (restoreHwnd != null) restored = restoreForegroundWindow(restoreHwnd);
   let pasteOwnership = "same";
@@ -1623,7 +1622,6 @@ async function processTranscript(
   let readTarget = "";
   let readLen = null;
   let pastedIntoTerminal = false;
-  let clipboardRetained = false;
   latency.mark(gen, "pasteStart");
   try {
     lease = await typeText(textToType, { expectedPid: sourceApp, target, canPaste: () => {
@@ -1642,7 +1640,7 @@ async function processTranscript(
       return true;
     } });
     // The destination changed between the press and now (another window, or a
-    // text field that went away). The words are already on the clipboard.
+    // text field that went away). Nothing was pasted or copied.
     if (lease?.destinationChanged) {
       pasteOwnership = "different";
       dlog("paste-skipped", { reason: lease.reason, len: textToType.length });
@@ -1676,44 +1674,30 @@ async function processTranscript(
     console.error("[main] paste delivery failed:", error?.message);
   } finally {
     try { verification?.dispose(); } catch {}
-    if (lease?.destinationChanged) {
-      // Nothing was leased: the typer wrote the words straight to the clipboard
-      // for the user's own paste. Leave them there.
-      clipboardRetained = true;
-      deliveryState = "refused";
-    } else if (lease) {
-      clipboardRetained = lease.isCurrent?.() === true && deliveryState !== "verified";
-      deliveryState = lease.finish(deliveryState);
-    } else if (deliveryState !== "superseded" && deliveryState !== "cancelled" && canPaste()) {
-      // A refused paste has acquired no lease. Rescue only if nobody copied
-      // anything during the asynchronous transport or ownership check.
-      if (clipboardBefore != null && getClipboardChangeCount() === clipboardBefore) {
-        clipboard.writeText(textToType);
-        clipboardRetained = true;
-      } else deliveryState = "superseded";
-    }
+    if (lease?.destinationChanged) deliveryState = "refused";
+    // The user's own clipboard goes back whatever happened (owner, 2026-09-15).
+    // The words live on in history, and the pill's Copy button.
+    else if (lease) deliveryState = lease.finish(deliveryState);
   }
   if (deliveryState === "cancelled") return cancelledResult();
   const pasted = typed && (deliveryState === "verified" || deliveryState === "sent-unverified");
   const skipped = deliveryState === "refused" || deliveryState === "superseded";
   // A terminal's text can never be read back, so every terminal paste is
   // "unverified". Saying so on each one is noise: the owner asked for a plain
-  // Success there (2026-09-12). The words still stay on the clipboard.
+  // Success there (2026-09-12).
   const notice = deliveryState === "verified" || (deliveryState === "sent-unverified" && pastedIntoTerminal) ? cleanupNotice
     : deliveryState === "superseded" ? "Saved in Recent dictations. Your newer clipboard was kept."
-    : deliveryState === "refused" ? "Not pasted. It's on your clipboard and in Recent dictations."
-    : clipboardRetained ? "Delivery unverified. Text kept on your clipboard and in Recent dictations."
+    : deliveryState === "refused" ? "Not pasted. Saved in Recent dictations."
     : "Delivery unverified. Text saved in Recent dictations.";
   dlog("typed", { len: textToType.length, ms: Date.now() - tType, fieldFocused,
     pasted, verified, deliveryState, target: readTarget, readLen,
     sourcePid: sourceApp ?? null, ownership: pasteOwnership,
-    clipboardChangeCount: getClipboardChangeCount(), clipboardRetained });
-  // A refusal with the words waiting on the clipboard is not a failure: the
-  // user moved on, or the app in front could not be confirmed. The pill says
-  // "Ready to copy" in green rather than flashing an error for a paste the app
-  // chose not to send (decisions.md, 2026-09-07: a refusal is never reported as
-  // a failure).
-  const copied = deliveryState === "refused" && clipboardRetained;
+    clipboardChangeCount: getClipboardChangeCount() });
+  // A refusal is not a failure: the user moved on, or the app in front could
+  // not be confirmed. The pill stays green and offers Copy rather than flashing
+  // an error for a paste the app chose not to send (decisions.md, 2026-09-07: a
+  // refusal is never reported as a failure).
+  const copied = deliveryState === "refused";
   return { text: textToType, pasted, copied, skipped, verified, likelyMissed, deliveryState, notice };
 
 }
@@ -1796,9 +1780,10 @@ function sttProvider() {
 // the Deepgram engine (see retryCanRun), and on demand from the pill's
 // "Transcribe again" button or the tray.
 //
-// The recovered text goes to the CLIPBOARD and the pill, not straight into the
-// focused app: the round-trip takes a few seconds, by which time the window the
-// user was dictating into is often no longer the one in front.
+// The recovered text goes to the pill (its Copy button) and history, not
+// straight into the focused app: the round-trip takes a few seconds, by which
+// time the window the user was dictating into is often no longer the one in
+// front. It never goes on the clipboard by itself (owner, 2026-09-15).
 //
 // @param {string | null} recordingPath
 // @returns {Promise<string | null>} the recovered text, "" if the retry ran and
@@ -1844,16 +1829,13 @@ async function retranscribeRecording(recordingPath, { deliver = true, canDeliver
     if (!deliver) return cleaned;
     // It WORKED — green dot. (This used to ride the error state purely to buy
     // the 30s linger, so a rescued dictation looked like a failure.) The text is
-    // only on the clipboard, so keep the long linger via holdMs.
+    // only on the pill and in history, so keep the long linger via holdMs.
     //
-    // Both the clipboard and the pill are gated on still owning the moment: a
-    // press during the round trip starts a new dictation, and dropping this
-    // (older) text onto the clipboard behind it would silently replace whatever
-    // the user had copied — with no pill to explain where their ⌘V went. The
+    // The pill is gated on still owning the moment: a press during the round
+    // trip starts a new dictation, and its pill must not be painted over. The
     // rescued text is still in history and the tray.
     if (ownsRecovery()) {
-      clipboard.writeText(cleaned);
-      showPillResult("success", cleaned, recordingPath, { reason: "Got it on retry — press ⌘V.", holdMs: 30000 });
+      showPillResult("success", cleaned, recordingPath, { reason: "Got it on retry – click Copy.", holdMs: 30000 });
     }
     // Recovered from a saved clip, not from the live press that recorded it —
     // the tray says so, and the history entry carries the flag.
@@ -1877,7 +1859,7 @@ async function retranscribeRecording(recordingPath, { deliver = true, canDeliver
 async function retranscribeOnDemand(/** @type {string | null} */ recordingPath) {
   // A dictation is live right now (tray "Transcribe again" is clickable during
   // one). Running would upload the clip and then throw every result away —
-  // retranscribeRecording gates its pill AND its clipboard write on pillFree() —
+  // retranscribeRecording gates its pill on pillFree() –
   // and the message below would paint over a live "Listening…". The pill the
   // user is already looking at is the answer, so leave it alone.
   if (!pillFree()) return;
@@ -2046,11 +2028,10 @@ function setupIpc() {
       // The live stream heard nothing, but the audio is on disk — try the batch
       // API before calling it a failure. That recovers every dictation the
       // stream lost to a slow connect or a timeout rather than to real silence.
-      // deliver:false keeps the recovered text OUT of the clipboard-and-⌘V
-      // treatment: it comes back here and goes through the normal paste, so a
-      // stream that came back blank costs the user a second, not a manual
-      // paste. (It also means the rescued text gets the cleanup pass, which the
-      // clipboard route skipped.)
+      // deliver:false keeps the recovered text OUT of the click-Copy pill: it
+      // comes back here and goes through the normal paste, so a stream that
+      // came back blank costs the user a second, not a manual paste. (It also
+      // means the rescued text gets the cleanup pass, which that route skips.)
       const recovered = failedPath
         ? await retranscribeRecording(failedPath, { deliver: false, canDeliver: () => !dictation.wasCancelled(sessionId) })
         : null;
@@ -2206,22 +2187,21 @@ function setupIpc() {
         // lingers so the text stays recoverable via Copy / the recording.
         //
         // Third case, `copied`: the user had moved to another window by the
-        // time the words were ready, so nothing was fired at their cursor and
-        // the text is waiting on the clipboard. Nothing went wrong, so no red
-        // dot — a green pill saying exactly what to press, held long enough to
-        // read it.
+        // time the words were ready, so nothing was fired at their cursor. The
+        // text waits on the pill's Copy button and in history. Nothing went
+        // wrong, so no red dot – a green pill saying exactly what to click,
+        // held long enough to read it.
         showPillResult(
           result.pasted || result.copied ? "success" : "error",
           result.text,
           recordingPath,
-          result.copied ? { reason: "Ready to copy · ⌘V", holdMs: 8000 } : {
+          result.copied ? { reason: "Not pasted · click Copy", holdMs: 8000 } : {
             // Only the hard-miss case gets an explanatory reason; a confirmed
             // success keeps the plain "Success" label — unless something happened
             // the user has to know about. Two of those, in priority order:
-            //   1. likelyMissed — the text probably didn't land AND the code below
-            //      takes their clipboard to make it recoverable. Silently swapping
-            //      what ⌘V does, behind a bare 3s "Success", is the worse surprise,
-            //      so it beats the cleanup notice when both are true.
+            //   1. likelyMissed – the text probably didn't land. A bare 3s
+            //      "Success" over a missing sentence is the worse surprise, so
+            //      it beats the cleanup notice when both are true.
             //   2. notice — cleanup gave up, so the text went in exactly as spoken.
             // Action first: the label can ellipsize, so the instruction must
             // survive truncation.
@@ -2232,7 +2212,7 @@ function setupIpc() {
             reason: !result.pasted
               ? (result.skipped ? result.notice : "Click Copy — the paste didn't land.")
               : result.likelyMissed
-                ? "Press ⌘V if the text didn't land — it's on your clipboard."
+                ? "Click Copy if the text didn't land."
                 : result.notice,
             // A reason needs reading time; a bare "Success" doesn't.
             holdMs: result.pasted && (result.likelyMissed || result.notice) ? 6000 : undefined
@@ -3008,7 +2988,7 @@ function rebuildTrayMenu() {
     },
     {
       // The words of the last dictation, whatever happened to them — pasted,
-      // cancelled, recovered, or left on the clipboard. The one-click way back
+      // cancelled, recovered, or held back. The one-click way back
       // to text that never reached the cursor.
       label: "Copy last result",
       enabled: !!lastText,

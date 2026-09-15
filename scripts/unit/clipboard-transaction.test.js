@@ -4,9 +4,9 @@
 //
 // No Electron and no real pasteboard: a fake clipboard records every read and
 // write. The rule these pin down: the dictation holds the clipboard as a lease,
-// and the user's own clipboard comes back whole (text, html, rtf, image) only
-// when the paste is VERIFIED. An unconfirmed paste keeps the words where the
-// user can still paste them by hand.
+// and the user's own clipboard comes back whole (text, html, rtf, image) after
+// EVERY paste: at once when verified, after a short wait when not, so a slow app
+// still pastes the words. Undelivered words are recovered from history.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createTextTyper } from "../../src/typing.js";
@@ -79,14 +79,25 @@ test("(a2) rich flavours survive: html and rtf are put back with the text", asyn
     "text copied from a web page or a document keeps its formatting");
 });
 
-// Both machines logged this bug separately: a timer that restores the user's
-// clipboard after a paste nobody confirmed wipes the only copy of words that
-// may never have landed. An unconfirmed paste keeps them.
-test("an unconfirmed paste keeps the words on the clipboard", async () => {
+// The owner, 2026-09-15: dictations must never take over the clipboard. An
+// unconfirmed paste (every terminal) puts the old clipboard back too, but only
+// after a wait, so an app slow to take the paste still gets the words.
+test("an unconfirmed paste gives the clipboard back after a short wait", async () => {
   const clipboard = fakeClipboard({ text: "my own copy" });
   const lease = await typerOn(clipboard)("hello there", { target: NOTES });
   lease.finish("sent-unverified");
-  assert.equal(clipboard.readText(), " hello there", "the words stay pasteable by hand");
+  assert.equal(clipboard.readText(), " hello there", "a slow app can still take the paste");
+  await lease.settled;
+  assert.equal(clipboard.readText(), "my own copy");
+});
+
+test("a copy the user makes during that wait is kept", async () => {
+  const clipboard = fakeClipboard({ text: "my own copy" });
+  const lease = await typerOn(clipboard)("hello there", { target: NOTES });
+  lease.finish("sent-unverified");
+  clipboard.writeText("copied during the wait");
+  await lease.settled;
+  assert.equal(clipboard.readText(), "copied during the wait");
 });
 
 test("(b) a copy the user made mid-paste wins and is never overwritten", async () => {
@@ -132,7 +143,8 @@ test("a paste that throws is reported, and the words are not thrown away", async
   assert.equal(lease.dispatched, false);
   assert.ok(lease.dispatchError, "the caller must be able to say the paste failed");
   lease.finish("failed");
-  assert.equal(clipboard.readText(), " hello there", "a failed paste keeps the words to paste by hand");
+  await lease.settled;
+  assert.equal(clipboard.readText(), "mine", "a failed paste still gives the clipboard back");
 });
 
 test("a failed delivery does not wedge the queue for the next one", async () => {

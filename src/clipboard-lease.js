@@ -1,13 +1,27 @@
-// No timer may restore an unverified paste. OS sequence numbers also detect a
-// user copying the same string (text equality alone misses that ownership loss).
+// The dictation borrows the clipboard only for the paste keystroke, then the
+// user's own clipboard goes back, whatever the outcome. The words are never
+// left behind: history is where an undelivered dictation is recovered from
+// (owner, 2026-09-15). OS sequence numbers detect a user copying during the
+// paste, even the same string (text equality alone misses that ownership loss).
 const leases = new WeakMap();
 export const DELIVERY_STATES = new Set(['verified', 'sent-unverified', 'refused', 'failed', 'superseded']);
 
-export function createClipboardLease(clipboard, text, { getChangeCount = () => null } = {}) {
+// A paste nobody confirmed may still be sitting in a busy app's event queue.
+// Putting the old clipboard back too soon would paste THAT instead of the
+// words, so wait this long first. A verified paste already landed, so it
+// restores at once.
+export const UNVERIFIED_RESTORE_DELAY_MS = Number(process.env.CLIPBOARD_RESTORE_DELAY_MS) || 600;
+
+export function createClipboardLease(clipboard, text, {
+  getChangeCount = () => null,
+  restoreDelayMs = UNVERIFIED_RESTORE_DELAY_MS,
+  schedule = (fn, ms) => setTimeout(fn, ms)
+} = {}) {
   const previousLease = leases.get(clipboard);
-  const previousWasDictation = previousLease?.isCurrent() === true;
+  // An earlier dictation still on the clipboard is not the user's copy: take
+  // over what IT was going to put back, so the user's clipboard still returns.
+  const previous = previousLease?.isCurrent() === true ? previousLease.previous : snapshotClipboard(clipboard);
   previousLease?.finish('superseded');
-  const previous = snapshotClipboard(clipboard);
   clipboard.writeText(text);
   const count = getChangeCount();
   const formats = formatSignature(clipboard);
@@ -22,21 +36,26 @@ export function createClipboardLease(clipboard, text, { getChangeCount = () => n
     } catch { return false; }
   };
   const owns = () => active && isCurrent();
+  // Checked again at restore time: a copy the user makes during the wait wins.
+  // With no native sequence counter, ownership can't be proven, so fail closed.
+  const restore = () => {
+    try { if (isCurrent()) restoreSnapshot(clipboard, previous); }
+    catch { /* A restore failure cannot discard delivery/history metadata. */ }
+    finally { settle(state); }
+  };
   const finish = delivery => {
     if (!DELIVERY_STATES.has(delivery)) throw new Error('Invalid delivery state');
     if (!active) return state;
     const owned = owns();
     state = count != null && !owned ? 'superseded' : delivery;
-    try {
-      // Never restore another dictation's retained payload. With no native
-      // sequence counter, retain the current text and fail closed on restore.
-      if (delivery === 'verified' && owned && !previousWasDictation) restoreSnapshot(clipboard, previous);
-    } catch { /* A restore failure cannot discard delivery/history metadata. */ }
-    finally { active = false; settle(state); }
+    active = false;
+    if (!owned) settle(state);
+    else if (delivery === 'verified' || !(restoreDelayMs > 0)) restore();
+    else schedule(restore, restoreDelayMs);
     return state;
   };
   const keep = () => { const owned = owns(); finish('sent-unverified'); return owned; };
-  const lease = { finish, keep, owns, isCurrent, settled, get state() { return state; }, changeCount: count };
+  const lease = { finish, keep, owns, isCurrent, settled, previous, get state() { return state; }, changeCount: count };
   leases.set(clipboard, lease);
   return lease;
 }
@@ -80,8 +99,8 @@ function snapshotClipboard(clipboard) {
 // last. Clipboards without it (older Electron, the test doubles) still get the
 // image or the text.
 function restoreSnapshot(clipboard, snap) {
-  // Nothing was there before a verified paste, so leave nothing behind. The
-  // words already landed, so clearing cannot lose them.
+  // Nothing was there before the paste, so leave nothing behind. The words are
+  // in history either way.
   if (!Object.keys(snap).length) {
     if (typeof clipboard.clear === 'function') clipboard.clear();
     else clipboard.writeText('');
