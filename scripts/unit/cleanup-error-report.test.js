@@ -25,6 +25,15 @@ const realEnv = { ...process.env };
 // fetch is stubbed.
 const SAMPLE = "so um like I think we should uh ship this thing tomorrow";
 
+// Two believable cleanups of SAMPLE: the "um" and "uh" fillers dropped, the
+// speaker's own words kept. They differ only in the closing mark, so each test
+// can tell which stubbed response answered while both clear the
+// word-preservation guard — a stub that invents new words
+// (a stand-in like "Cleaned once.") is rejected by design and would fail for
+// the wrong reason.
+const CLEANED_A = "So, like, I think we should ship this thing tomorrow.";
+const CLEANED_B = "So, like, I think we should ship this thing tomorrow!";
+
 function stubFetch(status, body = "{}") {
   globalThis.fetch = async () =>
     new Response(body, { status, headers: { "Content-Type": "application/json" } });
@@ -48,16 +57,16 @@ test("a retired default model falls back once and remembers the working model", 
   const requestedModels = [];
   const responses = [
     new Response('{"error":{"message":"model_not_found"}}', { status: 404 }),
-    new Response('{"choices":[{"message":{"content":"Cleaned once."}}]}', { status: 200 }),
-    new Response('{"choices":[{"message":{"content":"Cleaned twice."}}]}', { status: 200 })
+    new Response('{"choices":[{"message":{"content":"So, like, I think we should ship this thing tomorrow."}}]}', { status: 200 }),
+    new Response('{"choices":[{"message":{"content":"So, like, I think we should ship this thing tomorrow!"}}]}', { status: 200 })
   ];
   globalThis.fetch = async (_url, init) => {
     requestedModels.push(JSON.parse(String(init.body)).model);
     return responses.shift();
   };
 
-  assert.equal(await polishTranscript(SAMPLE), "Cleaned once.");
-  assert.equal(await polishTranscript(SAMPLE), "Cleaned twice.");
+  assert.equal(await polishTranscript(SAMPLE), CLEANED_A);
+  assert.equal(await polishTranscript(SAMPLE), CLEANED_B);
   assert.deepEqual(requestedModels, [
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
@@ -75,16 +84,16 @@ test("a rate-limited fallback is NOT remembered — the next dictation retries t
   const requestedModels = [];
   const responses = [
     new Response('{"error":{"message":"Rate limit reached"}}', { status: 429 }),
-    new Response('{"choices":[{"message":{"content":"Cleaned once."}}]}', { status: 200 }),
-    new Response('{"choices":[{"message":{"content":"Cleaned twice."}}]}', { status: 200 })
+    new Response('{"choices":[{"message":{"content":"So, like, I think we should ship this thing tomorrow."}}]}', { status: 200 }),
+    new Response('{"choices":[{"message":{"content":"So, like, I think we should ship this thing tomorrow!"}}]}', { status: 200 })
   ];
   globalThis.fetch = async (_url, init) => {
     requestedModels.push(JSON.parse(String(init.body)).model);
     return responses.shift();
   };
 
-  assert.equal(await polishTranscript(SAMPLE), "Cleaned once.");
-  assert.equal(await polishTranscript(SAMPLE), "Cleaned twice.");
+  assert.equal(await polishTranscript(SAMPLE), CLEANED_A);
+  assert.equal(await polishTranscript(SAMPLE), CLEANED_B);
   assert.deepEqual(requestedModels, [
     "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
@@ -118,16 +127,16 @@ test("a retired pinned model falls over to the built-in one and says so", async 
     requestedModels.push(model);
     return model === "my-pinned-model"
       ? new Response('{"error":{"message":"model_not_found"}}', { status: 404 })
-      : new Response('{"choices":[{"message":{"content":"Cleaned by the built-in one."}}]}', { status: 200 });
+      : new Response(JSON.stringify({ choices: [{ message: { content: CLEANED_A } }] }), { status: 200 });
   };
 
-  assert.equal(await polishTranscript(SAMPLE), "Cleaned by the built-in one.");
+  assert.equal(await polishTranscript(SAMPLE), CLEANED_A);
   assert.deepEqual(requestedModels, ["my-pinned-model", "openai/gpt-oss-120b"]);
   assert.match(String(takeCleanupError()), /chosen tidy-up engine is gone/i);
 
   // Second dictation: the dead name is not tried again.
   requestedModels.length = 0;
-  assert.equal(await polishTranscript(SAMPLE), "Cleaned by the built-in one.");
+  assert.equal(await polishTranscript(SAMPLE), CLEANED_A);
   assert.deepEqual(requestedModels, ["openai/gpt-oss-120b"]);
 });
 
@@ -144,11 +153,35 @@ test("after a pinned model retires, its built-in substitute still gets normal 42
     requestedModels.push(model);
     if (model === "my-pinned-model") return new Response('{"error":{"message":"model_not_found"}}', { status: 404 });
     if (model === "openai/gpt-oss-120b") return new Response('{"error":{"message":"rate limit"}}', { status: 429 });
-    return new Response('{"choices":[{"message":{"content":"Cleaned by the second backup."}}]}', { status: 200 });
+    return new Response(JSON.stringify({ choices: [{ message: { content: CLEANED_B } }] }), { status: 200 });
   };
 
-  assert.equal(await polishTranscript(SAMPLE), "Cleaned by the second backup.");
+  assert.equal(await polishTranscript(SAMPLE), CLEANED_B);
   assert.deepEqual(requestedModels, ["my-pinned-model", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
+});
+
+// The pin above is honoured because the name is plausible. This one is not: it
+// is a setting left behind by an older build, and honouring it would pin a
+// dead engine forever with no way for the user to see why tidy-up stopped. It
+// is dropped and the provider's own chain runs instead. (The sibling case – a
+// model belonging to a DIFFERENT provider – is covered further down, in
+// "switching cleanup providers never carries the other provider's built-in
+// model".)
+test("a retired Groq model left in Settings is ignored, not pinned", async () => {
+  useGroq();
+  process.env.CLEANUP_MODEL = "llama-3.3-70b-versatile";
+  const requestedModels = [];
+  globalThis.fetch = async (_url, init) => {
+    requestedModels.push(JSON.parse(String(init.body)).model);
+    return new Response(
+      '{"choices":[{"message":{"content":"So, like, I think we should ship this thing tomorrow."}}]}',
+      { status: 200 }
+    );
+  };
+
+  assert.equal(await polishTranscript(SAMPLE), CLEANED_A);
+  assert.deepEqual(requestedModels, ["openai/gpt-oss-120b"]);
+  assert.equal(takeCleanupError(), null);
 });
 
 test("a rate-limited default model uses the backup model's separate quota", async () => {
@@ -156,14 +189,14 @@ test("a rate-limited default model uses the backup model's separate quota", asyn
   const requestedModels = [];
   const responses = [
     new Response('{"error":{"message":"rate limit"}}', { status: 429 }),
-    new Response('{"choices":[{"message":{"content":"Cleaned by backup."}}]}', { status: 200 })
+    new Response('{"choices":[{"message":{"content":"So, like, I think we should ship this thing tomorrow."}}]}', { status: 200 })
   ];
   globalThis.fetch = async (_url, init) => {
     requestedModels.push(JSON.parse(String(init.body)).model);
     return responses.shift();
   };
 
-  assert.equal(await polishTranscript(SAMPLE), "Cleaned by backup.");
+  assert.equal(await polishTranscript(SAMPLE), CLEANED_A);
   assert.deepEqual(requestedModels, ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
   assert.equal(takeCleanupError(), null);
 });
@@ -230,6 +263,17 @@ test("a 429 is reported on the first hit — that dictation went in unformatted"
   assert.match(String(takeCleanupError()), /free tidy-up limit/i);
 });
 
+test("a daily 429 identifies the daily reset, not a minute", async () => {
+  useGroq();
+  stubFetch(429, '{"error":{"message":"Rate limit on tokens per day (TPD)"}}');
+
+  assert.equal(await polishTranscript(SAMPLE), SAMPLE);
+  const warning = String(takeCleanupError());
+  assert.match(warning, /today's free tidy-up allowance/i);
+  assert.match(warning, /daily reset/i);
+  assert.doesNotMatch(warning, /minute/i);
+});
+
 test("every later 429 is reported too, one per dictation", async () => {
   useGroq();
   stubFetch(429, '{"error":{"message":"Rate limit reached"}}');
@@ -238,6 +282,21 @@ test("every later 429 is reported too, one per dictation", async () => {
   takeCleanupError();
   await polishTranscript(SAMPLE);
   assert.match(String(takeCleanupError()), /free tidy-up limit/i);
+});
+
+test("100 rapid limit failures all preserve the dictation and report the problem", async () => {
+  useGroq();
+  stubFetch(429, '{"error":{"message":"Rate limit reached"}}');
+  const realError = console.error;
+  console.error = () => {};
+  try {
+    for (let i = 0; i < 100; i += 1) {
+      assert.equal(await polishTranscript(SAMPLE), SAMPLE);
+      assert.match(String(takeCleanupError()), /free tidy-up limit/i);
+    }
+  } finally {
+    console.error = realError;
+  }
 });
 
 // A single blip must stay quiet. A 2.5s timeout is not an outage, and the pill
@@ -277,10 +336,10 @@ test("a success in between clears the streak, so scattered blips stay quiet", as
 
 test("a successful pass reports nothing", async () => {
   useGroq();
-  stubFetch(200, JSON.stringify({ choices: [{ message: { content: "So I think we should ship this tomorrow." } }] }));
+  stubFetch(200, JSON.stringify({ choices: [{ message: { content: "So, like, I think we should ship this thing tomorrow." } }] }));
 
   const out = await polishTranscript(SAMPLE);
-  assert.equal(out, "So I think we should ship this tomorrow.");
+  assert.equal(out, "So, like, I think we should ship this thing tomorrow.");
   assert.equal(takeCleanupError(), null);
 });
 
@@ -312,4 +371,41 @@ test("the custom dictionary rides on the system prompt, never the user message",
   assert.match(system.content, /Debezium/, "the dictionary belongs in the system prompt");
   assert.doesNotMatch(user.content, /Debezium/, "and nowhere near the transcript");
   assert.match(user.content, /<<<TRANSCRIPT>>>/);
+});
+
+test("an approved dictionary spelling can pass the word safety check", async () => {
+  useGroq();
+  const { init: initVocab, addTerm } = await import("../../src/vocab.js");
+  const store = join(tmpdir(), `gvoice-vocab-guard-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+  initVocab(store);
+  addTerm("Debezium");
+  stubFetch(200, JSON.stringify({ choices: [{ message: { content: "Debezium is ready." } }] }));
+
+  const out = await polishTranscript("Debezum is ready");
+  rmSync(store, { force: true });
+  assert.equal(out, "Debezium is ready.");
+});
+
+test("switching cleanup providers never carries the other provider's built-in model", async () => {
+  process.env.CLEANUP_PROVIDER = "openai";
+  process.env.CLEANUP_MODEL = "openai/gpt-oss-120b";
+  process.env.OPENAI_API_KEY = "test-key-not-real";
+  let sent = null;
+  globalThis.fetch = async (url, init) => {
+    sent = { url: String(url), body: JSON.parse(String(init.body)) };
+    return new Response(JSON.stringify({ choices: [{ message: { content: "So, like, I think we should ship this thing tomorrow." } }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  await polishTranscript(SAMPLE);
+  assert.match(sent.url, /api\.openai\.com/);
+  assert.equal(sent.body.model, "gpt-4.1-mini");
+
+  process.env.CLEANUP_PROVIDER = "groq";
+  process.env.CLEANUP_MODEL = "gpt-4.1-mini";
+  await polishTranscript(SAMPLE);
+  assert.match(sent.url, /api\.groq\.com/);
+  assert.equal(sent.body.model, "openai/gpt-oss-120b");
 });

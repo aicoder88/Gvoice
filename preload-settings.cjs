@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld("settingsBridge", {
   openBenchmark: () => ipcRenderer.invoke("benchmark:open"),
   save: (view) => ipcRenderer.invoke("settings:save", view),
   clearRecordings: () => ipcRenderer.invoke("settings:clear-recordings"),
+  // Microphone section. These live in preferences.json, not the .env the rest
+  // of this window saves, so they have their own pair of calls.
+  micGet: () => ipcRenderer.invoke("mic:get"),
+  micSet: (prefs) => ipcRenderer.invoke("mic:set", prefs),
   // Activity tab.
   stats: () => ipcRenderer.invoke("stats:get"),
   // Dictionary section — reuses the same handlers the standalone manager uses.

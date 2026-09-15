@@ -31,7 +31,7 @@
 
 import { createRequire } from "node:module";
 import { isCtrlDown, isShiftDown } from "./foreground.js";
-import { createHoldTracker } from "./hotkey-logic.js";
+import { createHoldTracker, isCancelKey, createMouseBackGate } from "./hotkey-logic.js";
 
 const require = createRequire(import.meta.url);
 
@@ -45,9 +45,15 @@ function debug(/** @type {any[]} */ ...args) {
 }
 
 /**
+ * `onCancel` is the give-up key (Escape). It fires on every Escape the machine
+ * sees, held dictation or not — the caller decides whether one is running. Only
+ * the macOS/Linux event path reports it; the Windows poll deliberately stays as
+ * it was, so there the pill click is the way to cancel.
+ *
  * @typedef {{
  *   onPress?: (key: "alt") => void,
  *   onRelease?: (key: "alt") => void,
+ *   onCancel?: () => void,
  * }} HotkeyCallbacks
  */
 
@@ -106,7 +112,10 @@ function startHotkeyWindows({ onPress, onRelease }) {
     // kernel for the current key state on every tick, so it can't be "armed but
     // deaf" the way a global hook can — always answer yes so the caller's
     // deaf-hook watchdog never fires here.
-    sawEvent: () => true
+    sawEvent: () => true,
+    // Windows has no mouse-back trigger to gate — keyboard-only, untouched.
+    setMouseBackEnabled() {},
+    resetMouseBack() {}
   };
 }
 
@@ -125,9 +134,9 @@ function startHotkeyWindows({ onPress, onRelease }) {
  *     a held Ctrl+Cmd keystroke triggers the chord path instead.
  *
  * @param {HotkeyCallbacks} callbacks
- * @returns {{ stop: () => void, sawEvent: () => boolean }}
+ * @returns {{ stop: () => void, sawEvent: () => boolean, setMouseBackEnabled: (enabled: boolean) => void, resetMouseBack: () => void }}
  */
-function startHotkeyUiohook({ onPress, onRelease }) {
+function startHotkeyUiohook({ onPress, onRelease, onCancel }) {
   // Lazy require so Windows builds don't choke if uiohook-napi isn't present
   // (e.g. native rebuild skipped, prebuild missing). The project is ESM, so
   // we go through createRequire to keep this synchronous and preserve the
@@ -202,6 +211,13 @@ function startHotkeyUiohook({ onPress, onRelease }) {
 
   const handleDown = (/** @type {any} */ event) => {
     const code = event && event.keycode;
+    // Escape: give up on the dictation that is running. Checked before the
+    // self-heal below so it can never be swallowed by a chord repair, and it
+    // returns straight away — Escape is not a hold-to-talk trigger.
+    if (isCancelKey(code, keyCodes)) {
+      try { onCancel?.(); } catch (error) { console.error("hotkey onCancel error:", error); }
+      return;
+    }
     // Self-heal stale chord state: if a keyup was swallowed (lock screen,
     // emoji picker, focus churn) a flag can stay latched and a later lone
     // Ctrl or Cmd press would start dictation. The event's live modifier
@@ -259,23 +275,24 @@ function startHotkeyUiohook({ onPress, onRelease }) {
   // until the 90-second cutoff in main.js. Treat each report as a toggle — the
   // first starts talking, the next stops — and keep the real mouseup handler
   // for platforms and versions that get it right.
-  let mouseBackHeld = false;
+  // Step 12: a companion (Better Options) owns the button while it is
+  // connected, so this raw toggle must stop producing presses of its own —
+  // two things racing the same "start dictation" call is exactly the stuck-
+  // mic bug the socket in step 10 was built to end. Keyboard triggers are
+  // untouched; only the mouse path is gated. See createMouseBackGate for the
+  // up-edge-never-arrives quirk this also has to handle.
+  const mouseBackGate = createMouseBackGate({
+    onPress: () => pressSource("mouseBack"),
+    onRelease: () => releaseSource("mouseBack")
+  });
 
   const handleMouseDown = (/** @type {any} */ event) => {
     if (!event || event.button !== MOUSE_BACK_BUTTON) return;
-    if (mouseBackHeld) {
-      mouseBackHeld = false;
-      releaseSource("mouseBack");
-    } else {
-      mouseBackHeld = true;
-      pressSource("mouseBack");
-    }
+    mouseBackGate.down();
   };
   const handleMouseUp = (/** @type {any} */ event) => {
     if (!event || event.button !== MOUSE_BACK_BUTTON) return;
-    if (!mouseBackHeld) return;
-    mouseBackHeld = false;
-    releaseSource("mouseBack");
+    mouseBackGate.up();
   };
 
   uIOhook.on("input", markSeen);
@@ -314,6 +331,18 @@ function startHotkeyUiohook({ onPress, onRelease }) {
       try { uIOhook.off("mouseup", handleMouseUp); } catch {}
       try { uIOhook.stop(); } catch {}
     },
-    sawEvent: () => sawEvent
+    sawEvent: () => sawEvent,
+    setMouseBackEnabled(enabled) {
+      mouseBackGate.setEnabled(enabled);
+    },
+    // A dictation this button started was cancelled another way (Escape, a
+    // click on the pill). Clear the toggle so the next click starts a press
+    // instead of "releasing" the one that is already gone.
+    resetMouseBack() {
+      mouseBackGate.reset();
+      // The shared tracker too, or it keeps counting the button as held and
+      // swallows the next right Option press with nothing logged.
+      hold.forget("mouseBack");
+    }
   };
 }

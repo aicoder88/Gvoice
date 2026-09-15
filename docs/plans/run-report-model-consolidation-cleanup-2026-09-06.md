@@ -84,3 +84,55 @@ app seen under two spellings, not a duplicate copy. Nothing to clean there.
 No file exists twice across the three apps. GVoice keeps whisper.cpp weights, Meetily
 keeps Parakeet and Qwen, Natively has downloaded nothing. Three incompatible formats.
 Sharing them means rewriting working dictation to save 181 MiB. Not worth it.
+
+## Push, 6 September 2026 — partial, on purpose
+
+Drago said "push". The fast path stopped, then a second problem appeared. Both are
+recorded here because the second one can destroy finished work if handled carelessly.
+
+**1. The push guard's secrets check is a filename match, and it fired falsely.**
+It flagged `.env.example` because the name starts with `.env`. I read the whole file:
+every key field is empty, it is a template, it has been tracked in git for months, and
+the real `.env` is ignored and untracked. No secret was at risk. Worth a guard tweak so
+the check looks at contents, or exempts `.env.example` by name.
+
+**2. Another machine has a different, conflicting version of the cleanup work.**
+The remote gained commit `74f85ec` ("update 9 files"). Rebasing onto it conflicted in
+four files. The gap is large, not cosmetic:
+
+| File | Lines differing between remote and this Mac's working copy |
+| --- | --- |
+| `src/cleanup.js` | 478 |
+| `scripts/unit/cleanup-error-report.test.js` | 161 |
+| `SETUP.md` | 4 |
+| `docs/ARCHITECTURE.md` | 2 |
+
+These uncommitted changes were already on disk when this session opened. They are not
+mine. Merging 478 lines of someone else's half-finished work on a bare "push" is how
+finished work gets silently deleted, so I did not.
+
+**What I did instead:** aborted the rebase, undid my own commit, and restored this
+checkout to exactly the state I found it in. Verified file by file. Then I built a
+throwaway second copy of the repo from the remote, put only my three documents in it,
+pushed that, and removed the copy. This checkout was never touched by the push.
+
+**Pushed:** the audit, the plan, and this report. Nothing else.
+**Not pushed and still sitting uncommitted on this Mac:** the cleanup work in
+`src/cleanup.js`, its two test files, `SETUP.md`, `docs/ARCHITECTURE.md`,
+`package.json`, `public/settings.html`, plus screenshots under `.verification/` and a
+stray file under `backups/`.
+
+**Decision Drago has to make:** which cleanup version wins, this Mac's or the other
+machine's. Until he says, nobody should merge them.
+
+**Also noticed:** GitHub reports the repository has moved from `aicoder88/voice` to
+`aicoder88/Gvoice`. Pushes still work through the redirect today. The address should be
+updated before the redirect is withdrawn.
+
+## Resolved, 12 September 2026
+
+Both versions were merged rather than one being thrown away. The word-preservation
+guard from this Mac and the backup-model failover from the other machine now both run:
+a retired or rate-limited model falls through to the backup, and whatever comes back
+is still rejected if it changed the speaker's words. A stale model name saved in
+Settings no longer pins a dead model – it is dropped and the default chain runs.

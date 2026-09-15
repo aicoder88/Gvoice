@@ -1,0 +1,164 @@
+// Unit tests for the "is the text still going where the user was looking?"
+// check (src/paste-guard.js, and the way src/typing.js acts on it).
+// Run: node --test scripts/unit/paste-destination.test.js
+//
+// No Electron, no Accessibility permission, no window on screen: the
+// destination reader and the clipboard are both injected, so the whole rule is
+// exercised as plain data.
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { sameDestination, checkDestination } from "../../src/paste-guard.js";
+import { createTextTyper } from "../../src/typing.js";
+import { recordTranscript, getHistory } from "../../src/history.js";
+
+/** The window the user started dictating into. */
+const NOTES = { pid: 501, app: "notes", windowNumber: 42, role: "AXTextArea", editable: true };
+
+/** @param {Partial<typeof NOTES>} [changes] */
+function like(changes = {}) {
+  return { ...NOTES, ...changes };
+}
+
+// A clipboard that remembers everything written to it, in order.
+function fakeClipboard() {
+  let text = "";
+  /** @type {string[]} */
+  const writes = [];
+  return {
+    writes,
+    readText: () => text,
+    writeText: (/** @type {string} */ t) => { text = t; writes.push(t); },
+    readImage: () => ({ isEmpty: () => true }),
+    writeImage: () => {}
+  };
+}
+
+test("same app, same window, editable field → paste", () => {
+  assert.deepEqual(sameDestination(NOTES, like()), { ok: true, reason: "match" });
+});
+
+test("a different app is never pasted into", () => {
+  assert.equal(sameDestination(NOTES, like({ pid: 777, app: "slack" })).ok, false);
+  // A recycled pid with a different app name is caught too.
+  assert.equal(sameDestination(NOTES, like({ app: "slack" })).reason, "app-changed");
+});
+
+test("another window of the same app is a different destination", () => {
+  assert.deepEqual(sameDestination(NOTES, like({ windowNumber: 43 })), {
+    ok: false,
+    reason: "window-changed"
+  });
+});
+
+test("caret no longer in something that takes typing → no paste", () => {
+  assert.deepEqual(sameDestination(NOTES, like({ editable: false, role: "AXGroup" })), {
+    ok: false,
+    reason: "no-editable-field"
+  });
+});
+
+// The other half of that rule, and the one that matters most day to day.
+// Terminals and custom Electron editors expose no editable AX element at any
+// point, so BOTH readings say editable:false. Judging the second reading alone
+// refused every dictation into iTerm, Ghostty and Claude Code and left the
+// words on the clipboard. Nothing changed here, so the paste goes ahead.
+const TERMINAL = { pid: 620, app: "ghostty", windowNumber: 9, role: "AXGroup", editable: false };
+
+test("an app that never looked editable still gets its paste", () => {
+  assert.deepEqual(sameDestination(TERMINAL, { ...TERMINAL }), { ok: true, reason: "match" });
+});
+
+test("a never-editable app that the user switched away from is still refused", () => {
+  assert.equal(sameDestination(TERMINAL, { ...TERMINAL, pid: 777, app: "slack" }).reason, "app-changed");
+  assert.equal(sameDestination(TERMINAL, { ...TERMINAL, windowNumber: 10 }).reason, "window-changed");
+  assert.equal(sameDestination(TERMINAL, null).reason, "unreadable");
+});
+
+test("a never-editable app that gained a text field is fine too", () => {
+  assert.equal(sameDestination(TERMINAL, { ...TERMINAL, role: "AXTextArea", editable: true }).ok, true);
+});
+
+test("a destination we can no longer read is treated as changed", () => {
+  assert.deepEqual(sameDestination(NOTES, null), { ok: false, reason: "unreadable" });
+});
+
+test("no press-time snapshot means no check — Windows and machines without Accessibility paste as before", () => {
+  assert.deepEqual(sameDestination(null, null), { ok: true, reason: "unchecked" });
+  assert.deepEqual(sameDestination(null, like({ pid: 999 })), { ok: true, reason: "unchecked" });
+});
+
+test("window numbers are only compared when both readings have one", () => {
+  assert.equal(sameDestination(NOTES, like({ windowNumber: null })).ok, true);
+  assert.equal(sameDestination(like({ windowNumber: null }), like()).ok, true);
+});
+
+test("a reader that throws counts as unreadable, not as a match", async () => {
+  const decision = await checkDestination(NOTES, () => { throw new Error("AX timed out"); });
+  assert.deepEqual(decision, { ok: false, reason: "unreadable" });
+});
+
+// A typer wired to fakes: no Electron, no real keystroke, no release delay.
+function typerWith({ clipboard, readTarget, onPaste }) {
+  return createTextTyper({
+    clipboardTarget: clipboard,
+    getChangeCount: () => null,
+    readTarget,
+    releaseDelayMs: 0,
+    sendShortcut: async () => { onPaste(); return { refused: false }; }
+  });
+}
+
+test("match: the text is pasted", async () => {
+  const clipboard = fakeClipboard();
+  let pastes = 0;
+  const typeText = typerWith({ clipboard, readTarget: () => like(), onPaste: () => { pastes += 1; } });
+  const lease = await typeText("hello there", { target: NOTES });
+  assert.equal(lease.dispatched, true);
+  assert.equal(pastes, 1, "the paste keystroke must fire on a match");
+  assert.ok(clipboard.writes.includes(" hello there"), "the text goes to the clipboard to be pasted");
+  lease.finish("sent-unverified");
+});
+
+test("mismatch: nothing is pasted and the clipboard is never touched", async () => {
+  const clipboard = fakeClipboard();
+  let pastes = 0;
+  const typeText = typerWith({ clipboard, readTarget: () => like({ pid: 777, app: "slack" }), onPaste: () => { pastes += 1; } });
+  const out = await typeText("hello there", { target: NOTES });
+  assert.equal(out.dispatched, false);
+  assert.equal(out.destinationChanged, true);
+  assert.equal(out.reason, "app-changed");
+  assert.equal(pastes, 0, "no keystroke may be fired at a window the user moved to");
+  assert.deepEqual(clipboard.writes, [], "the user's clipboard is left alone; history keeps the words");
+});
+
+// Today's code-review finding, proved through the real paste engine rather than
+// the comparison alone: a terminal never looks editable, and must still paste.
+test("a terminal that never looked editable is pasted into, end to end", async () => {
+  const clipboard = fakeClipboard();
+  let pastes = 0;
+  const typeText = typerWith({ clipboard, readTarget: () => ({ ...TERMINAL }), onPaste: () => { pastes += 1; } });
+  const lease = await typeText("ls -la", { target: TERMINAL });
+  assert.equal(lease.dispatched, true, "a terminal must not be refused");
+  assert.equal(pastes, 1);
+  lease.finish("sent-unverified");
+});
+
+test("no press-time snapshot still pastes, whatever the reader says", async () => {
+  const clipboard = fakeClipboard();
+  let pastes = 0;
+  const typeText = typerWith({ clipboard, readTarget: () => like({ pid: 777, app: "slack" }), onPaste: () => { pastes += 1; } });
+  const lease = await typeText("hello there", { target: null });
+  assert.equal(lease.dispatched, true);
+  assert.equal(pastes, 1);
+  lease.finish("sent-unverified");
+});
+
+test("a copied dictation is in history, marked copied rather than pasted", () => {
+  recordTranscript("hello there", false, null, { sessionId: "3-abcd1234", copy: true });
+  const newest = getHistory()[0];
+  assert.equal(newest.text, "hello there");
+  assert.equal(newest.pasted, false);
+  // One outcome field now. "refused" is what a copied-not-pasted dictation is:
+  // the destination changed, so it waits in history.
+  assert.equal(newest.deliveryState, "refused", "the tray has to say why this one never landed in an app");
+});

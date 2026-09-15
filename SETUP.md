@@ -91,6 +91,19 @@ npm start
 
 An Electron window opens with status info. A tray icon shows up in the system tray (bottom-right of the Windows taskbar - click the small `^` to find it if hidden).
 
+## Automated checks
+
+- `pnpm test:unit`, `pnpm test:parity` and `pnpm test:pipeline-smoke` are the
+  offline suites. They never read a developer's real `.env` and never make a
+  real call to OpenAI or Deepgram — a fresh clone with no keys passes all
+  three. Set `GVOICE_NO_ENV=1` yourself (or run inside `env -i`) to prove a
+  check has no hidden dependency on a local `.env`.
+- `pnpm test:live` is the opt-in suite that talks to the real providers and
+  the local Whisper engine. It does nothing and exits 0 unless you set
+  `GVOICE_LIVE=1` — that flag is what lets the openai/deepgram parity
+  subtests run instead of skipping. Use it only when you want to burn real
+  API usage to check a live path.
+
 ## Use
 
 1. Click into any text field anywhere on your computer (Word, Slack, Chrome address bar, terminal, code editor - anything).
@@ -113,7 +126,7 @@ An Electron window opens with status info. A tray icon shows up in the system tr
 | `WHISPER_LANGUAGE` | `en` | Dictation language for the local Whisper and Deepgram engines (the OpenAI engine ignores it). **The app overrides this to `en` at startup** — the bundled local model is `ggml-small.en` (English-only), so there is no language to choose. The setting still applies to the bare relay (`pnpm dev`), which runs without `main.js`. |
 | `CLEANUP_ENABLED` | `true` | LLM polish (punctuation, remove "um"/"uh"). |
 | `CLEANUP_PROVIDER` | `groq` (ships a free-tier key, so cleanup works with no setup) | Which API runs the cleanup pass: `groq`, `openai`, `anthropic`, or `google`. |
-| `CLEANUP_MODEL` | *(per provider)* | Cleanup model. Defaults: `openai/gpt-oss-120b` with automatic same-provider fallback to `openai/gpt-oss-20b` when the primary is retired or rate-limited (groq), `gpt-4.1-mini` (openai), `claude-haiku-4-5` (anthropic), `gemini-2.5-flash-lite` (google). Setting `CLEANUP_MODEL` pins that exact model and disables automatic model fallback. |
+| `CLEANUP_MODEL` | *(per provider)* | Cleanup model. Defaults: `openai/gpt-oss-120b` with automatic same-provider fallback to `openai/gpt-oss-20b` when the primary is retired or rate-limited (groq), `gpt-4.1-mini` (openai), `claude-haiku-4-5` (anthropic), `gemini-2.5-flash-lite` (google). Setting `CLEANUP_MODEL` pins that exact model and disables automatic model fallback; a name that names a retired Groq model or another provider's model is ignored. Whatever model answers, the reply is discarded and your raw words are used if it changed your wording. |
 | `CLEANUP_TIMEOUT_MS` | `2500` | Max wait for each cleanup model before falling back to the raw transcript. A 429 rate-limit is not retried on the same model; the default Groq chain tries its backup model instead. 5xx/network errors still get one retry. |
 | `TYPE_VIA_CLIPBOARD` | `true` | Paste vs simulated keystrokes. Paste is faster and more reliable. |
 | `PORT` | *(free port each launch)* | Local relay port. Auto-picked so it never collides with a dev server on 3000; set it only to pin one, and even a pinned-but-busy port falls back to a free one. |

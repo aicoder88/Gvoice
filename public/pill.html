@@ -83,11 +83,17 @@
 
       /* --- Per-state dot colour + animation ------------------------------- */
       body[data-state="listening"]    .dot { background: #ff5a5a; animation: pulse 1s ease-in-out infinite; }
-      /* The listening pill is a stop button: clicking it ends the dictation. */
-      body[data-state="listening"] .pill { cursor: pointer; }
-      body[data-state="listening"] .pill:hover { background: rgba(38, 44, 52, 0.97); }
+      /* Both in-progress pills are cancel buttons: clicking one gives up on the
+         dictation. */
+      body[data-state="listening"] .pill,
+      body[data-state="transcribing"] .pill { cursor: pointer; }
+      body[data-state="listening"] .pill:hover,
+      body[data-state="transcribing"] .pill:hover { background: rgba(38, 44, 52, 0.97); }
       body[data-state="transcribing"] .dot { background: #4aa3ff; animation: pulse 1s ease-in-out infinite; }
       body[data-state="success"]      .dot { background: #34d399; box-shadow: 0 0 10px rgba(52, 211, 153, 0.7); }
+      /* Cancelled is neither a win nor a fault — the user's own key did it, so
+         a calm grey, no glow, no buttons. */
+      body[data-state="cancelled"]    .dot { background: #8b98a5; }
       body[data-state="error"]        .dot { background: #ff5a5a; box-shadow: 0 0 10px rgba(255, 90, 90, 0.7); }
 
       /* --- Action buttons: only on result states ------------------------- */
@@ -157,11 +163,14 @@
     <script>
       const LABELS = {
         // Says so on the pill: a hold that gets stuck is exactly when nobody
-        // thinks to try clicking, so the way out has to be visible.
-        listening: "Listening… (click to stop)",
-        transcribing: "Transcribing…",
+        // thinks to try clicking, so the way out has to be visible. "Cancel",
+        // not "stop": the click throws the words away rather than typing them.
+        // Escape does the same thing.
+        listening: "Listening… (click to cancel)",
+        transcribing: "Transcribing… (click to cancel)",
         success: "Success",
-        error: "Error"
+        error: "Error",
+        cancelled: "Cancelled — nothing pasted"
       };
       const labelEl = document.getElementById("label");
       const copyBtn = document.getElementById("copy");
@@ -194,7 +203,11 @@
           ? reason
           : (LABELS[state] || state);
 
+        // Only success/error carry the action row. "cancelled" is a plain
+        // notice: it auto-hides like a result, but there is nothing to copy,
+        // play or add to the dictionary, so it gets no buttons.
         const isResult = state === "success" || state === "error";
+        const autoHides = isResult || state === "cancelled";
         const showCopy = isResult && data && data.canCopy;
         const showOpen = isResult && data && data.canOpen;
         copyBtn.style.display = showCopy ? "" : "none";
@@ -212,7 +225,7 @@
         // paste was confirmed); fall back to the per-state defaults if it didn't.
         currentHideMs = (data && typeof data.holdMs === "number" ? data.holdMs : HIDE_BY_STATE[state]) ?? 8000;
         clearHide();
-        if (isResult) armHide(currentHideMs);
+        if (autoHides) armHide(currentHideMs);
         // Fresh state = fresh hover tracking (the window likely moved).
         overPill = false;
       }
@@ -260,18 +273,20 @@
         overPill = over;
         const s = document.body.getAttribute("data-state");
         const isResult = s === "success" || s === "error";
-        // Listening is clickable too (the whole pill is a stop button), so it
-        // needs the same real-clicks-on-hover treatment as a result pill.
-        if (isResult || s === "listening") window.pillBridge.setInteractive(over);
+        // The in-progress pills are clickable too (each one is a cancel
+        // button), so they need the same real-clicks-on-hover treatment as a
+        // result pill.
+        if (isResult || s === "listening" || s === "transcribing") window.pillBridge.setInteractive(over);
         if (over) clearHide();
         else if (isResult) armHide(currentHideMs);
       });
 
-      // Clicking the listening pill stops the recording. Anywhere on the pill
+      // Clicking the pill during a dictation cancels it. Anywhere on the pill
       // counts — someone whose dictation is stuck should not have to aim.
       pillEl.addEventListener("click", () => {
-        if (document.body.getAttribute("data-state") !== "listening") return;
-        window.pillBridge.stopListening();
+        const s = document.body.getAttribute("data-state");
+        if (s !== "listening" && s !== "transcribing") return;
+        window.pillBridge.cancel();
       });
 
       window.pillBridge.onState(applyState);

@@ -91,11 +91,14 @@ let CFGetTypeID = null;
 let CFStringGetTypeID = null;
 /** @type {((el: unknown, out: number[]) => number) | null} */
 let AXUIElementGetPid = null;
+/** @type {((el: unknown, out: number[]) => number) | null} */
+let AXUIElementGetWindow = null;
 /** @type {((pid: number, buf: Buffer, size: number) => number) | null} */
 let proc_pidpath = null;
 /** @type {unknown} */ let kAXFocusedUIElement = null;
 /** @type {unknown} */ let kAXRole = null;
 /** @type {unknown} */ let kAXValue = null;
+/** @type {unknown} */ let kAXWindow = null;
 
 if (isMac) {
   try {
@@ -130,10 +133,23 @@ if (isMac) {
     const libSystem = koffi.load("/usr/lib/libSystem.B.dylib");
     proc_pidpath = libSystem.func("int proc_pidpath(int pid, _Out_ char *buffer, uint32_t buffersize)");
 
+    // Which on-screen window an element belongs to. _AXUIElementGetWindow is
+    // undocumented but has shipped in HIServices for every macOS release and is
+    // the only way to get a CGWindowID out of an AX element. Its own try/catch:
+    // if a future macOS drops it, the window number simply reads null and the
+    // destination check falls back to app + editable focus (see
+    // captureForegroundTarget) instead of the whole AX block failing to load.
+    try {
+      AXUIElementGetWindow = AX.func("int _AXUIElementGetWindow(void *element, _Out_ uint32 *wid)");
+    } catch (err) {
+      console.error("[foreground] window-id symbol missing:", err && err.message);
+    }
+
     // Attribute name constants — created once, intentionally never released.
     kAXFocusedUIElement = CFStringCreateWithCString(null, "AXFocusedUIElement", kCFStringEncodingUTF8);
     kAXRole = CFStringCreateWithCString(null, "AXRole", kCFStringEncodingUTF8);
     kAXValue = CFStringCreateWithCString(null, "AXValue", kCFStringEncodingUTF8);
+    kAXWindow = CFStringCreateWithCString(null, "AXWindow", kCFStringEncodingUTF8);
   } catch (err) {
     console.error("[foreground] AX init failed:", err && err.message);
     AXUIElementCreateSystemWide = null;
@@ -295,19 +311,113 @@ const pidPathBuf = Buffer.alloc(4096); // PROC_PIDPATHINFO_MAXSIZE
 // Empty strings whenever we can't tell, so a non-terminal app is never mistaken
 // for one.
 function elementApp(/** @type {unknown} */ focused) {
-  const none = { bundle: "", basename: "", path: "" };
+  // Union of what both halves of the app need from one reading: `pid` for the
+  // destination guard (two windows of one app share a name, so the pid is the
+  // strong half of its identity) and `path` for the per-app output profiles.
+  const none = { pid: 0, bundle: "", basename: "", path: "" };
   if (!AXUIElementGetPid || !proc_pidpath) return none;
   const pidOut = [0];
   if (AXUIElementGetPid(focused, pidOut) !== 0 || !pidOut[0]) return none;
-  const len = proc_pidpath(pidOut[0], pidPathBuf, pidPathBuf.length);
-  if (len <= 0) return none;
+  const pid = pidOut[0];
+  const len = proc_pidpath(pid, pidPathBuf, pidPathBuf.length);
+  // A pid with no readable path still identifies the app well enough for the
+  // guard, so keep it rather than returning `none` and losing the comparison.
+  if (len <= 0) return { pid, bundle: "", basename: "", path: "" };
+  // The scratch buffer is reused, so cut at the first NUL rather than trusting
+  // every byte up to `len`.
   const path = pidPathBuf.toString("utf8", 0, len).replace(/\0.*$/, "").toLowerCase();
   // e.g. "/applications/iterm.app/contents/macos/iterm2" → bundle "iterm",
-  // basename "iterm2". Exact match against each (not substring — see above).
+  // basename "iterm2". Exact match against each (not substring – see above).
   return {
+    pid,
     path,
     bundle: (path.match(/\/([^/]+)\.app\//) || [])[1] || "",
     basename: path.slice(path.lastIndexOf("/") + 1)
+  };
+}
+
+// The AXRole of an already-acquired element ("AXTextField", "AXWebArea", …),
+// or "" when it can't be read. Caller owns `focused`.
+function readElementRole(/** @type {unknown} */ focused) {
+  const roleOut = [null];
+  if (!AXUIElementCopyAttributeValue) return "";
+  if (AXUIElementCopyAttributeValue(focused, kAXRole, roleOut) !== 0 || !roleOut[0]) return "";
+  try {
+    const buf = Buffer.alloc(128);
+    if (!CFStringGetCString || !CFStringGetCString(roleOut[0], buf, buf.length, kCFStringEncodingUTF8)) return "";
+    const end = buf.indexOf(0);
+    return buf.toString("utf8", 0, end < 0 ? buf.length : end);
+  } finally {
+    if (CFRelease) CFRelease(roleOut[0]);
+  }
+}
+
+// The on-screen window an element sits in, as a CGWindowID, or null when it
+// can't be read. Asks the element's own AXWindow first (the focused control is
+// usually a child of the window) and falls back to the element itself.
+function elementWindowNumber(/** @type {unknown} */ focused) {
+  if (!AXUIElementGetWindow || !AXUIElementCopyAttributeValue) return null;
+  const winOut = [null];
+  const gotWindow = AXUIElementCopyAttributeValue(focused, kAXWindow, winOut) === 0 && winOut[0];
+  const element = gotWindow ? winOut[0] : focused;
+  try {
+    const idOut = [0];
+    if (AXUIElementGetWindow(element, idOut) !== 0) return null;
+    return idOut[0] || null;
+  } finally {
+    if (gotWindow && CFRelease) CFRelease(winOut[0]);
+  }
+}
+
+/**
+ * @typedef {object} ForegroundTarget
+ * @property {number} pid          the app that owns the focused element
+ * @property {string} app          its bundle folder name, or the binary's name
+ * @property {number | null} windowNumber  the window the caret is in, when readable
+ * @property {string} role         the focused element's AXRole ("" if unreadable)
+ * @property {boolean} editable    can the user type into it right now
+ */
+
+/**
+ * Where a paste would land RIGHT NOW: which app, which window, and whether the
+ * focused element accepts typing. Taken once when the hotkey goes down and
+ * again immediately before the clipboard write, so text can never be pasted
+ * into a window the user moved to while GVoice was transcribing (see
+ * src/paste-guard.js for the comparison).
+ *
+ * Returns null when there is nothing to compare — not macOS, Accessibility not
+ * granted, AX unreachable, or nothing focused. A null at PRESS time means the
+ * check is simply not available on this machine and the paste goes ahead as it
+ * always did; a null at PASTE time when press-time had a reading means the
+ * destination became unreadable, which is treated as a change.
+ *
+ * @returns {ForegroundTarget | null}
+ */
+export function captureForegroundTarget(timeoutS = AX_TIMEOUT_S) {
+  return withFocusedElement((focused) => readForegroundTarget(focused), timeoutS);
+}
+
+// The destination-guard reading of an already-acquired element. Shared by
+// captureForegroundTarget and captureDictationSource so a press can take both
+// answers in ONE trip to Accessibility.
+function readForegroundTarget(/** @type {unknown} */ focused) {
+  const { pid, bundle, basename } = elementApp(focused);
+  const role = readElementRole(focused);
+  let editable = AX_EDITABLE_ROLES.has(role);
+  // Same fallback isEditableFieldFocused uses: a custom editor with an
+  // unusual role still counts if its value is writable.
+  if (!editable && AXUIElementIsAttributeSettable) {
+    const settableOut = [false];
+    if (AXUIElementIsAttributeSettable(focused, kAXValue, settableOut) === 0) {
+      editable = settableOut[0] === true;
+    }
+  }
+  return {
+    pid,
+    app: bundle || basename,
+    windowNumber: elementWindowNumber(focused),
+    role,
+    editable
   };
 }
 
@@ -329,16 +439,40 @@ function elementApp(/** @type {unknown} */ focused) {
  *   that never ran is indistinguishable in the log from one that ran and found
  *   an unreadable field.
  */
-export function readbackPasteTarget() {
-  return withFocusedElement((focused) => {
+// Temporary foreground-field readback only while delivering one dictation.
+// Retaining the AX element lets us reject a focus switch within the same app.
+let pasteCFRetain, pasteCFRelease, pasteCFEqual;
+if (process.platform === "darwin") {
+  try {
+    const koffi = (await import("koffi")).default;
+    const core = koffi.load("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation");
+    pasteCFRetain = core.func("void *CFRetain(void *value)");
+    pasteCFRelease = core.func("void CFRelease(void *value)");
+    pasteCFEqual = core.func("bool CFEqual(void *a, void *b)");
+  } catch {}
+}
+export function capturePasteVerification() {
+  if (!pasteCFRetain) return null;
+  return withFocusedElement(focused => {
     const { bundle, basename } = elementApp(focused);
-    const isTerminal = isTerminalApp(bundle, basename);
+    const terminal = isTerminalApp(bundle, basename);
+    const beforeValue = terminal ? null : readFocusedStringValue(focused);
+    const held = pasteCFRetain(focused);
+    let disposed = false;
     return {
-      isTerminal,
-      value: isTerminal ? null : readFocusedStringValue(focused),
-      app: bundle || basename
+      beforeValue,
+      read() {
+        if (disposed) return null;
+        return withFocusedElement(current => {
+          const sameField = pasteCFEqual(held, current);
+          const { bundle: name, basename: binary } = elementApp(current);
+          const isTerminal = isTerminalApp(name, binary);
+          return { sameField, isTerminal, value: sameField && !isTerminal ? readFocusedStringValue(current) : null, app: name || binary };
+        });
+      },
+      dispose() { if (!disposed) { disposed = true; pasteCFRelease(held); } }
     };
-  }) || { isTerminal: false, value: null, app: "" };
+  });
 }
 
 /**
@@ -388,15 +522,22 @@ export function captureForegroundApp() {
  * the wrong app, which makes the paste refuse to deliver. Reordering this was
  * tried on 2026-09-07 and broke every paste — do not.
  *
- * @returns {{ pid: number | null, identity: { id: string, name: string } | null }}
+ * @returns {{ pid: number | null, identity: { id: string, name: string } | null, target: ForegroundTarget | null }}
  */
 export function captureDictationSource() {
   return withFocusedElement(focused => {
     const pidOut = [0];
     const pid = AXUIElementGetPid && AXUIElementGetPid(focused, pidOut) === 0 && pidOut[0] > 0 ? pidOut[0] : null;
     const owner = elementApp(focused);
-    return { pid, identity: owner.path ? { id: `mac:${owner.path}`, name: owner.bundle || owner.basename } : null };
-  }, PRESS_TIMEOUT_S) || { pid: null, identity: null };
+    return {
+      pid,
+      identity: owner.path ? { id: `mac:${owner.path}`, name: owner.bundle || owner.basename } : null,
+      // The destination guard's reading, from this same trip: app, window and
+      // whether the caret is in a text field. Taken here, before the mic, for
+      // the reason above – a reading after capture opens can name the wrong app.
+      target: readForegroundTarget(focused)
+    };
+  }, PRESS_TIMEOUT_S) || { pid: null, identity: null, target: null };
 }
 
 // App identity only: no window titles, URLs, selection, or field content.

@@ -47,22 +47,25 @@ import { createDestinationProfiles, PROFILE_LIST } from "./src/destination-profi
 import { captureDestinationIdentity, captureDictationSource } from "./src/foreground.js";
 import { LatencyTracker } from "./src/latency.js";
 import { DictationSession } from "./src/dictation-session.js";
+import { createControlServer, controlSocketPath } from "./src/control-socket.js";
 import * as vocab from "./src/vocab.js";
 import { createCorrectionWatcher } from "./src/correction-watch.js";
 import { looksLikeRetraction, looksOverPunctuated } from "./src/cleanup.js";
-import { captureForegroundApp, captureForegroundWindow, restoreForegroundWindow, getWindowRect, isEditableFieldFocused, isForegroundWindow, readbackPasteTarget } from "./src/foreground.js";
+import { captureForegroundApp, captureForegroundWindow, restoreForegroundWindow, getWindowRect, isEditableFieldFocused, isForegroundWindow, capturePasteVerification } from "./src/foreground.js";
 import { assessPasteOutcome, decidePasteOwnership } from "./src/paste-confidence.js";
-import { RESTORE_DELAY_MS, VERIFY_HOLD_MS } from "./src/clipboard-lease.js";
-import { initHistory, getHistory, getHistoryPath, recordTranscript } from "./src/history.js";
+import { getClipboardChangeCount } from "./src/clipboard-sequence.js";
+import { readBuildIdentity } from "./src/build-identity.js";
+import { initHistory, getHistory, getHistoryPath, recordTranscript, lastResult, trayLabelFor } from "./src/history.js";
 import { computeStats } from "./src/stats.js";
 import { ensureWhisperServer, stopWhisperServer } from "./src/providers/whisper-local.js";
 import { ENV_FILE, MODELS_DIR, BIN_DIR } from "./src/bootstrap-env.js";
 import { writeEnvFile, settingsView, patchFromView, VALID_PROVIDERS } from "./src/settings.js";
+import { preferencesPath, readPreferences, writePreferences, DEFAULT_PREFERENCES } from "./src/preferences.js";
 import { probeCapability, recommendedAssets } from "./src/hardware.js";
 import { suggestBeforeBenchmark } from "./src/benchmark.js";
 import { runLocalBenchmark } from "./src/benchmark-run.js";
 import { ensureModel, ensureWindowsBinaries, findInstalledWhisperCli, hasWhisperServer, MODELS, WINDOWS_BINARY_ZIPS } from "./src/model-download.js";
-import { saveRecording, pruneRecordings, clearRecordings } from "./src/recordings.js";
+import { saveRecording, pruneRecordings, clearRecordings, recordingsEnabledFrom } from "./src/recordings.js";
 import { transcribeWavFile, batchFailureReason } from "./src/providers/deepgram.js";
 import { resolveDeepgramKey } from "./realtime-relay.js";
 import { appendFileSync, statSync, renameSync, unlinkSync, existsSync, mkdirSync } from "node:fs";
@@ -117,6 +120,26 @@ let lastDestination = null;
 const utteranceProfiles = new Map();
 /** @type {string | null} */
 let recordingsDir = null;
+
+// --- Microphone preferences ---------------------------------------------------
+// Which microphone the user picked and how ready GVoice keeps it. Saved in
+// preferences.json inside the app's data folder – NOT in the .env, which holds
+// API keys and must never be rewritten for something this ordinary.
+/** @type {string | null} */
+let prefsPath = null;
+/** @type {import("./src/preferences.js").Preferences} */
+let micPrefs = { ...DEFAULT_PREFERENCES };
+// What the hidden dictation window last told us about the microphones: the only
+// place in the app that can see them. The Settings window renders this.
+let micState = {
+  devices: /** @type {{ id: string, label: string }[]} */ ([]),
+  activeId: /** @type {string | null} */ (null),
+  activeLabel: "",
+  open: false,
+  source: "default"
+};
+/** @type {((state: typeof micState) => void)[]} */
+let micStateWaiters = [];
 // The transcript + recording shown on the current result pill, so the pill's
 // Copy / Open-recording buttons act on the right data. Set when a result pill
 // is shown, cleared when it hides.
@@ -141,6 +164,11 @@ let serverPort = null;
 let serverError = null;
 /** @type {{ stop: () => void } | null} */
 let hotkeyEngine = null;
+// The local socket a companion app (Better Options) talks to instead of faking
+// a keyboard chord. Module-scoped so shutdownAll() can close it and delete the
+// socket file on the way out.
+/** @type {ReturnType<typeof createControlServer> | null} */
+let controlServer = null;
 // Module-scoped so shutdownAll() can clear a pending max-hold watchdog on quit —
 // a closure-local timer would outlive teardown and fire on a destroyed window.
 /** @type {ReturnType<typeof setTimeout> | null} */
@@ -158,6 +186,11 @@ let hotkeyNeedsAccessibility = false;
 // Deliberately NOT hotkeyFailed: that one gates the ready path, and by the time
 // we can tell, the app has long since reported itself ready.
 let hotkeyDeaf = false;
+// A window whose web process kept dying on reload and was left dead, or null.
+// Reloading it forever would hide the problem behind an app that just ignores
+// every press, so the tray says so instead.
+/** @type {string | null} */
+let windowGaveUp = null;
 let isQuitting = false;
 // The busy guard must outlive the renderer's 20s transcriber watchdog
 // (public/dictation.js FAILURE_MS): with the old 500ms default it expired on
@@ -170,12 +203,36 @@ const sourceApps = new Map();
 const TEST_MODE = !app.isPackaged && process.env.GVOICE_TEST_MODE === "1";
 let testEditResponse = null;
 
-// Terminal events from the renderer carry the generation of the press that
-// produced them (stamped in preload.cjs from the dictation:start profile). A
-// late one belongs to a press that is already over: acting on it would clear
-// `busy` for the LIVE press and paint over its pill. Logging and recording
-// still happen — only the shared session state is protected.
-const isStalePress = (/** @type {unknown} */ gen) => dictation.isStale(gen);
+// The press whose words are being tidied and pasted right now, or null. The
+// session is already idle by then (done() runs the moment a transcript lands,
+// so the next press isn't kept waiting), yet the pill still says "click to
+// cancel" – this is how cancelDictation finds the press that click means.
+/** @type {string | null} */
+let deliveringSessionId = null;
+
+// Every event the renderer sends back carries the name of the press that
+// produced it (stamped in preload.cjs from the dictation:start profile), and
+// every slow continuation in this file snapshots the same name on entry. A late
+// one belongs to a press that is already over: acting on it would clear `busy`
+// for the LIVE press and paint over its pill. Logging and recording still
+// happen — only the shared session state is protected.
+//
+// An unstamped event (the renderer reloaded and lost its name) counts as the
+// live press, so nothing is silently dropped — see DictationSession.owns().
+// sessionOf() is what a handler calls on entry: it pins the event's own name,
+// or the live one when the event has none, and everything after that asks
+// dictation.owns(id).
+const sessionOf = (/** @type {unknown} */ id) =>
+  typeof id === "string" && id.length > 0 ? id : dictation.id;
+
+// The press counter a name was minted from. A name is "<generation>-<random>",
+// so the timing record, the voice editor and the terminal claim – which all key
+// off the number – read it straight back out. A missing or malformed name
+// counts as the live press, the same rule sessionOf() applies.
+const genOf = (/** @type {unknown} */ id) => {
+  const n = typeof id === "string" ? Number.parseInt(id, 10) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : dictation.generation;
+};
 
 // The diagnostic log MUST live in userData, not next to main.js. When the app
 // is packaged, __dirname is inside the read-only .app/.asar bundle, so the old
@@ -517,6 +574,11 @@ function createPillWindow() {
   // Click-through by default. Flipped on only for the success/error states so
   // the Copy / Open-recording buttons are clickable (see setPillState).
   pillWindow.setIgnoreMouseEvents(true);
+  // A pill reloaded after its process died starts blank. If it was on screen,
+  // put back what it was showing, so a press during the reload still shows up.
+  pillWindow.webContents.on("did-finish-load", () => {
+    if (lastPillState && pillWindow?.isVisible()) setPillState(lastPillState.state, lastPillState.opts);
+  });
 
   if (serverPort) {
     pillWindow.loadURL(`http://127.0.0.1:${serverPort}/pill.html`);
@@ -535,11 +597,14 @@ function createPillWindow() {
 const PILL_BOTTOM_MARGIN = 8; // gap above the dock / taskbar
 const PILL_SIDE_MARGIN = 12; // gap from the right edge of the screen
 const PILL_SIZES = {
-  // 300, not 200: the listening label carries the "(click to stop)" hint now,
-  // and at 200 the window clipped it away — the one state where the text has to
-  // be readable is the one someone is stuck in.
-  listening: { width: 300, height: 56 },
-  transcribing: { width: 220, height: 56 },
+  // 320, not 200: both in-progress labels carry the "(click to cancel)" hint
+  // now, and at 200 the window clipped it away — the one state where the text
+  // has to be readable is the one someone is stuck in. Transcribing gets the
+  // same width for the same reason; 220 cut the hint in half.
+  listening: { width: 320, height: 56 },
+  transcribing: { width: 320, height: 56 },
+  // A two-second notice with no buttons — narrow, like the in-progress pills.
+  cancelled: { width: 300, height: 56 },
   // Wide enough for the full action row (Copy · Play recording · Transcribe
   // again · Add word · ✕) plus a readable reason — at 560 the label ellipsized
   // away the instruction the user needs. Taller too: the longest reason (the
@@ -582,6 +647,35 @@ function showPillForWindow(/** @type {number | null} */ _hwnd) {
   clearTimeout(pillSafetyTimer);
   setPillState("listening");
   pillWindow.showInactive();
+  verifyPillShown();
+}
+
+// On 2026-09-14 from 00:46 the pill stopped reaching the screen: macOS logged no
+// GVoice window for any press until a restart, while showInactive() raised no
+// error. Look again a moment later; a pill that is not there is replaced by a
+// fresh window. Rebuilt at most once per PILL_REBUILD_GAP_MS, so a screen that
+// can't show it at all (locked, asleep) doesn't spin.
+const PILL_CHECK_MS = 150;
+const PILL_REBUILD_GAP_MS = 10000;
+let pillRebuiltAt = 0;
+
+function verifyPillShown() {
+  setTimeout(() => {
+    if (!lastPillState || !pillWindow || pillWindow.isDestroyed()) return;
+    if (pillWindow.isVisible() && !pillWindow.webContents.isCrashed()) return;
+    const detail = { visible: pillWindow.isVisible(), crashed: pillWindow.webContents.isCrashed() };
+    if (Date.now() - pillRebuiltAt < PILL_REBUILD_GAP_MS) return dlog("pill-not-shown", { ...detail, rebuilt: false });
+    pillRebuiltAt = Date.now();
+    dlog("pill-not-shown", { ...detail, rebuilt: true });
+    try { pillWindow.destroy(); } catch {}
+    createPillWindow();
+    pillWindow.webContents.once("did-finish-load", () => {
+      // Whatever the pill should show by now; nothing if the press is over.
+      if (!lastPillState || !pillWindow || pillWindow.isDestroyed()) return;
+      setPillState(lastPillState.state, lastPillState.opts);
+      pillWindow.showInactive();
+    });
+  }, PILL_CHECK_MS);
 }
 
 // Drive the pill's look + behaviour. listening/transcribing are passive and
@@ -589,15 +683,17 @@ function showPillForWindow(/** @type {number | null} */ _hwnd) {
 // enabled and the renderer owns the auto-hide (with hover-pause). `opts` only
 // applies to result states: { canCopy, canOpen }.
 function setPillState(
-  /** @type {"listening" | "transcribing" | "success" | "error"} */ state,
+  /** @type {"listening" | "transcribing" | "success" | "error" | "cancelled"} */ state,
   /** @type {{ canCopy?: boolean, canOpen?: boolean, holdMs?: number, reason?: string }} */ opts = {}
 ) {
   if (!pillWindow || pillWindow.isDestroyed()) return;
+  lastPillState = { state, opts };
   const size = PILL_SIZES[state] || PILL_SIZES.listening;
   positionPill(size.width, size.height);
-  // "listening" joins the result states: the pill is clickable there so a stuck
-  // hold can be ended by hand.
-  const interactive = state === "success" || state === "error" || state === "listening";
+  // "listening" and "transcribing" join the result states: the pill is
+  // clickable throughout a dictation so it can be cancelled by hand.
+  const interactive = state === "success" || state === "error"
+    || state === "listening" || state === "transcribing";
   // Result states stay click-through but FORWARD mouse moves to the renderer,
   // which flips real interactivity on only while the pointer is over the
   // visible pill (pill:set-interactive). Without forwarding, the invisible
@@ -605,6 +701,8 @@ function setPillState(
   // of the screen for the whole 6–30s linger.
   if (interactive) pillWindow.setIgnoreMouseEvents(true, { forward: true });
   else pillWindow.setIgnoreMouseEvents(true);
+  // Dead or mid-reload: the state is kept above and replayed on did-finish-load.
+  if (pillWindow.webContents.isCrashed() || pillWindow.webContents.isLoading()) return;
   pillWindow.webContents.send("pill:state", {
     state,
     canCopy: !!opts.canCopy,
@@ -656,9 +754,16 @@ function showPillResult(
   //    every paste is unverifiable, so 8s was the normal case and the pill
   //    overstayed on every dictation. The text is in Recent dictations either
   //    way, so a success is a success: 3s.
-  //  - `opts.holdMs` overrides all of it, for a success whose text only landed
-  //    on the clipboard (the retry recovery) and so needs reading time.
-  const holdMs = opts.holdMs ?? (state === "error" ? 30000 : 3000);
+  //  - `opts.holdMs` overrides all of it, for a success whose text never
+  //    landed in an app (the retry recovery) and so needs reading time.
+  //  - An error with NOTHING to act on — "No speech detected." above all — has
+  //    no text to copy and nothing to read back. Thirty seconds of red sitting
+  //    on screen made it look as though GVoice had to finish sulking before the
+  //    next press would be heard. It never did: a press during that pill starts
+  //    a dictation like any other (measured 0.7s after one). The pill was the
+  //    only thing in the way, so an empty-handed error now clears in 8s.
+  const holdMs = opts.holdMs
+    ?? (state === "error" ? (transcript ? 30000 : 8000) : 3000);
   setPillState(state, { canCopy: !!transcript, canOpen: !!recordingPath, holdMs, reason: opts.reason });
   pillWindow?.showInactive();
   // Crash backstop only — must outlive the renderer's own timer so it never
@@ -667,6 +772,8 @@ function showPillResult(
 }
 
 let pillSafetyTimer = null;
+/** @type {{ state: Parameters<typeof setPillState>[0], opts: Parameters<typeof setPillState>[1] } | null} what the pill shows now */
+let lastPillState = null;
 
 // Backstop: if the renderer ever fails to report back (crash, lost IPC), make
 // sure the pill doesn't linger on screen. Normal completions clear this via
@@ -682,6 +789,7 @@ function armPillSafetyHide(/** @type {number} */ ms = 15000) {
 function hidePill() {
   clearTimeout(pillSafetyTimer);
   pillSafetyTimer = null;
+  lastPillState = null;
   currentTranscript = null;
   currentRecordingPath = null;
   if (pillWindow && !pillWindow.isDestroyed()) {
@@ -933,19 +1041,8 @@ function createDictationWindow() {
   dictationWindow.webContents.on("console-message", (_e, level, message) => {
     console.error("[dictation/renderer]", message);
   });
-  // The hidden renderer owns mic capture + the WebSocket. If it crashes, the
-  // hotkey would keep IPCing into a dead webContents and every press would
-  // silently do nothing until an app restart — the same "works until it doesn't"
-  // trap. Reload it so the next press has a live renderer, and capture the crash
-  // in the log (invisible on the console in a packaged launch).
-  dictationWindow.webContents.on("render-process-gone", (_e, details) => {
-    console.error("[dictation/renderer] process gone:", details && details.reason);
-    dlog("render-process-gone", details || {});
-    // Small delay so we don't tight-loop if it dies again on load.
-    setTimeout(() => {
-      try { if (dictationWindow && !dictationWindow.isDestroyed()) reloadDictationWindow(); } catch {}
-    }, 800);
-  });
+  // A crashed renderer is reloaded by the web-contents-created handler in
+  // app.whenReady, which covers every window.
   dictationWindow.webContents.on("unresponsive", () => {
     console.error("[dictation/renderer] unresponsive");
     dlog("renderer-unresponsive", {});
@@ -974,6 +1071,11 @@ function updateTrayTooltip() {
     tray.setToolTip(hotkeyNeedsAccessibility
       ? "GVoice can't read the dictation key.\nAllow GVoice under Privacy & Security > Accessibility, then reopen."
       : "GVoice — the dictation key couldn't start.\nQuit and reopen the app. Details: debug.log");
+    try { tray.setImage(makeTrayIcon()); } catch {}
+    return;
+  }
+  if (windowGaveUp) {
+    tray.setToolTip(WINDOW_GAVE_UP_TITLE + "\n" + WINDOW_GAVE_UP_BODY);
     try { tray.setImage(makeTrayIcon()); } catch {}
     return;
   }
@@ -1066,30 +1168,70 @@ function reportDeafHotkey() {
   } catch {}
 }
 
+// --- Dead windows -------------------------------------------------------------
+// Every window's web process is reloaded when it dies (web-contents-created in
+// app.whenReady). One that dies again and again within a minute is broken, not
+// unlucky: stop reloading it and say so, once.
+const RENDERER_RELOADS_ALLOWED = 3;
+const RENDERER_DEATH_WINDOW_MS = 60000;
+/** @type {Map<number, number[]>} webContents id -> recent death times */
+const rendererDeaths = new Map();
+const WINDOW_GAVE_UP_TITLE = "Part of GVoice keeps stopping";
+const WINDOW_GAVE_UP_BODY = "Dictation may show nothing. Click Restart GVoice in the menu bar.";
+
+function reportWindowGaveUp(/** @type {string} */ page, /** @type {number} */ deaths) {
+  console.error(`[${page}] died ${deaths} times in a minute – no more reloads`);
+  dlog("window-gave-up", { page, deaths });
+  if (windowGaveUp) return;
+  windowGaveUp = page;
+  updateTrayTooltip();
+  rebuildTrayMenu();
+  try {
+    if (Notification.isSupported()) new Notification({ title: WINDOW_GAVE_UP_TITLE, body: WINDOW_GAVE_UP_BODY }).show();
+  } catch {}
+}
+
 // Begin a dictation. Module-level (not a setupHotkey closure) so the tray's
 // left-click toggle can start one too — including on a run where the global
 // hotkey failed to arm, which is exactly when a clickable fallback matters.
 // Returns false if the press was rejected (previous dictation still in flight,
 // or no renderer to talk to).
-function startDictation(/** @type {number} */ maxHoldMs = MAX_HOLD_MS, mode = "dictation") {
+function startDictation(/** @type {number} */ maxHoldMs = MAX_HOLD_MS, mode = "dictation", trigger = "unknown") {
   if (!dictationWindow || dictationWindow.isDestroyed()) return false;
+  // The recorder's process died and is being reloaded. A press sent now is lost,
+  // and the session would sit "busy" with nothing listening. Refuse it, visibly.
+  if (dictationWindow.webContents.isCrashed() || dictationWindow.webContents.isLoading()) {
+    dlog("press-refused", { trigger, reason: "recorder-reloading" });
+    showPillResult("error", null, null, { reason: "GVoice was restarting its recorder. Press again." });
+    return false;
+  }
   if (!dictation.tryStart()) return false;
+  // A new dictation supersedes any correction-watch window from the last
+  // one, and clears a pop-up the user never answered.
+  correctionWatcher.disarm();
+  recentTypedWords = [];
+  hideVocab();
   latency.start(dictation.generation, sttProvider());
-  // One trip to the Accessibility API for both answers instead of two. It has
-  // to happen before the microphone starts — see captureDictationSource.
+  // One trip to the Accessibility API for every answer the press needs. It has
+  // to happen before the microphone starts – see captureDictationSource: a
+  // reading taken after capture opens can name the wrong app and refuse every
+  // paste. The trip is time-limited, so a busy app cannot hold the mic shut.
   const source = captureDictationSource();
   sourceApps.set(dictation.generation, source.pid);
   lastDestination = source.identity;
+  // Where these words are meant to land – read again right before the paste,
+  // so text can't be fired into a window the user moved to while we transcribed.
+  dictation.target = source.target;
   utteranceProfiles.set(dictation.generation, destinationProfiles.resolve(lastDestination));
   for (const old of utteranceProfiles.keys()) if (old < dictation.generation - 128) utteranceProfiles.delete(old);
   for (const old of sourceApps.keys()) if (old < dictation.generation - 128) sourceApps.delete(old);
   if (mode === "edit") voiceEditor?.begin(dictation.generation);
-  // `gen` rides along so the renderer can stamp its terminal events with the
-  // press they belong to (see isStalePress).
+  // The session name rides along so the renderer can stamp everything it sends
+  // back with the press it belongs to (see sessionOf / DictationSession.owns).
   const profile = {
     language: DICTATION_LANGUAGE,
     model: process.env.DEEPGRAM_MODEL || "nova-3",
-    gen: dictation.generation
+    sessionId: dictation.id
   };
   // A new dictation supersedes any correction-watch window from the last
   // one, and clears a pop-up the user never answered.
@@ -1097,10 +1239,13 @@ function startDictation(/** @type {number} */ maxHoldMs = MAX_HOLD_MS, mode = "d
   recentTypedWords = [];
   hideVocab();
   savedForegroundHwnd = captureForegroundWindow();
-  dlog("press", { profile, hwnd: savedForegroundHwnd });
   debug("[main] dictation:start lang=" + profile.language + " (hwnd=" + savedForegroundHwnd + ")");
   showPillForWindow(savedForegroundHwnd);
   dictationWindow.webContents.send("dictation:start", profile);
+  dlog("press", { trigger, profile, hwnd: savedForegroundHwnd, target: dictation.target });
+  // Self-heal a lost key-up: if the hold never reports a release, end it
+  // the same way a real release would (commit + transcribe + re-open the
+  // session) so a dropped event can't jam dictation until the next quit.
   if (maxHoldTimer) clearTimeout(maxHoldTimer);
   maxHoldTimer = setTimeout(() => fireRelease("max-hold"), maxHoldMs);
   return true;
@@ -1111,6 +1256,10 @@ function fireRelease(/** @type {string} */ source) {
   // toggle is no longer holding the mic open.
   trayHolding = false;
   if (maxHoldTimer) { clearTimeout(maxHoldTimer); maxHoldTimer = null; }
+  // Ended by anything but the keys and button themselves (the tray, the hold
+  // limit, the companion): the mouse toggle must not go on thinking it is held,
+  // or its next click "releases" nothing and the Option key is swallowed.
+  if (source !== "hotkey") hotkeyEngine?.resetMouseBack?.();
   if (!dictation.release()) return;
   latency.mark(dictation.generation, "released");
   dlog("release", { source });
@@ -1131,16 +1280,151 @@ function fireRelease(/** @type {string} */ source) {
   armPillSafetyHide(25000);
 }
 
+// Give up on the dictation that is running: the mic closes, nothing is pasted,
+// and the words still reach history so a cancel the user regrets is one tray
+// click ("Copy last result") from the clipboard.
+//
+// Three ways in: Escape, a click on the pill, and — indirectly — anything else
+// that decides the press is over. Every one of them lands here so the mic is
+// always told to stop. DictationSession.cancel() alone can't do that: it
+// re-opens the session immediately, and after that fireRelease() returns before
+// it ever sends `dictation:stop`, leaving the mic open with no way to close it.
+//
+// Returns false when there was nothing to cancel, so a stray Escape in another
+// app costs nothing.
+function cancelDictation(/** @type {string} */ source) {
+  // Read BEFORE cancel(): it re-opens the session in the same call, so asking
+  // afterwards always says "not recording" and the renderer is never stopped.
+  const wasRecording = dictation.isRecording;
+  const cancelledId = dictation.id;
+  // Two different presses can be given up on here. The one the session is
+  // holding – mic open, or waiting on its words. And the one whose words have
+  // already arrived: done() runs the moment they do, so the session is idle
+  // while cleanup and the paste take another second or two – and the pill goes
+  // on offering "click to cancel" for all of it. cancel() refuses the second
+  // one (nothing is busy), so mark it instead and the delivery path drops it
+  // right before it types.
+  const endedLive = dictation.cancel(source);
+  const endedDelivery = !endedLive && dictation.markCancelled(deliveringSessionId);
+  if (!endedLive && !endedDelivery) return false;
+  trayHolding = false;
+  if (maxHoldTimer) { clearTimeout(maxHoldTimer); maxHoldTimer = null; }
+  // The mouse back button is a toggle with its own memory of being held, and it
+  // never hears about a cancel that came from Escape or the pill. Without this,
+  // its next click reads as the release of a dictation that is already gone –
+  // nothing happens and the user has to click twice to talk again.
+  hotkeyEngine?.resetMouseBack?.();
+  dlog("cancel", {
+    source,
+    sessionId: endedLive ? cancelledId : deliveringSessionId,
+    wasRecording,
+    afterWords: endedDelivery
+  });
+  debug("[main] dictation cancelled (" + source + ")");
+  if (wasRecording && dictationWindow && !dictationWindow.isDestroyed()) {
+    dictationWindow.webContents.send("dictation:stop");
+  }
+  // Say so, briefly. No transcript and no clip to offer here: the words are
+  // still in flight and land in history when they arrive — so this is a plain
+  // notice, not a result pill with buttons that would act on the press before.
+  currentTranscript = null;
+  currentRecordingPath = null;
+  setPillState("cancelled", { holdMs: 2000 });
+  pillWindow?.showInactive();
+  armPillSafetyHide(4000);
+  return true;
+}
+
+// --- The companion's way in ---------------------------------------------------
+// Better Options used to hold down Ctrl+Cmd for the user by posting synthetic
+// key events. Anything that ate the release left the modifiers stuck and the
+// microphone open. Now it asks in words over a socket inside this instance's own
+// data folder, and the same three calls the keyboard makes — start, release,
+// cancel — are all it can reach. Nothing here is new behaviour: it is the
+// existing dictation path with a second doorbell.
+
+/** Can a press start right now? */
+function dictationReady() {
+  return !!serverPort && !!dictationWindow && !dictationWindow.isDestroyed();
+}
+
+async function startControlSocket() {
+  if (controlServer) return;
+  const socketPath = controlSocketPath(app.getPath("userData"));
+  const server = createControlServer({
+    socketPath,
+    log: (...args) => { console.error(...args); try { dlog("control-socket", args.map(String).join(" ")); } catch {} },
+    hooks: {
+      status: () => ({
+        ready: dictationReady() && !dictation.busy,
+        // The user's real setting (Settings → Microphone → "Keep the microphone
+        // ready"), not a guess: "always", "balanced" or "hold". A companion that
+        // reasons about warm-up latency needs the answer that is actually in
+        // force, and it changes while the socket is open.
+        micMode: micPrefs.micMode,
+        session: dictation.busy ? dictation.id : null
+      }),
+      start: () => {
+        if (!dictationReady()) return { ok: false, reason: "not-ready" };
+        if (dictation.busy) return { ok: false, reason: "busy" };
+        if (!startDictation(MAX_HOLD_MS, "dictation", "companion")) return { ok: false, reason: "refused" };
+        return { ok: true, sessionId: dictation.id };
+      },
+      // A stop or cancel naming a press that is no longer the live one is
+      // dropped here as well as in the socket: the companion's retry must never
+      // end the press that came after it.
+      stop: (sessionId, reason) => {
+        if (!dictation.owns(sessionId)) return;
+        fireRelease("companion:" + reason);
+      },
+      cancel: (sessionId, reason) => {
+        if (!dictation.owns(sessionId)) return;
+        cancelDictation("companion:" + reason);
+      },
+      // Step 12: while a companion owns the button, the raw mouse-back toggle
+      // must stop firing its own presses — two triggers racing the same start
+      // call is the stuck-mic bug the socket exists to end. Re-enabled the
+      // instant the companion drops so the mouse still works standalone.
+      onCompanion: (connected) => {
+        try { hotkeyEngine?.setMouseBackEnabled?.(!connected); } catch {}
+      }
+    }
+  });
+  try {
+    await server.start();
+    controlServer = server;
+  } catch (error) {
+    // A missing socket is not a broken app: the keyboard and the tray still
+    // dictate, and the companion shows "update needed" and passes the button
+    // through to whatever the mouse normally does.
+    console.error("[main] control socket failed to start:", error && error.message);
+    dlog("control-socket-failed", { path: socketPath, error: String(error && error.message) });
+  }
+}
+
 async function setupHotkey() {
   if (TEST_MODE) return true;
   if (!serverPort || !dictationWindow) return false;
   try {
     const mod = await import("./src/hotkey.js");
     hotkeyEngine = mod.startHotkey({
-      onPress: () => { startDictation(MAX_HOLD_MS, voiceEditor?.wantsDictation() ? "edit" : "dictation"); },
-      onRelease: () => { fireRelease("hotkey"); }
+      onPress: () => { startDictation(MAX_HOLD_MS, voiceEditor?.wantsDictation() ? "edit" : "dictation", "hotkey"); },
+      onRelease: () => { fireRelease("hotkey"); },
+      onCancel: () => { cancelDictation("escape"); }
     });
     updateTrayTooltip();
+    // The control socket comes up before this (a companion must be able to
+    // connect and hear "not ready"), so a companion can already own the button
+    // by the time the hotkey engine exists. onCompanion fired into a null
+    // engine and did nothing, leaving the raw mouse-back toggle live alongside
+    // the companion – the double-trigger stuck-mic bug the socket exists to
+    // end. Ask the socket where things actually stand instead of assuming.
+    const companionOwnsButton = !!controlServer?.hasCompanion?.();
+    try { hotkeyEngine.setMouseBackEnabled?.(!companionOwnsButton); } catch {}
+    // Logged so this gate is visible in debug.log. It is silent safety code:
+    // without a line here, the only way to know it worked is the stuck mic it
+    // exists to prevent.
+    dlog("mouse-back-gate", { enabled: !companionOwnsButton, companion: companionOwnsButton, at: "setup" });
     startHookWatchdog(hotkeyEngine.sawEvent);
     const altLabel = process.platform === "darwin"
       ? "right Option (⌥), left Ctrl+Cmd, or mouse back button"
@@ -1199,14 +1483,36 @@ function openAccessibilitySettings() {
 // during the IPC round-trip. The retry path passes nothing (the user is
 // interacting with the pop-up, so there's no window to restore).
 //
+// `deliver: false` runs everything except the paste: noise strip, vocabulary
+// repair, cleanup, trailing punctuation — then hands the finished text back
+// without touching the clipboard, the focused app or the user's cursor. That is
+// what a transcript belonging to a press that is already over gets: the words
+// are worth keeping in history, but they must never land in whatever the user
+// is typing into now.
+//
+// `target` (live path only): the app, window and focused element captured at
+// press time. typeText re-reads them immediately before the clipboard write and
+// refuses to paste into anything else — the returned `copied` flag says the
+// text was held back and waits in history and on the pill's Copy button.
+//
+// `abandoned` (live path only): asked once the cleanup pass is done, right
+// before the paste machinery. The user can still click the pill or hit Escape
+// during that second, and a "yes" here means the cleaned words come back with
+// `cancelled` set and nothing is typed or copied.
+//
 // @param {string} transcript
 // @param {number | null} [restoreHwnd]
-// @returns {Promise<{ text: string, pasted: boolean, verified: boolean | null, likelyMissed: boolean, notice: string } | null>}
-async function processTranscript(transcript, restoreHwnd = null, { canPaste = () => true, gen, sourceApp = null, outputProfile = "plain" } = {}) {
+// @param {{ deliver?: boolean, target?: import("./src/foreground.js").ForegroundTarget | null, abandoned?: (() => boolean) | null, committed?: (() => void) | null, canPaste?: () => boolean, gen?: number, sourceApp?: number | null, outputProfile?: string }} [options]
+// @returns {Promise<{ text: string, pasted: boolean, cancelled?: boolean, skipped?: boolean, verified: boolean | null, likelyMissed: boolean, deliveryState?: string, notice: string } | null>}
+async function processTranscript(
+  transcript,
+  restoreHwnd = null,
+  { deliver = true, target = null, abandoned = null, committed = null, canPaste = () => true, gen, sourceApp = null, outputProfile = "plain" } = {}
+) {
   if (!transcript || !transcript.trim()) return null;
   let textToType = stripWhisperNoiseTokens(transcript.trim());
   if (!textToType) {
-    dlog("noise-only", { original: transcript });
+    dlog("noise-only", { length: transcript.length });
     return null;
   }
 
@@ -1216,7 +1522,7 @@ async function processTranscript(transcript, restoreHwnd = null, { canPaste = ()
   // leaving unrelated words untouched. No-op when the dictionary is empty.
   const corrected = vocab.correctTranscript(textToType);
   if (corrected !== textToType) {
-    dlog("vocab-correct", { from: textToType, to: corrected });
+    dlog("vocab-correct", { beforeLength: textToType.length, afterLength: corrected.length });
     textToType = corrected;
   }
 
@@ -1261,7 +1567,7 @@ async function processTranscript(transcript, restoreHwnd = null, { canPaste = ()
     try {
       const { polishTranscript, takeCleanupError, FREE_LIMIT_MESSAGE } = await import("./src/cleanup.js");
       textToType = await polishTranscript(textToType, { profile: outputProfile });
-      debug("[main] cleanup done (" + (Date.now() - t0) + "ms):", JSON.stringify(textToType));
+      debug("[main] cleanup done (" + (Date.now() - t0) + "ms):", JSON.stringify({ length: textToType.length }));
       // polishTranscript swallows its own errors and returns the raw text, so a
       // permanently dead cleanup engine looks exactly like a working one with
       // nothing to fix. Say it out loud once instead of only in a console log.
@@ -1285,186 +1591,123 @@ async function processTranscript(transcript, restoreHwnd = null, { canPaste = ()
     textToType += ".";
   }
 
-  // Check whether an editable field is actually focused BEFORE we paste, while
-  // the user's app is still frontmost. On macOS this reads the Accessibility
-  // API (true/false); on Windows it returns null (we fall back to the restore
-  // signal). null = couldn't tell, so don't hold it against the paste.
-  if (!canPaste()) return { text: textToType, pasted: false, skipped: true, verified: null, likelyMissed: false, notice: "Saved in Recent dictations." };
-  const fieldFocused = isEditableFieldFocused();
+  // The user gave up while this was in the cleanup pass – the one slow step
+  // between the words arriving and the paste. Stop before the paste machinery
+  // and before the clipboard is touched: a cancel that still typed the words
+  // would be the app arguing with the key they pressed. The cleaned text comes
+  // back so history keeps it, exactly like a cancel during the recording.
+  const wasAbandoned = () => deliver && typeof abandoned === "function" && abandoned();
+  const cancelledResult = () => {
+    dlog("processed-cancelled", { len: textToType.length });
+    return { text: textToType, pasted: false, cancelled: true, verified: null, likelyMissed: false, deliveryState: "cancelled", notice: cleanupNotice };
+  };
+  if (wasAbandoned()) return cancelledResult();
 
+  // Nobody is going to receive this text – stop before the paste machinery and
+  // hand back the cleaned words for the history entry.
+  if (!deliver) {
+    dlog("processed-no-deliver", { len: textToType.length });
+    return { text: textToType, pasted: false, verified: null, likelyMissed: false, notice: cleanupNotice };
+  }
+
+  const superseded = () => ({ text: textToType, pasted: false, skipped: true,
+    verified: null, likelyMissed: false, deliveryState: "superseded", notice: "Saved in Recent dictations." });
+  if (!canPaste()) return superseded();
+  const fieldFocused = isEditableFieldFocused();
   const tType = Date.now();
   const { typeText } = await import("./src/typing.js");
+  if (!canPaste()) return superseded();
+  if (wasAbandoned()) return cancelledResult();
   let restored = false;
-  if (!canPaste()) return { text: textToType, pasted: false, skipped: true, verified: null, likelyMissed: false, notice: "Saved in Recent dictations." };
-  if (restoreHwnd != null) {
-    restored = restoreForegroundWindow(restoreHwnd);
-    dlog("paste", { hwnd: restoreHwnd, restored });
-  }
-  // Best-effort confidence that the text actually landed in a text field.
-  // Clipboard paste is fire-and-forget, so we can't truly confirm — but these
-  // signals tell us it did NOT: typeText threw, or (Windows) we had a foreground
-  // window to restore and the restore failed. macOS's editor-role probe is only
-  // one signal: terminal-style editors can accept ⌘V while reporting false.
-  let typed = true;
-  let clipboardLease;
-  // Which arm of the ownership check we landed on, for the log and for the
-  // wording on the pill. "same" until the check actually runs.
+  if (restoreHwnd != null) restored = restoreForegroundWindow(restoreHwnd);
   let pasteOwnership = "same";
+  let verification;
+  let lease;
+  let typed = false;
+  let deliveryState = "failed";
+  let verified = null;
+  let likelyMissed = false;
+  let readTarget = "";
+  let readLen = null;
+  let pastedIntoTerminal = false;
   latency.mark(gen, "pasteStart");
   try {
-    // Ownership. The old code refused whenever this read came back null, and a
-    // null means only "Accessibility wouldn't answer" — so a busy app produced a
-    // red "the paste didn't land" pill on a dictation that was perfectly fine.
-    // The answer is NOT to paste anyway (that puts the text in whatever window
-    // happens to be in front); it is to stop calling the refusal a failure. See
-    // decidePasteOwnership, and the `skipped` handling below.
-    //
-    // One retry first: the read is capped by a messaging timeout, and under load
-    // the second attempt usually answers. Only paid on the null path.
-    let ownershipUnknown = false;
-    const ownershipAllows = () => {
+    lease = await typeText(textToType, { expectedPid: sourceApp, target, canPaste: () => {
+      if (!canPaste() || wasAbandoned()) return false;
       let verdict = decidePasteOwnership(sourceApp, captureForegroundApp());
       if (verdict === "unknown") verdict = decidePasteOwnership(sourceApp, captureForegroundApp());
-      ownershipUnknown = verdict === "unknown";
       pasteOwnership = verdict;
-      return verdict === "same";
-    };
-    clipboardLease = await typeText(textToType, { canPaste: () => canPaste() && ownershipAllows() });
-    typed = !!clipboardLease;
+      if (verdict !== "same" || (restoreHwnd != null && !restored)) return false;
+      // Point of no return: the clipboard is written the instant this returns.
+      // Give up the right to cancel HERE, not after the paste – otherwise an
+      // Escape during the paste painted "Cancelled – nothing pasted" over
+      // words that were landing in the document.
+      if (typeof committed === "function") { try { committed(); } catch {} }
+      // This snapshot lives only until delivery settles; no field text is logged.
+      verification = capturePasteVerification();
+      return true;
+    } });
+    // The destination changed between the press and now (another window, or a
+    // text field that went away). Nothing was pasted or copied.
+    if (lease?.destinationChanged) {
+      pasteOwnership = "different";
+      dlog("paste-skipped", { reason: lease.reason, len: textToType.length });
+    } else if (lease?.refused) pasteOwnership = "different";
+    typed = !!lease && lease.dispatched !== false;
     if (typed) latency.mark(gen, "pasteEnd");
+    // Cancelled after the check above but before the clipboard was written:
+    // the typer refused, nothing left. Obey it, and keep the clipboard as is.
+    if (!lease && wasAbandoned()) deliveryState = "cancelled";
+    else if (!canPaste()) deliveryState = "superseded";
+    else if (pasteOwnership !== "same") deliveryState = "refused";
+    else if (!typed) deliveryState = "failed";
+    else {
+      const windowsFocusLost = restoreHwnd != null && isForegroundWindow(restoreHwnd) === false;
+      await new Promise(resolve => setTimeout(resolve, 150));
+      const snapshot = verification?.read();
+      readTarget = snapshot?.app || "";
+      readLen = typeof snapshot?.value === "string" ? snapshot.value.length : null;
+      pastedIntoTerminal = snapshot?.isTerminal === true;
+      ({ verified, likelyMissed, deliveryState } = assessPasteOutcome({
+        typed: !windowsFocusLost, restoreRequired: restoreHwnd != null, restored,
+        fieldFocused, isTerminal: snapshot?.isTerminal || false,
+        fieldValue: snapshot?.value ?? null, beforeValue: verification?.beforeValue,
+        sameField: snapshot?.sameField === true,
+        text: /^[\s.,;:!?\-)\]"'`]/.test(textToType) ? textToType : " " + textToType
+      }));
+      if (!canPaste()) deliveryState = "superseded";
+    }
   } catch (error) {
-    typed = false;
-    console.error("[main] typeText failed:", error && (error.stack || error.message));
+    deliveryState = "failed";
+    console.error("[main] paste delivery failed:", error?.message);
+  } finally {
+    try { verification?.dispose(); } catch {}
+    if (lease?.destinationChanged) deliveryState = "refused";
+    // The user's own clipboard goes back whatever happened (owner, 2026-09-15).
+    // The words live on in history, and the pill's Copy button.
+    else if (lease) deliveryState = lease.finish(deliveryState);
   }
-  // The lease hands the user's clipboard back 250ms after the paste key is
-  // sent. Everything below — the 150ms settle plus Accessibility reads capped
-  // at 200ms each — can easily outlast that, and when it does the decision to
-  // KEEP the text loses the race and the dictation is gone from the clipboard
-  // it was supposed to be rescuable from. Hold the lease across the check and
-  // end it explicitly at every exit below.
-  const pasteSentAt = Date.now();
-  clipboardLease?.armRestore?.(VERIFY_HOLD_MS);
-  // A real clipboard hold has keep(); the keyboard-typing path and a refused
-  // paste do not. Only the first has anything of ours on the clipboard to end.
-  const heldClipboard = typeof clipboardLease?.keep === "function" ? clipboardLease : null;
-  const releaseClipboard = (keepText) => {
-    if (!keepText) {
-      clipboardLease?.armRestore?.(RESTORE_DELAY_MS - (Date.now() - pasteSentAt));
-      return;
-    }
-    if (heldClipboard) {
-      // False here means the clipboard no longer holds our text — worth seeing
-      // in the log, because it is the exact shape of the bug this hold fixes.
-      if (heldClipboard.keep() === false) dlog("paste-clipboard-lost", { elapsed: Date.now() - pasteSentAt });
-      return;
-    }
-    // No hold, and the text is meant to stay recoverable: the paste was refused
-    // (ownership, or a throw before the clipboard was ever written) or the text
-    // was typed key by key. Nothing of ours is on the clipboard, so put it
-    // there — otherwise the pill says "Click Copy" about a clipboard that never
-    // received it, and ⌘V rescues nothing.
-    try { clipboard.writeText(textToType); dlog("paste-clipboard-rescue", { len: textToType.length }); }
-    catch (error) { console.error("[main] clipboard rescue failed:", error && error.message); }
-  };
-  // The ownership check refused: nothing was sent anywhere, so this is not a
-  // failed paste. Say where the text IS rather than "the paste didn't land",
-  // and leave it on the clipboard so a single ⌘V puts it wherever the user
-  // wants it. This is the whole price of refusing when we can't tell.
-  if (!typed && pasteOwnership !== "same") {
-    releaseClipboard(true);
-    dlog("paste-refused", { reason: pasteOwnership, sourcePid: sourceApp ?? null });
-    return { text: textToType, pasted: false, skipped: true, verified: null, likelyMissed: false,
-      notice: pasteOwnership === "different"
-        ? "Not pasted — you moved to another app. It's on your clipboard."
-        : "Not pasted — couldn't tell which app was in front. It's on your clipboard." };
-  }
-  const transportSucceeded = typed && !(restoreHwnd != null && restored === false);
-  // Windows paste verification: confirm focus is STILL the window we restored to
-  // right after sending Ctrl+V. If another app grabbed the foreground mid-paste,
-  // the keystroke went somewhere else — downgrade so the text stays recoverable
-  // from the pill instead of a false "Success". isForegroundWindow returns null
-  // off Windows (and when koffi is unavailable), which we never hold against a
-  // paste. This is the Windows counterpart to macOS's AX focus/read-back check.
-  // Any throw between here and the decision would leave the clipboard held
-  // for the full backstop and block the next dictation behind it. Hand the
-  // clipboard straight back instead.
-  try {
-    let windowsFocusLost = false;
-    if (transportSucceeded && process.platform === "win32" && restoreHwnd != null) {
-      const stillForeground = isForegroundWindow(restoreHwnd);
-      if (stillForeground === false) {
-        windowsFocusLost = true;
-        dlog("paste-foreground-lost", { hwnd: restoreHwnd });
-      }
-    }
-    // Post-paste verification (macOS, best-effort): re-read the target even when
-    // the pre-paste role probe said "not editable". A terminal identity or an
-    // exact readable match can explain that false negative. An unknown/no-target
-    // result cannot downgrade a successful ⌘V: custom Electron editors (including
-    // Codex in cmux) accept the paste while exposing no usable AX target at all.
-    // Terminals draw TUIs (tmux, vim, editors, Claude Code) whose on-screen text
-    // is full of box borders and line wraps, so reading it back and looking for
-    // our pasted string gives false negatives. Skip the value check for terminals
-    // and trust the paste —
-    // the alternative was a sticky false "paste failed" error on every terminal.
-    // The terminal check and the read-back are one AX snapshot (readbackPasteTarget)
-    // so a focus change can't make them disagree about which app is focused.
-    let readTarget = "";
-    let readLen = /** @type {number | null} */ (null);
-    let isTerminal = false;
-    let fieldValue = /** @type {string | null} */ (null);
-    if (transportSucceeded && !windowsFocusLost) {
-      await new Promise((resolve) => setTimeout(resolve, 150)); // let the paste settle
-      const snapshot = readbackPasteTarget();
-      isTerminal = snapshot.isTerminal;
-      fieldValue = snapshot.value;
-      const app = snapshot.app;
-      readTarget = app;
-      readLen = typeof fieldValue === "string" ? fieldValue.length : null;
-    }
-    const { pasted, verified, likelyMissed } = assessPasteOutcome({
-      typed: typed && !windowsFocusLost,
-      restoreRequired: restoreHwnd != null,
-      restored,
-      fieldFocused,
-      isTerminal,
-      fieldValue,
-      text: textToType
-    });
-    debug("[main] paste done (" + (Date.now() - tType) + "ms paste, restored=" + restored + ", fieldFocused=" + fieldFocused + ", verified=" + verified + ", pasted=" + pasted + ")");
-    // target/readLen say WHY a paste came back unverified — which app owned the
-    // field and whether anything was readable in it — without ever logging what
-    // the user dictated or what was already in the field.
-    dlog("typed", {
-      len: textToType.length,
-      ms: Date.now() - tType,
-      fieldFocused,
-      pasted,
-      verified,
-      target: readTarget,
-      readLen,
-      // Did the press-path read get an app at all, and did the ownership check
-      // agree? A run of sourcePid:null means PRESS_TIMEOUT_S is too tight and is
-      // buying microphone latency by disarming the guard.
-      sourcePid: sourceApp ?? null,
-      ownership: pasteOwnership
-    });
-    // verified: true = read back and confirmed, false = read back and missing,
-    // null = couldn't read the field to check. Only the OS paste transport (or
-    // Windows focus restoration) determines hard success/failure; AX is advisory.
-    // likelyMissed is the middle ground — never an error pill, but enough to keep
-    // the text on the clipboard so ⌘V rescues it. Two shapes qualify (both in
-    // assessPasteOutcome): a field we read back that held other text but not
-    // ours, and "no editable field before the paste, nothing readable after it"
-    // — ⌘V into the desktop. The seven false "paste failed" pills that got the
-    // hard downgrade removed all read back EMPTY (readLen 0 — an app that just
-    // doesn't expose its composer) and stay clear of both.
-    releaseClipboard(!pasted || likelyMissed);
-    return { text: textToType, pasted, verified, likelyMissed, notice: cleanupNotice };
-  } catch (error) {
-    clipboardLease?.restore?.();
-    throw error;
-  }
+  if (deliveryState === "cancelled") return cancelledResult();
+  const pasted = typed && (deliveryState === "verified" || deliveryState === "sent-unverified");
+  const skipped = deliveryState === "refused" || deliveryState === "superseded";
+  // A terminal's text can never be read back, so every terminal paste is
+  // "unverified". Saying so on each one is noise: the owner asked for a plain
+  // Success there (2026-09-12).
+  const notice = deliveryState === "verified" || (deliveryState === "sent-unverified" && pastedIntoTerminal) ? cleanupNotice
+    : deliveryState === "superseded" ? "Saved in Recent dictations. Your newer clipboard was kept."
+    : deliveryState === "refused" ? "Not pasted. Saved in Recent dictations."
+    : "Delivery unverified. Text saved in Recent dictations.";
+  dlog("typed", { len: textToType.length, ms: Date.now() - tType, fieldFocused,
+    pasted, verified, deliveryState, target: readTarget, readLen,
+    sourcePid: sourceApp ?? null, ownership: pasteOwnership,
+    clipboardChangeCount: getClipboardChangeCount() });
+  // A refusal is not a failure: the user moved on, or the app in front could
+  // not be confirmed. The pill stays green and offers Copy rather than flashing
+  // an error for a paste the app chose not to send (decisions.md, 2026-09-07: a
+  // refusal is never reported as a failure).
+  const copied = deliveryState === "refused";
+  return { text: textToType, pasted, copied, skipped, verified, likelyMissed, deliveryState, notice };
+
 }
 
 // How many recent recordings to keep on disk — matched to the history length so
@@ -1476,7 +1719,7 @@ const MAX_RECORDINGS = 50;
 // RECORDING_RETENTION_DAYS bounds how long clips linger on top of the count cap.
 // Both are read fresh each call so a Settings change applies without a restart.
 function recordingsEnabled() {
-  return !/^(false|0|no|off)$/i.test(String(process.env.RECORDINGS_ENABLED ?? "true").trim());
+  return recordingsEnabledFrom(process.env);
 }
 function recordingMaxAgeMs() {
   const days = Number(process.env.RECORDING_RETENTION_DAYS ?? 7);
@@ -1545,9 +1788,10 @@ function sttProvider() {
 // the Deepgram engine (see retryCanRun), and on demand from the pill's
 // "Transcribe again" button or the tray.
 //
-// The recovered text goes to the CLIPBOARD and the pill, not straight into the
-// focused app: the round-trip takes a few seconds, by which time the window the
-// user was dictating into is often no longer the one in front.
+// The recovered text goes to the pill (its Copy button) and history, not
+// straight into the focused app: the round-trip takes a few seconds, by which
+// time the window the user was dictating into is often no longer the one in
+// front. It never goes on the clipboard by itself (owner, 2026-09-15).
 //
 // @param {string | null} recordingPath
 // @returns {Promise<string | null>} the recovered text, "" if the retry ran and
@@ -1593,18 +1837,17 @@ async function retranscribeRecording(recordingPath, { deliver = true, canDeliver
     if (!deliver) return cleaned;
     // It WORKED — green dot. (This used to ride the error state purely to buy
     // the 30s linger, so a rescued dictation looked like a failure.) The text is
-    // only on the clipboard, so keep the long linger via holdMs.
+    // only on the pill and in history, so keep the long linger via holdMs.
     //
-    // Both the clipboard and the pill are gated on still owning the moment: a
-    // press during the round trip starts a new dictation, and dropping this
-    // (older) text onto the clipboard behind it would silently replace whatever
-    // the user had copied — with no pill to explain where their ⌘V went. The
+    // The pill is gated on still owning the moment: a press during the round
+    // trip starts a new dictation, and its pill must not be painted over. The
     // rescued text is still in history and the tray.
     if (ownsRecovery()) {
-      clipboard.writeText(cleaned);
-      showPillResult("success", cleaned, recordingPath, { reason: "Got it on retry — press ⌘V.", holdMs: 30000 });
+      showPillResult("success", cleaned, recordingPath, { reason: "Got it on retry – click Copy.", holdMs: 30000 });
     }
-    recordTranscript(cleaned, false, recordingPath);
+    // Recovered from a saved clip, not from the live press that recorded it —
+    // the tray says so, and the history entry carries the flag.
+    recordTranscript(cleaned, false, recordingPath, { recovered: true });
     rebuildTrayMenu();
     return cleaned;
   } catch (error) {
@@ -1624,7 +1867,7 @@ async function retranscribeRecording(recordingPath, { deliver = true, canDeliver
 async function retranscribeOnDemand(/** @type {string | null} */ recordingPath) {
   // A dictation is live right now (tray "Transcribe again" is clickable during
   // one). Running would upload the clip and then throw every result away —
-  // retranscribeRecording gates its pill AND its clipboard write on pillFree() —
+  // retranscribeRecording gates its pill on pillFree() –
   // and the message below would paint over a live "Listening…". The pill the
   // user is already looking at is the answer, so leave it alone.
   if (!pillFree()) return;
@@ -1668,29 +1911,30 @@ function setupIpc() {
   });
   ipcMain.handle("benchmark:open", event => { if (settingsSender(event)) benchmarkWindow.open(); });
   voiceEditor = createVoiceEditWindow({ root: __dirname,
-    start: () => startDictation(MAX_HOLD_MS, "edit"), stop: () => fireRelease("voice-edit"),
+    start: () => startDictation(MAX_HOLD_MS, "edit", "voice-edit"), stop: () => fireRelease("voice-edit"),
     ...(TEST_MODE ? { request: async ({ selection, instruction }) => {
       if (typeof testEditResponse !== "string") throw new Error("No offline editing response configured.");
       return { original: selection, instruction, replacement: testEditResponse };
     } } : {}) });
   // createTray() built the first menu before this line ran, so that menu asked
   // `voiceEditor && !voiceEditor.registered` of a null and advertised the
-  // shortcut unconditionally — including on a run where another app owns it and
+  // shortcut unconditionally – including on a run where another app owns it and
   // pressing it does nothing. Rebuild now that the answer exists.
   rebuildTrayMenu();
   if (!voiceEditor.registered) {
-    console.error("[voice-edit] Cmd+Shift+E is already taken — use the tray item instead");
+    console.error("[voice-edit] Cmd+Shift+E is already taken – use the tray item instead");
     dlog("voice-edit-shortcut-unavailable", {});
   }
-  ipcMain.on("dictation:timing", (_event, stage, metadata, gen) => {
+  ipcMain.on("dictation:timing", (_event, stage, metadata, eventSessionId) => {
     if (_event.sender !== dictationWindow?.webContents) return;
-    latency.mark(gen, stage, metadata);
+    latency.mark(genOf(eventSessionId), stage, metadata);
   });
-  ipcMain.on("dictation:transcript", async (_event, payload, pressGen) => {
+  ipcMain.on("dictation:transcript", async (_event, payload, eventSessionId) => {
     if (_event.sender !== dictationWindow?.webContents) return;
-    const gen = Number.isInteger(pressGen) ? pressGen : dictation.generation;
+    const sessionId = sessionOf(eventSessionId);
+    const gen = genOf(sessionId);
+    // One terminal event per press: a duplicate must never paste or save twice.
     if (!dictation.claimTerminal(gen)) return;
-    const stale = isStalePress(gen);
     // payload is { text, chunks, sampleRate } on a real transcript, or "" on a
     // server-decided empty (silence gate / hallucination filter).
     // Not const: an empty stream that the batch retry rescues below replaces
@@ -1701,34 +1945,66 @@ function setupIpc() {
     // Captured audio proves the mic worked at least once — unlocks the relaunch
     // recovery rung for a later wedge.
     if (chunks && chunks.length) everHadLiveMic = true;
-    // Which press this transcript belongs to. Everything below can run for
-    // seconds (cleanup, the batch rescue, the paste) while `busy` has already
-    // been cleared — by the rescue's early done() OR, on an ordinary dictation,
-    // by release()'s 25-second safety timer. A press in that window starts a NEW
-    // dictation, and the shared state below belongs to that one from then on.
-    const stillMine = () => !stale && dictation.generation === gen;
-    // Grab the window THIS press captured while it's still ours. Read later
-    // (after the rescue round trip) it could already be the next dictation's.
-    const targetHwnd = savedForegroundHwnd;
+    // Which press this transcript belongs to. Two ways it can stop being the
+    // live one. It may already have been overtaken before it even arrived (the
+    // renderer stamped it with a press that is over) – success used to skip that
+    // check while errors had it, so a late transcript could paste into the
+    // middle of the next dictation. And everything below can run for seconds
+    // (cleanup, the batch rescue, the paste) while `busy` has already been
+    // cleared – by the rescue's early done() OR, on an ordinary dictation, by
+    // release()'s safety timer. A press in that window starts a NEW dictation,
+    // and the shared state below belongs to that one from then on. One question
+    // covers both: does the session still own this name?
+    const stillMine = () => dictation.owns(sessionId);
+    // A spoken editing instruction is not a dictation: hand it to the edit window.
     if (voiceEditor?.owns(gen)) {
-      if (!stale) { dictation.finalize(); dictation.done(); hidePill(); }
+      if (stillMine()) { dictation.finalize(); dictation.done(); hidePill(); }
       latency.finish(gen, "editing");
-      if (!stale) await voiceEditor.accept(text, gen);
+      if (stillMine()) await voiceEditor.accept(text, gen);
+      return;
+    }
+    // The user stopped this press on purpose while its words were still out.
+    // Cancel means cancel: nothing is pasted, nothing is shown, the clipboard
+    // is left alone. The words and the clip still go to history, so a cancel
+    // the user regrets is one tray click from being copied back.
+    if (dictation.wasCancelled(sessionId)) {
+      const cancelledPath = chunks && chunks.length ? await saveTempRecording(chunks, sampleRate) : null;
+      dlog("transcript-cancelled", { sessionId, len: (text || "").trim().length });
+      latency.finish(gen, "cancelled");
+      // Strip the Whisper noise tokens first, like every other path that logs a
+      // transcript nobody received. Without it "Copy last result" after a cancel
+      // can hand back a bare "[BLANK_AUDIO]".
+      recordTranscript(stripWhisperNoiseTokens((text || "").trim()) || text, false, cancelledPath, {
+        sessionId,
+        deliveryState: "cancelled"
+      });
+      rebuildTrayMenu();
       return;
     }
     latency.mark(gen, "transcript");
-    if (stale) {
-      const path = await saveTempRecording(chunks, sampleRate);
-      recordTranscript(text, false, path);
-      rebuildTrayMenu();
-      latency.finish(gen, "superseded");
-      return;
-    }
-    const { releaseAt, sinceRelease } = dictation.finalize();
+    const mineOnArrival = stillMine();
+    // Grab the window THIS press captured while it's still ours. Read later
+    // (after the rescue round trip) it could already be the next dictation's –
+    // and if the transcript was already stale on arrival it was never ours.
+    const targetHwnd = mineOnArrival ? savedForegroundHwnd : null;
+    // Same reasoning for the destination this press started in: read it now,
+    // while it is still ours. A press during the rescue round trip replaces it.
+    const targetDestination = mineOnArrival ? dictation.target : null;
+    // finalize() stops the safety timer, which belongs to whichever press is
+    // live. A transcript that arrived late must not disarm the anti-jam backstop
+    // of the dictation the user is holding right now.
+    const { releaseAt, sinceRelease } = mineOnArrival
+      ? dictation.finalize()
+      : { releaseAt: Date.now(), sinceRelease: 0 };
     const sourceApp = sourceApps.get(gen);
-    const canPaste = () => stillMine() && Date.now() - releaseAt < 30000;
-    debug("[main] received transcript (" + sinceRelease + "ms after release):", JSON.stringify(text));
-    dlog("transcript", { len: (text || "").trim().length, sinceRelease });
+    // Ownership is settled on arrival, not re-asked at paste time. The session
+    // re-opens the moment the words land (below), so a quick second press takes
+    // it over while THESE words are still in cleanup. Asking stillMine() here
+    // threw the first sentence away on every fast second press. The paste still
+    // checks the app in front is the one this press started in.
+    const canPaste = () => mineOnArrival && Date.now() - releaseAt < 30000;
+    debug("[main] received transcript (" + sinceRelease + "ms after release):", JSON.stringify({ length: text?.length || 0 }));
+    dlog("transcript", { len: (text || "").trim().length, sinceRelease, sessionId, mine: mineOnArrival });
 
     // Set when the audio was already written to disk by the empty-stream rescue
     // below, so the normal path doesn't save a second copy of the same clip.
@@ -1744,23 +2020,39 @@ function setupIpc() {
       // seconds (minutes on a half-open connection), and every hotkey press in
       // that window would otherwise be dropped in silence — no pill, no clue.
       // done() only clears the busy flag, so the normal path's finally can call
-      // it again harmlessly when a rescue falls through.
-      dictation.done();
+      // it again harmlessly when a rescue falls through. Never on a transcript
+      // that was already stale: `busy` belongs to the newer press by then.
+      if (mineOnArrival) dictation.done();
       if (!chunks || !chunks.length) {
         latency.finish(gen, "empty");
-        hidePill();
+        if (mineOnArrival) hidePill();
         return;
       }
+      // The pill says "click to cancel" through the save and the retry, so a
+      // click there has to find this press. Same window the normal path opens
+      // below, just seconds earlier.
+      if (mineOnArrival) deliveringSessionId = sessionId;
       const failedPath = await saveTempRecording(chunks, sampleRate);
       // The live stream heard nothing, but the audio is on disk — try the batch
       // API before calling it a failure. That recovers every dictation the
       // stream lost to a slow connect or a timeout rather than to real silence.
-      // deliver:false keeps the recovered text OUT of the clipboard-and-⌘V
-      // treatment: it comes back here and goes through the normal paste, so a
-      // stream that came back blank costs the user a second, not a manual
-      // paste. (It also means the rescued text gets the cleanup pass, which the
-      // clipboard route skipped.)
-      const recovered = failedPath ? await retranscribeRecording(failedPath, { deliver: false }) : null;
+      // deliver:false keeps the recovered text OUT of the click-Copy pill: it
+      // comes back here and goes through the normal paste, so a stream that
+      // came back blank costs the user a second, not a manual paste. (It also
+      // means the rescued text gets the cleanup pass, which that route skips.)
+      const recovered = failedPath
+        ? await retranscribeRecording(failedPath, { deliver: false, canDeliver: () => !dictation.wasCancelled(sessionId) })
+        : null;
+      if (deliveringSessionId === sessionId) deliveringSessionId = null;
+      // Cancelled during the save or the retry. The pill already says so; the
+      // words and the clip go to history like any other cancel.
+      if (dictation.wasCancelled(sessionId)) {
+        dlog("transcript-cancelled-late", { sessionId, len: (recovered || "").length });
+        latency.finish(gen, "cancelled");
+        recordTranscript(recovered || "", false, failedPath, { sessionId, deliveryState: "cancelled" });
+        rebuildTrayMenu();
+        return;
+      }
       // A press during the round trip started a NEW dictation (the session was
       // re-opened above so presses aren't swallowed). Pasting this older text
       // now would land it in the middle of what the user is saying right now —
@@ -1768,7 +2060,7 @@ function setupIpc() {
       // and the tray's Recent dictations, where it stays recoverable.
       if (recovered && !stillMine()) {
         latency.finish(gen, "superseded");
-        recordTranscript(recovered, false, failedPath);
+        recordTranscript(recovered, false, failedPath, { deliveryState: "recovered", sessionId });
         rebuildTrayMenu();
         return;
       }
@@ -1789,11 +2081,37 @@ function setupIpc() {
         // that case. Either way, record the failed attempt so the clip stays
         // playable from the tray.
         latency.finish(gen, "failed");
-        recordTranscript("", false, failedPath);
+        recordTranscript("", false, failedPath, { deliveryState: "failed", sessionId });
         rebuildTrayMenu();
         return;
       }
     }
+
+    // The words are in. Re-open the session NOW, before the cleanup pass and the
+    // paste – both of which take about a second, and both of which the NEXT
+    // press does not need to wait for. Until this line the trigger was dead for
+    // that whole second: press, nothing at all, press again a beat later, fine.
+    // The renderer is free the moment a transcript lands (mic shut, nothing
+    // draining), so a press from here on records cleanly.
+    //
+    // Delivery of THESE words is already decided: mineOnArrival and
+    // targetDestination were read at the top of this handler, so the sentence
+    // still lands in the window this press captured, even if a new press owns
+    // the session by the time the paste runs. The `finally` below calls done()
+    // again and that is a no-op.
+    //
+    // Not sooner than this. A press while the audio is still being drained or
+    // committed makes the renderer throw that recording away – one shared
+    // buffer, one utterance at a time – and losing a spoken sentence is worse
+    // than waiting a second for it.
+    if (mineOnArrival) dictation.done();
+    // From here until the clipboard is written a click on the pill (or
+    // Escape) still means "don't paste this": the session is idle, so
+    // cancelDictation has nothing else to go on. processTranscript closes the
+    // window itself (the `committed` callback below) the moment the paste is
+    // unstoppable; the `finally` is only the backstop for the paths that never
+    // reach it.
+    if (mineOnArrival) deliveringSessionId = sessionId;
 
     // Save the audio first so "Open recording" works even on a clean success.
     const recordingPath = rescuedPath || (await saveTempRecording(chunks, sampleRate));
@@ -1801,8 +2119,35 @@ function setupIpc() {
       // Restore focus to whichever app the user was dictating into, then type.
       // processTranscript strips Whisper noise tokens, runs the cleanup pass,
       // and pastes — restoring focus right before the paste lands.
-      const result = await processTranscript(text, targetHwnd, { canPaste, gen, sourceApp,
-        outputProfile: utteranceProfiles.get(gen)?.profile || "plain" });
+      //
+      // Unless this transcript was already overtaken before it arrived. Then
+      // there is nothing of ours in front of the user, and pasting would drop
+      // these words into the middle of the dictation they are speaking right
+      // now. Clean them up anyway and park them in history below.
+      const result = await processTranscript(text, targetHwnd, {
+        deliver: mineOnArrival,
+        target: targetDestination,
+        canPaste,
+        gen,
+        sourceApp,
+        outputProfile: utteranceProfiles.get(gen)?.profile || "plain",
+        // Asked again after the cleanup pass, the slowest thing between here
+        // and the paste. The user can still say no during it.
+        abandoned: () => dictation.wasCancelled(sessionId),
+        // Called at the moment the clipboard is about to be written: the right
+        // to cancel ends there, not in the `finally` after the paste.
+        committed: () => { if (deliveringSessionId === sessionId) deliveringSessionId = null; }
+      });
+      // They did say no. Nothing was typed and nothing was copied; the words go
+      // to history like any other cancel, and cancelDictation is already showing
+      // the "Cancelled" pill – a result pill here would paint straight over it.
+      if (result && result.cancelled) {
+        dlog("transcript-cancelled-late", { sessionId, len: (result.text || "").length });
+        latency.finish(gen, "cancelled");
+        recordTranscript(result.text, false, recordingPath, { sessionId, deliveryState: "cancelled" });
+        rebuildTrayMenu();
+        return;
+      }
       const measurement = latency.finish(gen, result?.pasted ? "pasted" : "recoverable");
       if (measurement) dlog("latency", measurement);
       // Only clear the global if this press still owns the session. Comparing
@@ -1818,9 +2163,16 @@ function setupIpc() {
       // release. Park the text where it stays recoverable and get out.
       if (!stillMine()) {
         console.error("[main] transcript landed after a newer press — parked in history");
-        dlog("transcript-stale", { gen });
+        dlog("transcript-stale", { sessionId, live: dictation.id });
         if (result && result.text) {
-          recordTranscript(result.text, false, recordingPath);
+          // It may well have landed: the session is re-opened as soon as the
+          // words arrive, so an ordinary fast second press lands here with the
+          // paste already done. Recording that as "not pasted" would hang a
+          // false ⚠ on a sentence sitting in the user's document.
+          recordTranscript(result.text, !!result.pasted, recordingPath, {
+            deliveryState: result.pasted ? result.deliveryState : "superseded",
+            sessionId
+          });
           rebuildTrayMenu();
         }
         return;
@@ -1833,7 +2185,7 @@ function setupIpc() {
         // just left nothing. Without this the recovered clip vanishes — no
         // history entry, nothing playable from the tray.
         if (rescuedPath) {
-          recordTranscript(text, false, recordingPath);
+          recordTranscript(text, false, recordingPath, { sessionId });
           rebuildTrayMenu();
         }
       } else {
@@ -1841,18 +2193,23 @@ function setupIpc() {
         // we couldn't read back, e.g. into a terminal or browser, still landed
         // almost every time and clears fast). Only a real miss shows Error, which
         // lingers so the text stays recoverable via Copy / the recording.
+        //
+        // Third case, `copied`: the user had moved to another window by the
+        // time the words were ready, so nothing was fired at their cursor. The
+        // text waits on the pill's Copy button and in history. Nothing went
+        // wrong, so no red dot – a green pill saying exactly what to click,
+        // held long enough to read it.
         showPillResult(
-          result.pasted ? "success" : "error",
+          result.pasted || result.copied ? "success" : "error",
           result.text,
           recordingPath,
-          {
+          result.copied ? { reason: "Not pasted · click Copy", holdMs: 8000 } : {
             // Only the hard-miss case gets an explanatory reason; a confirmed
             // success keeps the plain "Success" label — unless something happened
             // the user has to know about. Two of those, in priority order:
-            //   1. likelyMissed — the text probably didn't land AND the code below
-            //      takes their clipboard to make it recoverable. Silently swapping
-            //      what ⌘V does, behind a bare 3s "Success", is the worse surprise,
-            //      so it beats the cleanup notice when both are true.
+            //   1. likelyMissed – the text probably didn't land. A bare 3s
+            //      "Success" over a missing sentence is the worse surprise, so
+            //      it beats the cleanup notice when both are true.
             //   2. notice — cleanup gave up, so the text went in exactly as spoken.
             // Action first: the label can ellipsize, so the instruction must
             // survive truncation.
@@ -1863,7 +2220,7 @@ function setupIpc() {
             reason: !result.pasted
               ? (result.skipped ? result.notice : "Click Copy — the paste didn't land.")
               : result.likelyMissed
-                ? "Press ⌘V if the text didn't land — it's on your clipboard."
+                ? "Click Copy if the text didn't land."
                 : result.notice,
             // A reason needs reading time; a bare "Success" doesn't.
             holdMs: result.pasted && (result.likelyMissed || result.notice) ? 6000 : undefined
@@ -1872,7 +2229,7 @@ function setupIpc() {
         // Keep the last 50 dictations on disk and in the tray menu, so a
         // missed paste is recoverable — and listenable — even after the pill is
         // gone.
-        recordTranscript(result.text, result.pasted, recordingPath);
+        recordTranscript(result.text, result.pasted, recordingPath, { deliveryState: result.deliveryState, sessionId });
         rebuildTrayMenu();
         // Offer to teach the dictionary any likely-misheard names, and start
         // watching for a hand-typed correction. Only when the text actually
@@ -1889,18 +2246,24 @@ function setupIpc() {
       }
       // Cleanup never ran on this path — at least strip Whisper noise tokens
       // so the history entry matches the others as closely as possible.
-      recordTranscript(stripWhisperNoiseTokens(text.trim()) || text, false, recordingPath);
+      recordTranscript(stripWhisperNoiseTokens(text.trim()) || text, false, recordingPath, { sessionId });
       rebuildTrayMenu();
     } finally {
       // Never on a stale transcript: `busy` belongs to the newer press, and
       // clearing it mid-hold makes fireRelease bail out of dictation:stop.
       if (stillMine()) dictation.done();
+      // Backstop. `committed` normally clears this the instant the paste
+      // becomes unstoppable; this catches the paths that return before it (a
+      // noise-only transcript, an empty cleanup, deliver:false) and the ones
+      // that throw. Only ever clear OUR name – a press that started during the
+      // paste owns it now.
+      if (deliveringSessionId === sessionId) deliveringSessionId = null;
     }
   });
 
   // A dictation couldn't be transcribed but audio was captured. Save the clip
   // and show the Error pill so the user can open the recording and try again.
-  ipcMain.on("dictation:failure", async (_event, payload, pressGen) => {
+  ipcMain.on("dictation:failure", async (_event, payload, eventSessionId) => {
     // Snapshot before fail() re-opens the session. Saving the clip and the batch
     // retry below take seconds, and a press in that window owns the pill from
     // then on. pillFree() alone can't see that — it reads `busy`, which the new
@@ -1908,13 +2271,27 @@ function setupIpc() {
     // A failure stamped with an OLDER press was already overtaken before it even
     // arrived: don't end the live session for it, and don't run the batch rescue
     // (its text would paste into the middle of the new dictation). The clip is
-    // still saved and logged, so the tray can replay it.
-    const gen = Number.isInteger(pressGen) ? pressGen : dictation.generation;
+    // still saved and logged, so the tray can replay it. One name, one question,
+    // both cases.
+    const sessionId = sessionOf(eventSessionId);
+    const gen = genOf(sessionId);
     if (!dictation.claimTerminal(gen)) return;
-    const stale = isStalePress(gen);
+    const stillMine = () => dictation.owns(sessionId);
+    const chunks = (payload && payload.chunks) || [];
+    // Cancelled while the failure was on its way. Keep the clip so it can be
+    // replayed, but no pill and – above all – no batch rescue: that rescue
+    // pastes what it finds, and the user already said no.
+    if (dictation.wasCancelled(sessionId)) {
+      const cancelledPath = await saveTempRecording(chunks, payload && payload.sampleRate);
+      dlog("failure-cancelled", { sessionId, saved: !!cancelledPath });
+      latency.finish(gen, "cancelled");
+      recordTranscript("", false, cancelledPath, { sessionId, deliveryState: "cancelled" });
+      rebuildTrayMenu();
+      return;
+    }
     latency.finish(gen, "failed");
-    const stillMine = () => !stale && dictation.generation === gen;
-    if (!stale) {
+    const mineOnArrival = stillMine();
+    if (mineOnArrival) {
       dictation.fail();
       trayHolding = false;
       if (maxHoldTimer) { clearTimeout(maxHoldTimer); maxHoldTimer = null; }
@@ -1937,16 +2314,15 @@ function setupIpc() {
       if (stillMine()) { voiceEditor.fail(gen, reason); hidePill(); }
       return;
     }
-    const chunks = (payload && payload.chunks) || [];
     const recordingPath = await saveTempRecording(chunks, payload && payload.sampleRate);
     if (recordingPath) console.error("[main] dictation recording saved:", recordingPath);
-    const recovered = recordingPath && !stale ? await retranscribeRecording(recordingPath, { canDeliver: stillMine }) : null;
+    const recovered = recordingPath && mineOnArrival ? await retranscribeRecording(recordingPath, { canDeliver: stillMine }) : null;
     // null = no retry happened (see retranscribeRecording) — show the
     // renderer's plain-English reason rather than a pill stuck on "Transcribing…",
     // but only if a new press hasn't claimed the pill in the meantime.
     if (recovered === null && stillMine()) showPillResult("error", null, recordingPath, { reason });
     if (!recovered && recordingPath) {
-      recordTranscript("", false, recordingPath);
+      recordTranscript("", false, recordingPath, { sessionId, recovered: !mineOnArrival });
       rebuildTrayMenu();
     }
   });
@@ -1955,22 +2331,39 @@ function setupIpc() {
   // (the renderer is closing that socket), so keep the audio: save the clip and
   // log it so the tray can replay or re-transcribe it. Deliberately silent —
   // the live press owns the pill, and ending its session here would be wrong.
-  ipcMain.on("dictation:superseded", async (_event, payload) => {
+  ipcMain.on("dictation:superseded", async (_event, payload, eventSessionId) => {
     const chunks = (payload && payload.chunks) || [];
     const recordingPath = await saveTempRecording(chunks, payload && payload.sampleRate);
-    dlog("superseded", { saved: !!recordingPath, path: recordingPath || null });
+    // The name here is the press being ABANDONED, not the live one, so it is
+    // only ever written down — never used to decide who owns the pill.
+    dlog("superseded", { saved: !!recordingPath, path: recordingPath || null, sessionId: eventSessionId || null });
     if (!recordingPath) return;
-    recordTranscript("", false, recordingPath);
+    recordTranscript("", false, recordingPath, {
+      sessionId: typeof eventSessionId === "string" ? eventSessionId : null,
+      recovered: true
+    });
     rebuildTrayMenu();
   });
 
-  ipcMain.on("dictation:error", (_event, message, gen) => {
+  ipcMain.on("dictation:error", (_event, message, eventSessionId) => {
     console.error("Dictation error:", message);
-    dlog("dictation-error", { message, gen, live: dictation.generation });
+    dlog("dictation-error", { message, sessionId: eventSessionId || null, live: dictation.id });
     // A newer press owns the session and the pill — log the old error, but
     // don't end the live dictation or paint over its "Listening…".
-    if (isStalePress(gen)) return;
-    if (Number.isInteger(gen) && !dictation.claimTerminal(gen)) return;
+    if (!dictation.owns(eventSessionId)) return;
+    // The user already cancelled this press. Ending it and flashing red would
+    // be the app arguing with a key they pressed on purpose.
+    //
+    // Only when the error SAYS which press it belongs to. An unstamped error
+    // comes from a renderer that reloaded and lost its name (escalate-recovery)
+    // – exactly the dead-mic / relay-down case the user has to be told about –
+    // and wasCancelled() reads a missing name as "the live press", which after a
+    // cancel is still the cancelled one. That swallowed every such error from a
+    // cancel until the next press.
+    if (typeof eventSessionId === "string" && eventSessionId.length > 0
+      && dictation.wasCancelled(eventSessionId)) return;
+    const gen = genOf(eventSessionId);
+    if (!dictation.claimTerminal(gen)) return;
     latency.finish(gen, "failed");
     dictation.fail();
     const reason = typeof message === "string" ? message : "";
@@ -2008,10 +2401,12 @@ function setupIpc() {
     if (currentRecordingPath) retranscribeOnDemand(currentRecordingPath);
   });
   ipcMain.on("pill:hide", () => hidePill());
-  // Clicking the "Listening…" pill stops the recording. The escape hatch for a
-  // hold whose key-up or button-up went missing: without it the only way out is
-  // waiting MAX_HOLD_MS, and the app looks frozen the whole time.
-  ipcMain.on("pill:stop", () => fireRelease("pill"));
+  // Clicking the pill while it is listening or transcribing gives up on that
+  // dictation. Also the escape hatch for a hold whose key-up or button-up went
+  // missing: without it the only way out is waiting MAX_HOLD_MS, and the app
+  // looks frozen the whole time. The words are not lost — they land in history
+  // and the tray's "Copy last result" puts them on the clipboard.
+  ipcMain.on("pill:cancel", () => cancelDictation("pill"));
   ipcMain.on("pill:add-word", () => openDictionaryWindow());
   // Pointer entered/left the visible pill (renderer detects it from the
   // forwarded mouse moves). On=real clicks land; off=back to forward-only.
@@ -2233,14 +2628,14 @@ function setupIpc() {
   // The renderer lost the microphone (disconnected, muted, seized by another
   // app, or silent for several holds in a row) and rebuilt its capture. Make
   // the failure visible instead of silently typing nothing.
-  ipcMain.on("dictation:mic-warning", (_event, message, gen) => {
+  ipcMain.on("dictation:mic-warning", (_event, message, eventSessionId) => {
     console.error("[main] mic warning:", message);
-    dlog("mic-warning", { message, gen, live: dictation.generation });
+    dlog("mic-warning", { message, sessionId: eventSessionId || null, live: dictation.id });
     // The mic really is unhappy either way, so the notification always fires.
     // The pill and the session belong to whichever press is live: a warning
     // stamped with an older press must not kill it.
     showMicWarning(message);
-    if (isStalePress(gen)) return;
+    if (!dictation.owns(eventSessionId)) return;
     dictation.fail();
     // Show the reason ON the pill (not just a system notification the user may
     // have muted) so a dead-mic rebuild visibly says "press and try again"
@@ -2259,12 +2654,89 @@ function setupIpc() {
     try { hidePill(); } catch {}
   });
 
+  // --- Microphone preferences ----------------------------------------------
+  // The hidden dictation window asks for the saved choice as it loads.
+  ipcMain.handle("mic:prefs", () => micPrefs);
+
+  // …and reports back what it can see: every input, which one is live, and
+  // whether that is the one the user asked for.
+  ipcMain.on("dictation:mic-state", (_event, state) => {
+    const src = state && typeof state === "object" ? state : {};
+    micState = {
+      devices: Array.isArray(src.devices)
+        ? src.devices
+            .filter((d) => d && typeof d.id === "string" && d.id)
+            .map((d) => ({ id: d.id, label: typeof d.label === "string" ? d.label : "" }))
+        : [],
+      activeId: typeof src.activeId === "string" ? src.activeId : null,
+      activeLabel: typeof src.activeLabel === "string" ? src.activeLabel : "",
+      open: !!src.open,
+      source: typeof src.source === "string" ? src.source : "default"
+    };
+    // Written down so "which microphone was it actually on?" is answerable
+    // after the fact, without asking the user to reproduce anything.
+    dlog("mic-state", {
+      activeId: micState.activeId,
+      activeLabel: micState.activeLabel,
+      open: micState.open,
+      source: micState.source,
+      preferredMicId: micPrefs.preferredMicId,
+      micMode: micPrefs.micMode
+    });
+    const waiting = micStateWaiters;
+    micStateWaiters = [];
+    for (const resolve of waiting) resolve(micState);
+  });
+
+  // The Settings window's microphone section. It cannot enumerate devices
+  // itself with any confidence – the dictation window is the one holding a live
+  // stream – so ask that window and wait a beat for its answer.
+  ipcMain.handle("mic:get", async () => ({ prefs: micPrefs, state: await refreshMicState() }));
+
+  ipcMain.handle("mic:set", async (_event, payload) => {
+    if (!prefsPath) return { error: "GVoice hasn't finished starting up – try again in a moment." };
+    try {
+      micPrefs = writePreferences(prefsPath, payload || {});
+    } catch (err) {
+      console.error("[main] preferences write failed:", err && err.message);
+      return { error: "Couldn't save that. Check that GVoice can write to its settings folder, then try again." };
+    }
+    dlog("mic-prefs-saved", micPrefs);
+    if (dictationWindow && !dictationWindow.isDestroyed()) {
+      dictationWindow.webContents.send("mic:prefs", micPrefs);
+    }
+    return { prefs: micPrefs, state: await refreshMicState() };
+  });
+
   // The renderer tried hard to find a live mic and couldn't. Escalate, cheapest
   // first: reload the hidden renderer (fresh AudioContext); if that already
   // happened this episode and the mic is STILL dead, the audio service itself is
   // wedged — only a full relaunch respawns it. Guarded so neither step can loop.
   ipcMain.on("dictation:escalate-recovery", (_event, reason) => {
     handleRecoveryEscalation(typeof reason === "string" ? reason : "recovery");
+  });
+}
+
+// Ask the dictation window for a fresh look at the microphones and wait briefly
+// for it. The cached answer is returned if that window is gone or slow, so the
+// Settings page always renders something rather than hanging on a spinner.
+function refreshMicState(timeoutMs = 1500) {
+  if (!dictationWindow || dictationWindow.isDestroyed()) return Promise.resolve(micState);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (state) => {
+      if (done) return;
+      done = true;
+      micStateWaiters = micStateWaiters.filter((w) => w !== finish);
+      resolve(state);
+    };
+    micStateWaiters.push(finish);
+    setTimeout(() => finish(micState), timeoutMs);
+    try {
+      dictationWindow.webContents.send("dictation:report-mics");
+    } catch {
+      finish(micState);
+    }
   });
 }
 
@@ -2421,7 +2893,7 @@ function createTray() {
   tray.on("click", (/** @type {import("electron").KeyboardEvent} */ event) => {
     if (event && event.ctrlKey) { if (trayMenu) tray?.popUpContextMenu(trayMenu); return; }
     if (trayHolding) { fireRelease("tray"); return; }
-    if (startDictation(CLICK_MAX_HOLD_MS)) { trayHolding = true; return; }
+    if (startDictation(CLICK_MAX_HOLD_MS, "dictation", "tray")) { trayHolding = true; return; }
     // Nothing to record — the renderer is gone, or the last dictation is still
     // transcribing. A click that does nothing looks like a dead app, and with no
     // dock icon and no window the menu is the only way to reach Quit or Settings.
@@ -2451,11 +2923,13 @@ function rebuildTrayMenu() {
       ? (flat.length > 60 ? flat.slice(0, 60) + "…" : flat)
       : "(no transcript — recording only)";
     const hasRecording = !!entry.recordingPath && existsSync(entry.recordingPath);
+    // What became of this dictation, in words, and whether it earns a warning.
+    // Decided in history.js next to the list of outcomes, so the row and the
+    // record can never disagree.
+    const { note, warn } = trayLabelFor(entry);
     /** @type {import("electron").MenuItemConstructorOptions[]} */
     const sub = [];
-    // The ⚠ on the parent row needs a legend — say what it means right where
-    // the user looks for the text.
-    if (!entry.pasted) sub.push({ label: "⚠ Wasn't pasted into any app", enabled: false });
+    if (note) sub.push({ label: note, enabled: false });
     if (flat) sub.push({ label: "Copy text", click: () => clipboard.writeText(entry.text) });
     sub.push({
       label: hasRecording ? "Play recording" : "Recording unavailable",
@@ -2471,13 +2945,15 @@ function rebuildTrayMenu() {
       });
     }
     return {
-      label: `${time}${entry.pasted ? "" : " ⚠"}  ${preview}`,
+      label: `${time}${warn ? " ⚠" : ""}  ${preview}`,
       submenu: sub
     };
   });
 
   // The newest saved recording, for the one-click "play my last attempt" item.
   const lastRecording = history.find((e) => e.recordingPath && existsSync(e.recordingPath));
+  // The newest dictation that produced words, for "Copy last result".
+  const lastText = lastResult(history);
 
   const menu = Menu.buildFromTemplate([
     // Only present when macOS refused the key hook. First item in the menu
@@ -2493,6 +2969,11 @@ function rebuildTrayMenu() {
     // Same placement, for the hook that started and then heard nothing: the
     // fix is either to relaunch from Finder or to grant the launcher the
     // permission, so offer the pane here too.
+    ...(windowGaveUp ? [
+      { label: "⚠ " + WINDOW_GAVE_UP_TITLE, enabled: false },
+      { label: "Restart GVoice", click: () => { app.relaunch(); app.exit(0); } },
+      { type: /** @type {const} */ ("separator") }
+    ] : []),
     ...(hotkeyDeaf && !hotkeyNeedsAccessibility ? [
       { label: "⚠ Not hearing your keyboard — open from Finder", enabled: false },
       {
@@ -2512,6 +2993,18 @@ function rebuildTrayMenu() {
           click: () => { const p = getHistoryPath(); if (p) shell.showItemInFolder(p); }
         }
       ]
+    },
+    {
+      // The words of the last dictation, whatever happened to them — pasted,
+      // cancelled, recovered, or held back. The one-click way back
+      // to text that never reached the cursor.
+      label: "Copy last result",
+      enabled: !!lastText,
+      click: () => {
+        if (!lastText) return;
+        clipboard.writeText(lastText.text);
+        dlog("tray-copy-last", { len: lastText.text.length, sessionId: lastText.sessionId || null });
+      }
     },
     {
       label: "Play last recording",
@@ -2740,6 +3233,7 @@ function needsOnboarding() {
 }
 
 app.whenReady().then(async () => {
+  dlog("startup-build", readBuildIdentity());
   // Defense-in-depth navigation lockdown. Every window today loads only bundled
   // app HTML or the loopback relay, so nothing here triggers — but if a future
   // change ever rendered remote or transcript-derived markup, this stops a
@@ -2751,6 +3245,27 @@ app.whenReady().then(async () => {
       const local = url.startsWith("file://") ||
         url.startsWith("http://127.0.0.1:") || url.startsWith("http://localhost:");
       if (!local) event.preventDefault();
+    });
+    // Every window, not one at a time. On 2026-09-14 something outside the app
+    // stopped all of its web processes at once; only the dictation window had
+    // its own reload, so the pill stayed blank until a restart and the user saw
+    // nothing on every press. A window whose renderer dies is reloaded here.
+    contents.on("render-process-gone", (_event, details) => {
+      const page = contents.getURL().split("/").pop()?.split("?")[0] || "unknown";
+      console.error(`[${page}] process gone:`, details && details.reason);
+      dlog("render-process-gone", { page, ...details });
+      const now = Date.now();
+      const deaths = (rendererDeaths.get(contents.id) || []).filter((t) => now - t < RENDERER_DEATH_WINDOW_MS);
+      deaths.push(now);
+      rendererDeaths.set(contents.id, deaths);
+      if (deaths.length > RENDERER_RELOADS_ALLOWED) return reportWindowGaveUp(page, deaths.length);
+      // Small delay so a page that dies again on load can't spin the CPU.
+      setTimeout(() => {
+        if (contents.isDestroyed()) return;
+        if (contents === dictationWindow?.webContents) reloadDictationWindow();
+        else contents.reload();
+        dlog("window-rebuilt", { page });
+      }, 800);
     });
   });
 
@@ -2779,6 +3294,10 @@ app.whenReady().then(async () => {
   // isn't bundled into the read-only app. The providers read it on every
   // connection; the cursor pop-up writes to it.
   vocab.init(join(app.getPath("userData"), "custom-vocab.json"));
+  // The saved microphone choice. A missing or damaged file reads back as the
+  // defaults (always ready, system microphone), so dictation still works.
+  prefsPath = preferencesPath(app.getPath("userData"));
+  micPrefs = readPreferences(prefsPath);
   // Last-50 dictation history, persisted across restarts; shown in the tray's
   // "Recent dictations" menu. Loaded before the tray builds its first menu.
   await initHistory();
@@ -2789,6 +3308,10 @@ app.whenReady().then(async () => {
   buildAppMenu();
   createTray();
   setupIpc();
+  // Up as early as the tray, and whether or not dictation itself came up: a
+  // companion that can connect and hear "not ready" behaves; one that finds no
+  // socket at all cannot tell a broken GVoice from an old one.
+  await startControlSocket();
 
   // First run / misconfiguration: guide the user to Settings instead of silently
   // doing nothing. The tray stays live either way.
@@ -2879,6 +3402,10 @@ function shutdownAll() {
     try { hotkeyEngine.stop(); } catch {}
   }
   try { correctionWatcher.stop(); } catch {}
+  // Closes every companion connection and deletes the socket file, so the next
+  // launch never inherits a dead one.
+  try { controlServer?.stop(); } catch {}
+  controlServer = null;
   try { stopWhisperServer(); } catch {}
 }
 
@@ -2901,7 +3428,7 @@ for (const sig of /** @type {const} */ (["SIGINT", "SIGTERM"])) {
 // Narrow, unpackaged-only test controller. No production IPC evaluation hook.
 if (TEST_MODE) globalThis.__gvoiceTest = {
   ready: false,
-  start: () => startDictation(),
+  start: () => startDictation(MAX_HOLD_MS, "dictation", "test"),
   startSynthetic: () => {
     if (!dictation.tryStart()) return false;
     latency.start(dictation.generation, sttProvider());
@@ -2914,15 +3441,29 @@ if (TEST_MODE) globalThis.__gvoiceTest = {
   },
   release: () => fireRelease("test"),
   expire: () => dictation.fail(),
+  cancel: () => cancelDictation("test"),
   snapshot: () => ({ generation: dictation.generation, busy: dictation.busy,
     history: getHistory(), tray: !!tray && !tray.isDestroyed(), trayBounds: tray?.getBounds(), latency: latency.summary() }),
-  injectTranscript: (payload, gen) => dictationWindow.webContents.executeJavaScript(
-    `window.dictationBridge.sendTranscript(${JSON.stringify(payload)}, ${JSON.stringify(gen)})`),
+  // The Electron tests name a press by its counter; the app names it by its
+  // session id. The live counter maps to the live name, and any other counter to
+  // a name that can never be the live one – which is exactly what a late event
+  // from an overtaken press looks like.
+  injectTranscript: (payload, gen) => {
+    const id = gen === dictation.generation && dictation.id ? dictation.id : `${gen}-overtaken`;
+    return dictationWindow.webContents.executeJavaScript(
+      `window.dictationBridge.sendTranscript(${JSON.stringify(payload)}, ${JSON.stringify(id)})`);
+  },
   openSettings: () => openSettingsWindow(),
   openBenchmark: () => benchmarkWindow.open(),
   profileView: () => destinationProfiles.view(),
   resolveProfile: identity => destinationProfiles.resolve(identity),
   activeProfile: () => utteranceProfiles.get(dictation.generation),
+  deliverFixture: async (text, sourceApp = null) => {
+    const result = await processTranscript(text, null, { sourceApp });
+    if (result?.text) recordTranscript(result.text, result.pasted, null, { deliveryState: result.deliveryState });
+    return result;
+  },
+  buildIdentity: () => readBuildIdentity(),
   formatProfileFixture: (text, identity) => processTranscript(text, null,
     { canPaste: () => false, outputProfile: destinationProfiles.resolve(identity).profile }),
   openTray: () => tray?.popUpContextMenu(trayMenu),

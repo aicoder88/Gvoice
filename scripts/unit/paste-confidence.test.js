@@ -9,13 +9,15 @@ const BASE = {
   fieldFocused: true,
   isTerminal: false,
   fieldValue: null,
-  text: "Hello world."
+  text: "Hello world.",
+  beforeValue: "Draft: ",
+  sameField: true
 };
 
 test("a terminal target overrides a false pre-paste editor probe", () => {
   assert.deepEqual(
     assessPasteOutcome({ ...BASE, fieldFocused: false, isTerminal: true }),
-    { pasted: true, verified: null, likelyMissed: false }
+    { pasted: true, verified: null, likelyMissed: false, deliveryState: "sent-unverified" }
   );
 });
 
@@ -28,7 +30,7 @@ test("cmux is recognized exactly as a terminal target", () => {
 test("a readable field can prove the paste landed despite a false preflight", () => {
   assert.deepEqual(
     assessPasteOutcome({ ...BASE, fieldFocused: false, fieldValue: "Draft: Hello world." }),
-    { pasted: true, verified: true, likelyMissed: false }
+    { pasted: true, verified: true, likelyMissed: false, deliveryState: "verified" }
   );
 });
 
@@ -39,7 +41,7 @@ test("a readable field can prove the paste landed despite a false preflight", ()
 test("no target before or after the paste keeps the text recoverable", () => {
   assert.deepEqual(
     assessPasteOutcome({ ...BASE, fieldFocused: false }),
-    { pasted: true, verified: null, likelyMissed: true }
+    { pasted: true, verified: null, likelyMissed: true, deliveryState: "sent-unverified" }
   );
 });
 
@@ -47,42 +49,42 @@ test("an unreadable field cannot cost the clipboard when AX couldn't tell", () =
   // fieldFocused null = Windows, or macOS without Accessibility permission.
   assert.deepEqual(
     assessPasteOutcome({ ...BASE, fieldFocused: null }),
-    { pasted: true, verified: null, likelyMissed: false }
+    { pasted: true, verified: null, likelyMissed: false, deliveryState: "sent-unverified" }
   );
 });
 
 test("a focused editor that just won't expose its text keeps the clipboard", () => {
   assert.deepEqual(
     assessPasteOutcome({ ...BASE, fieldFocused: true }),
-    { pasted: true, verified: null, likelyMissed: false }
+    { pasted: true, verified: null, likelyMissed: false, deliveryState: "sent-unverified" }
   );
 });
 
 test("a terminal is never treated as a missing target", () => {
   assert.deepEqual(
     assessPasteOutcome({ ...BASE, fieldFocused: false, isTerminal: true, fieldValue: null }),
-    { pasted: true, verified: null, likelyMissed: false }
+    { pasted: true, verified: null, likelyMissed: false, deliveryState: "sent-unverified" }
   );
 });
 
 test("an empty field read-back is not a miss — it's an app hiding its composer", () => {
   assert.deepEqual(
     assessPasteOutcome({ ...BASE, fieldFocused: false, fieldValue: "" }),
-    { pasted: true, verified: false, likelyMissed: false }
+    { pasted: true, verified: false, likelyMissed: false, deliveryState: "sent-unverified" }
   );
 });
 
 test("a failed paste shortcut can never be promoted by target signals", () => {
   assert.deepEqual(
     assessPasteOutcome({ ...BASE, typed: false, fieldFocused: false, isTerminal: true }),
-    { pasted: false, verified: null, likelyMissed: false }
+    { pasted: false, verified: null, likelyMissed: false, deliveryState: "failed" }
   );
 });
 
 test("existing non-terminal uncertainty leaves the text recoverable", () => {
   assert.deepEqual(
     assessPasteOutcome({ ...BASE, fieldValue: "Existing draft" }),
-    { pasted: true, verified: false, likelyMissed: true }
+    { pasted: true, verified: false, likelyMissed: true, deliveryState: "sent-unverified" }
   );
 });
 

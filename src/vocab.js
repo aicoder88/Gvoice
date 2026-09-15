@@ -300,6 +300,66 @@ export function correctTranscript(text) {
   });
 }
 
+/** Most transcript words a single saved term may stand in for ("G Voice Hot"). */
+export const TERM_RUN_MAX = 3;
+
+/**
+ * Could `outputWord` be a saved term standing in for the transcript words
+ * `spokenRun`? This is the question the cleanup guard asks before it lets the
+ * model's rewrite through, and it exists because correctTranscript CANNOT
+ * answer it:
+ *
+ *   - correctTranscript repairs a garbled non-word in isolation. It refuses to
+ *     touch a word that is already real English, on purpose, and it works one
+ *     word at a time. Every mishearing measured on 2026-09-12 was either a real
+ *     word ("purify" for Purrify, "anchor" for Anker) or a name broken in two
+ *     ("Deep Gram", "power conf", "G Voice"). It can fix none of them, and
+ *     loosening it is not an option: it runs blind on every transcript.
+ *   - The cleanup model CAN, because it reads the whole sentence. It already
+ *     proposed every one of those fixes correctly once the terms were saved.
+ *     The guard then threw them away, because a replaced word is indistinguish-
+ *     able from a rewrite by word-for-word comparison alone.
+ *
+ * So the bar here is deliberately looser than correctTranscript's: the model
+ * has already judged the context, and the only thing it is permitted to put in
+ * is a term the user typed themselves. "anchor" → "Anker" is three edits of
+ * five characters, which correctTranscript would never allow blind, and which
+ * is obviously right in a sentence about a microphone.
+ *
+ * RESIDUAL RISK, stated plainly: a spoken word that starts with the same letter
+ * as a saved term and sits within half its length in edits can be swapped for
+ * it. "answer" is two edits from "Anker" and would pass this check. Nothing but
+ * the model's reading of the sentence stops that, so the dictionary must hold
+ * rare proper nouns only, exactly as models/vocab.txt already warns. The blast
+ * radius is the dictionary and nothing else.
+ *
+ * @param {string[]} spokenRun 1..TERM_RUN_MAX consecutive transcript words,
+ *   already lowercased and stripped of punctuation.
+ * @param {string} outputWord the single word the model put in their place.
+ * @returns {boolean}
+ */
+export function isTermSubstitution(spokenRun, outputWord) {
+  if (!Array.isArray(spokenRun) || !spokenRun.length) return false;
+  if (spokenRun.length > TERM_RUN_MAX) return false;
+  const target = normalize(outputWord);
+  // The replacement must BE a saved term. Nothing else earns the exemption.
+  if (target.length < 4 || !getTerms().some((term) => normalize(term) === target)) return false;
+  const joined = spokenRun.join("");
+  if (!joined || joined[0] !== target[0]) return false; // onset must survive
+  const dist = levenshtein(joined, target);
+  if (dist === 0) return true; // "deep gram" → "deepgram", the split-name case
+
+  // A name whisper broke in two comes back with the SAME letters, so rejoining
+  // it is near-exact and one edit is plenty of slack. The loose bar below is
+  // only for a single word swapped whole. Letting a multi-word run use it made
+  // the matcher greedy: "g voice hot" is three edits from "gvoice", so it ate
+  // the speaker's "hot" and the whole sentence was then rejected anyway.
+  if (spokenRun.length > 1) return dist <= 1;
+
+  const maxLen = Math.max(joined.length, target.length);
+  return dist <= 3 && dist <= Math.ceil(maxLen / 2);
+}
+
 /**
  * Put the spoken word's capitalization onto the canonical replacement so a fix
  * never corrupts sentence position: ALL-CAPS spoken → upper-case; a capitalized

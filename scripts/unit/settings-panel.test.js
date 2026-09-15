@@ -50,6 +50,9 @@ async function boot(info, bench) {
         this._value = v;
       },
       addEventListener(ev, fn) { (on[id] ||= {})[ev] = fn; },
+      // setStatus writes into one panel's save bar, so a panel element has to
+      // answer the same query the real DOM does.
+      querySelectorAll: () => [],
       focus() {}
     };
   };
@@ -59,7 +62,14 @@ async function boot(info, bench) {
   // and still reach through document/window. Each boot() replaces them wholesale,
   // so tests don't leak into each other.
   globalThis.Option = class { constructor(text, value) { this.textContent = text; this.value = value; } };
-  globalThis.document = { getElementById: el, querySelectorAll: () => [], addEventListener() {} };
+  globalThis.document = {
+    getElementById: el,
+    querySelectorAll: () => [],
+    // ".sec.active" – which panel the user is looking at. No tab is open in the
+    // stub, so status messages fall back to the whole document.
+    querySelector: () => null,
+    addEventListener() {}
+  };
   const noop = () => Promise.resolve({});
   globalThis.window = {
     location: { search: "" },

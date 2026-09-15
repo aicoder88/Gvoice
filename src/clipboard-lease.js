@@ -1,52 +1,112 @@
-// How long the pasted text stays on the clipboard before the user's own
-// clipboard comes back. Long enough for the target app to finish reading the
-// ⌘V, short enough that a copy-paste right after a dictation still works.
-export const RESTORE_DELAY_MS = 250;
-// While the caller is checking whether the paste actually landed, the restore
-// must not fire underneath it: the check sleeps 150ms and then makes
-// Accessibility calls that are each capped at 200ms and can stack. Losing that
-// race silently discards the text the user just dictated, so the hold is set
-// well past the worst case. The caller always ends the hold itself (keep() on a
-// miss, armRestore(remaining) on a hit, restore() if it throws) — this value is
-// only the backstop for a caller that dies mid-check.
-export const VERIFY_HOLD_MS = 2000;
+// The dictation borrows the clipboard only for the paste keystroke, then the
+// user's own clipboard goes back, whatever the outcome. The words are never
+// left behind: history is where an undelivered dictation is recovered from
+// (owner, 2026-09-15). OS sequence numbers detect a user copying during the
+// paste, even the same string (text equality alone misses that ownership loss).
+const leases = new WeakMap();
+export const DELIVERY_STATES = new Set(['verified', 'sent-unverified', 'refused', 'failed', 'superseded']);
 
-// A delayed restore owns only the clipboard contents it wrote. A user copy or
-// a subsequent GVoice paste revokes that ownership.
-export function createClipboardLease(clipboard, text, { delay = RESTORE_DELAY_MS, schedule = setTimeout, cancel = clearTimeout, defer = false } = {}) {
-  const previousText = clipboard.readText();
-  const previousImage = previousText ? null : clipboard.readImage();
+// A paste nobody confirmed may still be sitting in a busy app's event queue.
+// Putting the old clipboard back too soon would paste THAT instead of the
+// words, so wait this long first. A verified paste already landed, so it
+// restores at once.
+export const UNVERIFIED_RESTORE_DELAY_MS = Number(process.env.CLIPBOARD_RESTORE_DELAY_MS) || 600;
+
+export function createClipboardLease(clipboard, text, {
+  getChangeCount = () => null,
+  restoreDelayMs = UNVERIFIED_RESTORE_DELAY_MS,
+  schedule = (fn, ms) => setTimeout(fn, ms)
+} = {}) {
+  const previousLease = leases.get(clipboard);
+  // An earlier dictation still on the clipboard is not the user's copy: take
+  // over what IT was going to put back, so the user's clipboard still returns.
+  const previous = previousLease?.isCurrent() === true ? previousLease.previous : snapshotClipboard(clipboard);
+  previousLease?.finish('superseded');
   clipboard.writeText(text);
-  const formats = clipboard.availableFormats().sort().join("\n");
+  const count = getChangeCount();
+  const formats = formatSignature(clipboard);
   let active = true;
-  let timer;
+  let state = null;
   let settle;
   const settled = new Promise(resolve => { settle = resolve; });
-  const owns = () => {
-    try { return active && clipboard.readText() === text && clipboard.availableFormats().sort().join("\n") === formats; }
-    catch { return false; }
-  };
-  const restore = () => {
-    cancel(timer);
+  const isCurrent = () => {
     try {
-      if (owns()) {
-        if (previousImage && !previousImage.isEmpty()) clipboard.writeImage(previousImage);
-        // Rich/file-only clipboards cannot be faithfully reconstructed here — the
-        // writeText that opened the lease already replaced them. previousText is
-        // "" in that case, and writing it back is still right: leaving the
-        // dictation sitting on the clipboard forever is the worse of the two.
-        else clipboard.writeText(previousText);
-      }
-    } catch {} finally { active = false; settle(); }
+      return leases.get(clipboard) === lease && count != null && getChangeCount() === count &&
+        clipboard.readText() === text && formatSignature(clipboard) === formats;
+    } catch { return false; }
   };
-  const keep = () => { cancel(timer); const owned = owns(); active = false; settle(); return owned; };
-  // An explicit delay overrides the lease's own: the paste-verification pass
-  // holds the clipboard longer while it checks, then re-arms with what is left
-  // of the normal window.
-  const armRestore = (overrideMs) => {
-    cancel(timer);
-    if (active) timer = schedule(restore, Number.isFinite(overrideMs) ? Math.max(0, overrideMs) : delay);
+  const owns = () => active && isCurrent();
+  // Checked again at restore time: a copy the user makes during the wait wins.
+  // With no native sequence counter, ownership can't be proven, so fail closed.
+  const restore = () => {
+    try { if (isCurrent()) restoreSnapshot(clipboard, previous); }
+    catch { /* A restore failure cannot discard delivery/history metadata. */ }
+    finally { settle(state); }
   };
-  if (!defer) armRestore();
-  return { restore, keep, owns, armRestore, settled };
+  const finish = delivery => {
+    if (!DELIVERY_STATES.has(delivery)) throw new Error('Invalid delivery state');
+    if (!active) return state;
+    const owned = owns();
+    state = count != null && !owned ? 'superseded' : delivery;
+    active = false;
+    if (!owned) settle(state);
+    else if (delivery === 'verified' || !(restoreDelayMs > 0)) restore();
+    else schedule(restore, restoreDelayMs);
+    return state;
+  };
+  const keep = () => { const owned = owns(); finish('sent-unverified'); return owned; };
+  const lease = { finish, keep, owns, isCurrent, settled, previous, get state() { return state; }, changeCount: count };
+  leases.set(clipboard, lease);
+  return lease;
+}
+
+// Which flavours are on the clipboard, as one comparable string. A change here
+// means the user copied something of their own. Guarded because older Electron
+// builds and the test doubles have no availableFormats; both readings then
+// agree on "", so ownership still reads correctly.
+function formatSignature(clipboard) {
+  try {
+    return typeof clipboard.availableFormats === 'function'
+      ? (clipboard.availableFormats() || []).slice().sort().join('\n')
+      : '';
+  } catch { return ''; }
+}
+
+// Everything worth putting back, read before the dictation overwrites it.
+// Text alone is not enough: text copied from a web page or a Word document
+// carries html and rtf beside it, and restoring only the plain text silently
+// strips the formatting the user copied. A screenshot has no text at all, so
+// the image is read whenever the text is empty.
+function snapshotClipboard(clipboard) {
+  let formats = [];
+  try { formats = typeof clipboard.availableFormats === 'function' ? clipboard.availableFormats() || [] : []; } catch { formats = []; }
+  const has = mime => formats.some(f => String(f).startsWith(mime));
+  const snap = {};
+  try { const text = clipboard.readText(); if (text) snap.text = text; } catch {}
+  try { if (has('text/html') && typeof clipboard.readHTML === 'function') { const html = clipboard.readHTML(); if (html) snap.html = html; } } catch {}
+  try { if ((has('text/rtf') || has('public.rtf')) && typeof clipboard.readRTF === 'function') { const rtf = clipboard.readRTF(); if (rtf) snap.rtf = rtf; } } catch {}
+  try {
+    if (has('image/') || !snap.text) {
+      const image = clipboard.readImage();
+      if (image && typeof image.isEmpty === 'function' && !image.isEmpty()) snap.image = image;
+    }
+  } catch {}
+  return snap;
+}
+
+// Put a snapshot back whole. `write` sets every flavour in one go, so a paste
+// elsewhere sees text, html and rtf together rather than whichever was written
+// last. Clipboards without it (older Electron, the test doubles) still get the
+// image or the text.
+function restoreSnapshot(clipboard, snap) {
+  // Nothing was there before the paste, so leave nothing behind. The words are
+  // in history either way.
+  if (!Object.keys(snap).length) {
+    if (typeof clipboard.clear === 'function') clipboard.clear();
+    else clipboard.writeText('');
+    return;
+  }
+  if (typeof clipboard.write === 'function') { clipboard.write(snap); return; }
+  if (snap.image) clipboard.writeImage(snap.image);
+  else if (snap.text) clipboard.writeText(snap.text);
 }

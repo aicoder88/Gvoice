@@ -3,9 +3,20 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
+// dictation.js is a browser module; the vm runs it as a plain script. Its one
+// import is swapped for the real mic-health.js code (a pure module), with
+// classifyHold pinned to "ok" so the fake silent audio never raises a mic
+// warning that has nothing to do with ownership. Matched by pattern, not by the
+// exact import line, so adding a name to that import cannot silently break
+// every test here again.
+const micHealth = readFileSync(new URL('../../public/mic-health.js', import.meta.url), 'utf8')
+  .replace(/^export /gm, '');
 const source = readFileSync(new URL('../../public/dictation.js', import.meta.url), 'utf8')
-  .replace('import { classifyHold } from "/mic-health.js";', 'const classifyHold = () => ({ action: "ok", silentStreak: 0 });');
+  .replace(/^import \{[^}]*\} from "\/mic-health\.js";\s*$/m,
+    micHealth + '\nclassifyHold = () => ({ action: "ok", silentStreak: 0 });\n');
 const turn = () => new Promise(resolve => setImmediate(resolve));
+// A press name as main mints it: "<generation>-<random>".
+const press = n => `${n}-test`;
 function stream() {
   const track = { label: 'Test mic', muted: false, readyState: 'live', stopped: false,
     getSettings: () => ({ deviceId: 'test' }), stop() { this.stopped = true; } };
@@ -41,14 +52,16 @@ function fixture({ getUserMedia = async () => stream(), socketMode = 'open', sta
     sendTranscript: (...args) => sent.push(['transcript', ...args]),
     reportFailure: (...args) => sent.push(['failure', ...args]),
     sendTiming: (...args) => sent.push(['timing', ...args]),
-    sendMicWarning() {}, sendMicRecovered() {}, requestEscalation() {}, reportSuperseded() {}
+    sendMicWarning() {}, sendMicRecovered() {}, requestEscalation() {}, reportSuperseded() {},
+    getMicPrefs: async () => ({ micMode: 'always', preferredMicId: '' }), onMicPrefs() {},
+    onReportMics() {}, sendMicState() {}
   };
   const context = vm.createContext({
     window: { location: { search: '', host: 'localhost' }, DICTATION_STARTUP_MS: startupMs,
       DICTATION_SOCKET_OPEN_MS: 20, dictationBridge: bridge,
       btoa: text => Buffer.from(text, 'binary').toString('base64') },
     document: { getElementById: id => elements[id] },
-    navigator: { onLine: true, mediaDevices: { getUserMedia, addEventListener() {} } },
+    navigator: { onLine: true, mediaDevices: { getUserMedia, enumerateDevices: async () => [], addEventListener() {} } },
     WebSocket: Socket, AudioContext: Audio, AudioWorkletNode: Worklet,
     URLSearchParams, Uint8Array, Buffer, console: { log() {} }, setTimeout, clearTimeout, queueMicrotask
   });
@@ -58,20 +71,20 @@ function fixture({ getUserMedia = async () => stream(), socketMode = 'open', sta
 
 test('socket that never opens settles and permits another start', async () => {
   const f = fixture({ socketMode: 'pending', startupMs: 100 });
-  await f.start({ gen: 11 });
+  await f.start({ sessionId: press(11) });
   assert.equal(f.sent.filter(x => x[0] === 'error').length, 1);
-  assert.equal(f.sent.find(x => x[0] === 'error')[2], 11);
-  await f.start({ gen: 12 });
+  assert.equal(f.sent.find(x => x[0] === 'error')[2], press(11));
+  await f.start({ sessionId: press(12) });
   assert.equal(f.sockets.length, 2);
-  assert.equal(f.sent.filter(x => x[0] === 'error')[1][2], 12);
+  assert.equal(f.sent.filter(x => x[0] === 'error')[1][2], press(12));
   assert.ok(f.sockets.every(s => s.readyState === 3));
 });
 
 test('close before open rejects immediately rather than waiting for startup deadline', async () => {
   const f = fixture({ socketMode: 'close', startupMs: 1000 });
-  await f.start({ gen: 21 });
+  await f.start({ sessionId: press(21) });
   assert.equal(f.elements.status.textContent, 'WS failed');
-  assert.equal(f.sent.find(x => x[0] === 'error')[2], 21);
+  assert.equal(f.sent.find(x => x[0] === 'error')[2], press(21));
 });
 
 test('timed out microphone acquisition releases late stream without harming next session', async () => {
@@ -79,9 +92,9 @@ test('timed out microphone acquisition releases late stream without harming next
   const oldStream = stream(), newStream = stream();
   const first = new Promise(resolve => { resolveFirst = resolve; });
   const f = fixture({ getUserMedia: () => ++calls === 1 ? first : Promise.resolve(newStream) });
-  await f.start({ gen: 31 });
-  assert.equal(f.sent.find(x => x[0] === 'error')[2], 31);
-  await f.start({ gen: 32 });
+  await f.start({ sessionId: press(31) });
+  assert.equal(f.sent.find(x => x[0] === 'error')[2], press(31));
+  await f.start({ sessionId: press(32) });
   assert.equal(f.elements.status.textContent, 'Listening');
   resolveFirst(oldStream);
   await turn(); await turn();
@@ -92,11 +105,11 @@ test('timed out microphone acquisition releases late stream without harming next
   f.sockets[0].emit('message', { data: JSON.stringify({ type: 'response.text.done', text: 'old' }) });
   assert.equal(f.sent.filter(x => x[0] === 'transcript').length, 0);
   f.sockets[1].emit('message', { data: JSON.stringify({ type: 'response.text.done', text: 'new' }) });
-  assert.equal(f.sent.find(x => x[0] === 'transcript')[2], 32);
-  assert.equal(f.sent.find(x => x[0] === 'timing' && x[1] === 'captureReady')[3], 32);
+  assert.equal(f.sent.find(x => x[0] === 'transcript')[2], press(32));
+  assert.equal(f.sent.find(x => x[0] === 'timing' && x[1] === 'captureReady')[3], press(32));
 });
 
-test('preload preserves explicit operation generation after a newer start notification', () => {
+test('preload preserves an explicit press name after a newer start notification', () => {
   let bridge;
   const events = {}, sent = [];
   const context = vm.createContext({ require: () => ({
@@ -105,26 +118,26 @@ test('preload preserves explicit operation generation after a newer start notifi
   }) });
   vm.runInContext(readFileSync(new URL('../../preload.cjs', import.meta.url), 'utf8'), context);
   bridge.onStart(() => {});
-  events['dictation:start']({}, { gen: 42 });
-  bridge.sendTranscript({ text: 'old' }, 41);
-  bridge.sendError('old failure', 41);
-  bridge.reportFailure({ reason: 'old failure' }, 41);
-  bridge.sendTiming('terminal', {}, 41);
-  assert.equal(sent[0][2], 41);
-  assert.equal(sent[1][2], 41);
-  assert.equal(sent[2][2], 41);
-  assert.equal(sent[3][3], 41);
+  events['dictation:start']({}, { sessionId: press(42) });
+  bridge.sendTranscript({ text: 'old' }, press(41));
+  bridge.sendError('old failure', press(41));
+  bridge.reportFailure({ reason: 'old failure' }, press(41));
+  bridge.sendTiming('terminal', {}, press(41));
+  assert.equal(sent[0][2], press(41));
+  assert.equal(sent[1][2], press(41));
+  assert.equal(sent[2][2], press(41));
+  assert.equal(sent[3][3], press(41));
   bridge.sendMicWarning('background');
-  assert.equal(sent[4][2], 42);
+  assert.equal(sent[4][2], press(42));
 });
 
 test('an ignored newer start cannot relabel a pending startup error', async () => {
   let rejectCapture;
   const capture = new Promise((_resolve, reject) => { rejectCapture = reject; });
   const f = fixture({ getUserMedia: () => capture, startupMs: 1000 });
-  const first = f.start({ gen: 51 });
-  await f.start({ gen: 52 });
+  const first = f.start({ sessionId: press(51) });
+  await f.start({ sessionId: press(52) });
   rejectCapture(new Error('Microphone unavailable'));
   await first;
-  assert.equal(f.sent.find(x => x[0] === 'error')[2], 51);
+  assert.equal(f.sent.find(x => x[0] === 'error')[2], press(51));
 });

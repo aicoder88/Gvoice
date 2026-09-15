@@ -7,7 +7,14 @@
 //
 // Provider subtests are skipped when their credentials / binaries are absent.
 
-import "dotenv/config";
+// Offline by default: a developer's real .env is loaded ONLY for a live run
+// (GVOICE_LIVE=1, which is how scripts/run-live-tests.mjs invokes this file and
+// the only mode whose subtests call a real provider). Any other run stays on a
+// bare environment, so a stray key or STT_PROVIDER sitting in .env can never
+// change which subtests attempt a real call – the leak the old
+// "GVOICE_NO_ENV=1 unless told otherwise" line described but never got, because
+// nothing ever set that flag. It still works as a hard off for a live run.
+if (process.env.GVOICE_NO_ENV !== "1" && process.env.GVOICE_LIVE === "1") await import("dotenv/config");
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
@@ -196,6 +203,10 @@ test("parity: relay rejects a cross-origin upgrade, accepts loopback + no-origin
 });
 
 test("parity: openai transcription-only completes one utterance", async (t) => {
+  if (process.env.GVOICE_LIVE !== "1") {
+    t.skip("GVOICE_LIVE not set — run via `pnpm test:live` for real-provider checks");
+    return;
+  }
   if (!process.env.OPENAI_API_KEY) {
     t.skip("OPENAI_API_KEY not set");
     return;
@@ -247,6 +258,10 @@ test("parity: openai transcription-only completes one utterance", async (t) => {
 // every fresh clone actually uses uncovered. A revoked baked key shows up as a
 // skip with the upstream's own message, which names the cause.
 test("parity: deepgram completes one utterance", async (t) => {
+  if (process.env.GVOICE_LIVE !== "1") {
+    t.skip("GVOICE_LIVE not set — run via `pnpm test:live` for real-provider checks (this one uses the baked-in fallback key)");
+    return;
+  }
   const relay = await bootRelay();
   t.after(() => relay.close());
 
@@ -350,6 +365,10 @@ test("parity: openai bad-key surfaces as observable failure", async (t) => {
   // local.error from forwardUnexpectedResponse) or after the upgrade
   // completes (WS close with reason → local.status closed). Either form
   // satisfies the contract.
+  if (process.env.GVOICE_LIVE !== "1") {
+    t.skip("GVOICE_LIVE not set — run via `pnpm test:live` for real-provider checks");
+    return;
+  }
   if (!process.env.OPENAI_API_KEY) {
     t.skip("OPENAI_API_KEY required (test overrides it before booting)");
     return;

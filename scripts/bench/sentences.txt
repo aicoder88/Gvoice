@@ -1,0 +1,30 @@
+en|not going to get it quite right
+en|open the shipment dashboard and check the tracking numbers for the Purrify orders
+en|send Nia the invoice for last month and ask her to confirm the terms
+en|I need three things first speed second accuracy third the cost per month
+en|the Anker microphone keeps dropping out when the Mac wakes up from sleep
+en|tell the supplier we need the pallet delivered before Friday afternoon
+en|what is the word error rate on the small model compared to the large one
+en|remind me to call the accountant about the quarterly filing on Monday
+hr|stranica je spremna ali cijenu treba još jednom provjeriti
+hr|pošalji mi račun za prošli mjesec i potvrdi uvjete plaćanja
+en|the Purrify order number is 4821 and it ships from the Montreal warehouse
+en|Nia said the deposit cleared on the ninth so we can release the pallet
+en|book the flight for October 14th and put the receipt in the folder
+en|the small model runs at 440 milliseconds and the large one takes three times that
+en|ask Deepgram support why the connection drops after ninety seconds of silence
+en|we sold 312 units last quarter and the refund rate stayed under two percent
+en|the Anker PowerConf sits on the desk next to the second monitor
+en|forward the packing slip to the customer and copy me on the message
+en|our margin on the 140 gram bag is thinner than the 300 gram one
+en|schedule the call with the accountant for Tuesday at half past nine
+en|the tracking number starts with CA and ends in seven seven three
+en|tell Drago the invoice terms changed to net thirty starting in August
+en|move the meeting to Thursday because the supplier is closed on Wednesday
+en|the GVoice hotkey is the right option key and it should never conflict
+en|check whether the 25 kilogram box costs less by ground than by air
+en|I paid 68 dollars for the domain and 12 dollars a month for the host
+hr|molim te pošalji ponudu do petka jer klijent čeka odgovor
+hr|račun broj 4821 je plaćen ali dostava kasni tri dana
+hr|nazovi Niu u devet sati i potvrdi cijenu za veliku kutiju
+hr|trebamo još dvadeset komada prije kraja mjeseca inače gubimo narudžbu

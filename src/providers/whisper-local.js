@@ -12,13 +12,14 @@
 
 import { spawn, execFileSync } from "node:child_process";
 import { writeFile, mkdtemp, readFile, rm } from "node:fs/promises";
-import { writeFileSync, readFileSync, existsSync, unlinkSync } from "node:fs";
+import { writeFileSync, readFileSync, existsSync, unlinkSync, mkdirSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sendToClient, wrapWav } from "./_shared.js";
 import { withRetry, httpError } from "../retry.js";
+import { pidFilePath, buildPidRecord, parsePidRecord, ownsRecord, ownerUserData, processStartTime } from "../whisper-pid.js";
 
 const SAMPLE_RATE = 24000;
 // Anything shorter than this is almost certainly a misfire (the user tapped
@@ -208,10 +209,11 @@ let whisperServerModel = null;
 let whisperServerGeneration = 0;
 let exitHandlerInstalled = false;
 
-// Records the PID of the whisper-server we spawned, so the NEXT app launch can
+// Records the whisper-server we spawned, so the NEXT launch of THIS instance can
 // clean up a server orphaned by a crash or force-quit (which would otherwise
-// linger, hold the GPU/RAM, and — on a fixed port — wedge the next start).
-const PID_FILE = join(tmpdir(), "gvoice-whisper-server.pid");
+// linger and hold the GPU/RAM). The marker lives in this instance's own userData
+// folder and carries pid + that pid's start time + the userData path; see
+// src/whisper-pid.js for why all three are checked before anything is killed.
 
 /** Does this PID exist? (signal 0 probes without killing.) */
 function isAlive(/** @type {number} */ pid) {
@@ -233,15 +235,26 @@ function isOurWhisperServer(/** @type {number} */ pid) {
   }
 }
 
-/** Kill a whisper-server left behind by a previous run (best-effort). Only ever
- *  touches a PID we wrote AND that still looks like our server. */
+/** Kill a whisper-server left behind by a previous run of THIS instance
+ *  (best-effort). Only ever touches a process whose marker we wrote, whose start
+ *  time still matches that marker, whose userData folder is ours, and that still
+ *  looks like a whisper-server. Anything short of all four is left alone — the
+ *  installed app's engine must survive a dev launch. */
 async function reapStaleServer() {
-  let pid = 0;
+  const pidFile = pidFilePath();
+  let record = null;
   try {
-    if (existsSync(PID_FILE)) pid = parseInt(readFileSync(PID_FILE, "utf8").trim(), 10);
+    if (existsSync(pidFile)) record = parsePidRecord(readFileSync(pidFile, "utf8"));
   } catch {}
-  try { if (existsSync(PID_FILE)) unlinkSync(PID_FILE); } catch {}
-  if (!(pid > 0) || !isAlive(pid) || !isOurWhisperServer(pid)) return;
+  try { if (existsSync(pidFile)) unlinkSync(pidFile); } catch {}
+  if (!record) return;
+  const pid = record.pid;
+  if (!isAlive(pid) || !isOurWhisperServer(pid)) return;
+  const self = { pid, startTime: processStartTime(pid), userData: ownerUserData() };
+  if (!ownsRecord(record, self)) {
+    console.error("[whisper-server] leaving pid=" + pid + " alone: it is not ours");
+    return;
+  }
   console.error("[whisper-server] reaping stale server from a previous run, pid=" + pid);
   try { process.kill(pid, "SIGTERM"); } catch { return; }
   for (let i = 0; i < 20 && isAlive(pid); i++) {
@@ -281,7 +294,7 @@ export function stopWhisperServer() {
   whisperServerProc = null;
   whisperServerReady = null;
   whisperServerModel = null;
-  try { if (existsSync(PID_FILE)) unlinkSync(PID_FILE); } catch {}
+  try { const f = pidFilePath(); if (existsSync(f)) unlinkSync(f); } catch {}
   if (!proc || proc.killed || proc.pid == null) return;
   const pid = proc.pid;
   try { proc.kill("SIGTERM"); } catch {}
@@ -343,7 +356,11 @@ export function ensureWhisperServer(bin, modelPath) {
     whisperServerProc = spawn(serverBin, args);
     // Remember this server so the next launch can reap it if we die uncleanly.
     if (whisperServerProc.pid != null) {
-      try { writeFileSync(PID_FILE, String(whisperServerProc.pid)); } catch {}
+      try {
+        const pidFile = pidFilePath();
+        mkdirSync(dirname(pidFile), { recursive: true });
+        writeFileSync(pidFile, JSON.stringify(buildPidRecord({ pid: whisperServerProc.pid, port })));
+      } catch {}
     }
     whisperServerProc.on("error", (err) => {
       spawnError = err;
@@ -380,7 +397,7 @@ export function ensureWhisperServer(bin, modelPath) {
         delete process.env.WHISPER_SERVER_URL;
         // Our server is gone — drop the stale-PID marker so a future launch
         // never mistakes a recycled PID for it.
-        try { if (existsSync(PID_FILE)) unlinkSync(PID_FILE); } catch {}
+        try { const f = pidFilePath(); if (existsSync(f)) unlinkSync(f); } catch {}
       }
     });
 
@@ -392,7 +409,7 @@ export function ensureWhisperServer(bin, modelPath) {
         if (whisperServerProc) {
           try { whisperServerProc.kill("SIGKILL"); } catch {}
         }
-        try { if (existsSync(PID_FILE)) unlinkSync(PID_FILE); } catch {}
+        try { const f = pidFilePath(); if (existsSync(f)) unlinkSync(f); } catch {}
       });
     }
 
