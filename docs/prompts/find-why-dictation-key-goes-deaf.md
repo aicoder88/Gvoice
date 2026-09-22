@@ -1,5 +1,7 @@
 /bug-hunt
 
+Runs on the Mac mini only: the app, its logs and `pmset` live there.
+
 GVoice went deaf after a long run, and a restart cured it. Find the cause. Do not patch symptoms.
 
 ## What happened (2026-09-14, times are Croatia time, log is UTC)
@@ -37,3 +39,11 @@ GVoice went deaf after a long run, and a restart cured it. Find the cause. Do no
 - The fix must switch the listener back on by itself, or warn out loud, in the menu bar and in the log.
 - Follow this repo's CLAUDE.md: rebuild, install, reproduce the exact failure on the running app, and see it fixed. Not seen = "not verified".
 - Commit locally only. No push.
+
+## Already proven since (2026-09-15, do not redo)
+
+From `docs/bug-hunt-dead-windows-2026-09-15.md`, the hunt run the next night:
+
+- The 2026-09-15 00:29 failure was a different fault: at 00:19:09 something outside GVoice sent a plain stop signal (exit code 15) to the web helper processes of GVoice, Chrome and the ChatGPT app at once. GVoice brought back only the hidden recording page; the bubble stayed dead, so every press ran with nothing on screen. Fixed by reloading every window whose process dies (commits 5833fbe and f57db61). Do not re-prove this.
+- Question 4 is answered: the 4c375d8 "key never reaches the app" warning stops checking after the first event, so it can only catch deafness at launch. Any fix must keep checking for the app's whole life.
+- Questions 1 to 3 are still open. The 2026-09-14 Option-key silence is NOT explained by the 00:19 kill: that night the log shows presses missing at the hotkey listener (no `hotkey` events at all from 01:38), not a dead window. Start there.
