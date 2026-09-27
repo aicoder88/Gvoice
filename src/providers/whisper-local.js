@@ -19,6 +19,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sendToClient, wrapWav } from "./_shared.js";
 import { withRetry, httpError } from "../retry.js";
+import { localInference } from "../inference-scheduler.js";
 import { pidFilePath, buildPidRecord, parsePidRecord, ownsRecord, ownerUserData, processStartTime } from "../whisper-pid.js";
 
 const SAMPLE_RATE = 24000;
@@ -570,6 +571,10 @@ export async function attach(clientSocket, { bin, model }) {
  * @returns {Promise<string>}
  */
 async function transcribePcm(pcmBuffer, sampleRate, bin, model, prompt, language = "auto") {
+  return localInference.run(() => transcribePcmNow(pcmBuffer, sampleRate, bin, model, prompt, language));
+}
+
+async function transcribePcmNow(pcmBuffer, sampleRate, bin, model, prompt, language = "auto") {
   const wav = wrapWav(pcmBuffer, sampleRate);
   const serverUrl = process.env.WHISPER_SERVER_URL;
   const t0 = Date.now();
@@ -599,6 +604,27 @@ async function transcribePcm(pcmBuffer, sampleRate, bin, model, prompt, language
     // CLI-fallback dictation leaves an empty "voice-stt-*" directory behind.
     rm(dir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+// File work uses the same process and model as dictation. No CLI fallback here:
+// spawning a second model for a background file would defeat consolidation.
+// An active server request is allowed to finish even if paused; its result is
+// discarded by the queue. Releasing the scheduler early would overlap work
+// with inference still running inside whisper-server.
+export function transcribeFileChunk(pcm, { sampleRate = 16000, bin, model, signal } = {}) {
+  return localInference.run(async () => {
+    signal?.throwIfAborted();
+    // Recheck after waiting for dictation: never silently switch its model back.
+    if (process.env.WHISPER_MODEL && resolve(process.env.WHISPER_MODEL) !== resolve(model)) {
+      throw new Error('The local model changed. Restore the original model before resuming.');
+    }
+    if (peakAmplitude(pcm) < SILENCE_PEAK) return '';
+    await ensureWhisperServer(bin, model);
+    signal?.throwIfAborted();
+    const result = await runWhisperServer(process.env.WHISPER_SERVER_URL, wrapWav(pcm, sampleRate), '', 'en');
+    signal?.throwIfAborted();
+    return result.text;
+  }, { priority: 'background', signal });
 }
 
 /**

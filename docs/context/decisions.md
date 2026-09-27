@@ -3,6 +3,14 @@
 One entry per structural decision, newest first. Each carries the reason it was
 made and the condition that would reverse it.
 
+## 2026-09-27 – File transcription shares GVoice’s local speech engine
+
+The owner authorized consolidating English dictation and file transcription into GVoice. A dedicated sandboxed file window uses the existing whisper.cpp service and installed model. A shared inference queue puts live dictation ahead of pending file sections. FFmpeg decodes bounded sections directly from the selected file; GVoice saves only text/progress and never copies source media. Pause/resume checkpoints survive restart, which leaves interrupted jobs paused.
+
+Keep Electron for this implementation. No FluidVoice source or new cleanup runtime is copied. Keep Transcribe, FluidVoice backups, models, original uploads and histories until a real-recording comparison and explicit per-path removal approval. English transcription does not replace Transcribe’s translation or paid speaker-label workflow. The original invisible/unresponsive dictation report has no proven root cause; this change makes no claim to solve it.
+
+**Reverse if:** representative English recordings lose important wording at section boundaries, interactive dictation becomes noticeably slower, or the old file workflows remain essential. Preserve the original apps/data and use them while correcting the integration; do not remove their large model first.
+
 ## 2026-09-12 – A saved dictionary name may replace the word it was misheard as
 
 `preservesSpeakerWords` in `src/cleanup.js` compared the cleanup model's output
