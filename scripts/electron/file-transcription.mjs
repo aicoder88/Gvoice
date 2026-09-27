@@ -1,11 +1,12 @@
 // Real local inference, synthetic speech only, isolated application data.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { mkdtemp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { findMediaBinary } from '../../src/file-media.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const require = createRequire(join(root, 'package.json'));
@@ -16,6 +17,11 @@ await mkdir(evidence, { recursive: true });
 const source = join(profile, 'synthetic-speech.wav');
 execFileSync('/usr/bin/say', ['-v', 'Samantha', '-r', '150', '-o', source, '--data-format=LEI16@16000',
   Array(6).fill('This is a local speech test. The green folder contains three useful documents. Please save the recording for tomorrow.').join(' ') ]);
+const video = join(profile, 'longer-video.mp4');
+const ffmpeg = await findMediaBinary('ffmpeg');
+assert.ok(ffmpeg, 'FFmpeg is required for this integration check');
+execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'color=size=32x32:rate=10:duration=12',
+  '-t', '8', '-i', source, '-c:v', 'mpeg4', '-c:a', 'aac', video]);
 const model = join(root, 'models/ggml-small.en-q5_1.bin');
 const desktop = Object.fromEntries(['PATH','HOME','USER','LOGNAME','SHELL','LANG','LC_ALL','DISPLAY','XAUTHORITY'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
 const env = { ...desktop, GVOICE_TEST_MODE: '1', GVOICE_TEST_PROFILE: profile, GVOICE_TEST_MAIN: join(root, 'main.js'),
@@ -65,6 +71,15 @@ try {
   await owned.close(); owned = null;
   await launch(); page = await open();
   assert.equal((await snapshot(page)).jobs[0].status, 'paused');
+  const blockedSave = join(profile, 'file-transcriptions', `${job.id}.json.tmp`);
+  await mkdir(blockedSave);
+  await page.getByRole('button', { name: 'Resume', exact: true }).click();
+  await until(async () => (await page.locator('#liveStatus').innerText()).includes('EISDIR'), 'Save failure not shown');
+  await delay(1000);
+  assert.equal((await snapshot(page)).jobs[0].status, 'paused');
+  assert.equal(await page.getByRole('button', { name: 'Resume', exact: true }).count(), 1);
+  await rm(blockedSave, { recursive: true });
+  console.log('PASS: failed Resume save stays paused with Resume available');
   await page.getByRole('button', { name: 'Resume', exact: true }).click();
   const completed = await until(async () => {
     const job = (await snapshot(page)).jobs[0];
@@ -110,6 +125,18 @@ try {
   await page.locator('.job').first().click();
   await page.locator('.job').last().click();
   await until(async () => (await page.locator('.transcript').innerText()).includes('green folder'), 'Switching back lost cached transcript');
+  await owned.evaluate(({ dialog }, video) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [video] }); }, video);
+  await page.locator('#pickFiles').click();
+  const videoJob = await until(async () => (await snapshot(page)).jobs.find(j => j.name === 'longer-video.mp4'), 'Video import missing');
+  await page.locator('.job').filter({ hasText: 'longer-video.mp4' }).click();
+  await until(async () => {
+    const current = (await snapshot(page)).jobs.find(j => j.id === videoJob.id);
+    if (current.status === 'failed') throw new Error(current.error);
+    return current.status === 'completed';
+  }, 'Video transcription did not finish', 30000);
+  assert.ok(Math.abs(videoJob.durationSeconds - 8) < 0.05);
+  await until(async () => (await page.locator('.transcript').innerText()).includes('green folder'), 'Video transcript not rendered');
+  console.log('PASS: 12-second video with 8-second audio completes and displays its transcript');
   const tray = await owned.evaluate(() => globalThis.__gvoiceTest.snapshot());
   assert.ok(tray.tray && tray.trayBounds.width > 0 && tray.trayBounds.height > 0);
   await owned.evaluate(() => globalThis.__gvoiceTest.openTray());

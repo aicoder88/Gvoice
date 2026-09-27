@@ -33,6 +33,7 @@ export function createFileTranscriptionQueue({ directory, engine, probe, decode,
   let loadWarning = '';
   const pathFor = id => join(directory, `${id}.json`);
   const writes = new Map();
+  const resuming = new Set();
   function persist(job) {
     const serialized = JSON.stringify(job);
     if (Buffer.byteLength(serialized) > MAX_JOB_BYTES) return Promise.reject(new Error('This transcript has reached the local size limit. Export the completed sections.'));
@@ -131,7 +132,7 @@ export function createFileTranscriptionQueue({ directory, engine, probe, decode,
   }
   return {
     ready,
-    get active() { return adding || !!activeId || [...jobs.values()].some(job => job.status === 'queued'); },
+    get active() { return adding || resuming.size > 0 || !!activeId || [...jobs.values()].some(job => job.status === 'queued'); },
     async snapshot() {
       await ready;
       const { available, model, reason } = await engine();
@@ -170,9 +171,15 @@ export function createFileTranscriptionQueue({ directory, engine, probe, decode,
       await ready;
       if (closed) throw new Error('GVoice is closing.');
       const job = getJob(id);
-      if (activeId === id || !['paused', 'failed'].includes(job.status)) return;
-      job.status = 'queued'; job.error = ''; job.revision++;
-      await persist(job); wake();
+      if (activeId === id || resuming.has(id) || !['paused', 'failed'].includes(job.status)) return;
+      resuming.add(id);
+      try {
+        // Publish runnable work only after saving succeeds. A failed write
+        // must leave Resume available and preserve the existing checkpoint.
+        const next = { ...job, status: 'queued', error: '', revision: job.revision + 1 };
+        await persist(next);
+        if (!closed) { Object.assign(job, next); wake(); }
+      } finally { resuming.delete(id); }
     },
     async export(id, format) { await ready; return formatFileTranscript(getJob(id), format); },
     async close() { closed = true; controller?.abort(); await worker; },

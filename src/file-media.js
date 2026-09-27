@@ -32,9 +32,12 @@ export async function sourceIdentity(path) {
 export async function probeMedia(path, { ffprobe, signal } = {}) {
   if (!ffprobe) throw new Error('FFmpeg is required for file transcription. Install FFmpeg, then reopen this window.');
   try {
-    const { stdout } = await exec(ffprobe, ['-v', 'error', ...inputOptions, '-show_entries', 'format=duration:stream=codec_type', '-of', 'json', path], { signal, timeout: 20000, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL' });
+    const { stdout } = await exec(ffprobe, ['-v', 'error', ...inputOptions, '-select_streams', 'a:0', '-show_entries', 'format=duration:stream=codec_type,duration', '-of', 'json', path], { signal, timeout: 20000, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL' });
     const data = JSON.parse(stdout);
-    const duration = Number(data.format?.duration);
+    // Match the first audio stream decoded below, which can end before video.
+    // Some containers only provide a duration at the format level.
+    const audioDuration = Number(data.streams?.[0]?.duration);
+    const duration = Number.isFinite(audioDuration) && audioDuration > 0 ? audioDuration : Number(data.format?.duration);
     if (!data.streams?.some(stream => stream.codec_type === 'audio') || !Number.isFinite(duration) || duration <= 0 || duration > 6 * 3600) {
       throw new Error('unsupported');
     }

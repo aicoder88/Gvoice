@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFileTranscriptionQueue, formatFileTranscript } from '../../src/file-transcription.js';
 import { createInferenceScheduler } from '../../src/inference-scheduler.js';
-import { probeMedia, decodeMediaChunk, sectionLength } from '../../src/file-media.js';
+import { probeMedia, decodeMediaChunk, sectionLength, findMediaBinary } from '../../src/file-media.js';
 import { wrapWav } from '../../src/providers/_shared.js';
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -88,6 +89,40 @@ test('restart pauses queued work; changing a source fails without discarding com
   await restored.resume(jobs[0].id);
   await until(async () => (await restored.read(jobs[0].id)).status === 'failed');
   assert.match((await restored.read(jobs[0].id)).error, /original file changed/);
+});
+
+test('a failed resume save leaves the job paused and retryable', async t => {
+  let busy = true;
+  const f = await fixture(t, { isInteractiveBusy: () => busy });
+  const { jobs: [job] } = await f.queue.add([f.source]);
+  await f.queue.pause(job.id);
+  await until(() => !f.queue.active);
+  const before = await f.queue.read(job.id);
+  const temporary = join(f.options.directory, `${job.id}.json.tmp`);
+  await mkdir(temporary);
+  await assert.rejects(f.queue.resume(job.id));
+  assert.deepEqual(await f.queue.read(job.id), before);
+  assert.equal(f.queue.active, false);
+  await rm(temporary, { recursive: true });
+  busy = false;
+  await Promise.all([f.queue.resume(job.id), f.queue.resume(job.id)]);
+  await until(async () => (await f.queue.read(job.id)).status === 'completed');
+});
+
+test('video longer than its audio completes at the first audio track duration', async t => {
+  const ffmpeg = await findMediaBinary('ffmpeg'), ffprobe = await findMediaBinary('ffprobe');
+  if (!ffmpeg || !ffprobe) { t.skip('FFmpeg is not installed'); return; }
+  const f = await fixture(t, {
+    probe: path => probeMedia(path, { ffprobe }),
+    decode: (path, start, duration, signal) => decodeMediaChunk(path, start, duration, { ffmpeg, signal }),
+  });
+  const video = join(f.directory, 'longer-video.mp4');
+  execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'color=size=32x32:rate=10:duration=3',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-c:v', 'mpeg4', '-c:a', 'aac', video]);
+  assert.ok(Math.abs(await probeMedia(video, { ffprobe }) - 1) < 0.05);
+  const { jobs: [job] } = await f.queue.add([video]);
+  await until(async () => ['completed', 'failed'].includes((await f.queue.read(job.id)).status));
+  assert.equal((await f.queue.read(job.id)).status, 'completed');
 });
 
 test('changed model and short decode fail clearly; invalid additions do not enqueue', async t => {
