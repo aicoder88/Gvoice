@@ -4,6 +4,9 @@ Project guidance for Claude Code working in this repo (`voice` / **GVoice**).
 
 ## What this is
 
+- Owner preference, confirmed 2026-09-27: English dictation only for now. Do not
+  add or restore Croatian support as part of reliability or competitor work.
+
 GVoice is a macOS menu-bar / Windows tray **push-to-talk dictation app** built
 on **Electron**. Hold a hotkey (right Option on macOS), speak, release, and the
 transcribed text is pasted into whatever app is focused. Speech goes to a

@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; media-src data:; connect-src 'none'">
+  <title>Transcribe files</title>
+  <style>
+    :root { --bg: #0f1318; --fg: #e7eef5; --sidebar: #11161c; --divider: #1e2630; --focus: #79bcff; --blue: #4aa3ff; --green: #34d399; --muted: #8497a8; --text: #dce6ef; --on-green: #06210f; --green-hover: #4ae3aa; --selected-border: #2d5274; --secondary: #90a0af; --dot: #758496; --red: #ff7979; --yellow: #f5c35a; --track: #27313c; --dashed: #344151; --foot: #90a0af; --info-border: #294a6b; --info-bg: #172534; --info-text: #cfe2f5; --error-border: #6e3d42; --error-bg: #2a1b20; --error-text: #ffd2d2; --status: #9fb0c0; --border: #232c38; --card: #161c24; --success: #a9e8cc; --error: #ffb5b5; --button: rgba(255,255,255,.08); --button-hover: rgba(255,255,255,.15); --row-hover: rgba(255,255,255,.045); --selected: rgba(74,163,255,.13); --glow: rgba(74,163,255,.14); }
+    @media (prefers-color-scheme: light) { :root { color-scheme: light; --bg: #f4f6f8; --fg: #17202b; --sidebar: #ffffff; --divider: #d4dce5; --focus: #125d9e; --blue: #176bab; --green: #187a50; --muted: #536376; --text: #253448; --on-green: #ffffff; --green-hover: #12653f; --selected-border: #4478a8; --secondary: #526174; --dot: #64758b; --red: #bd3030; --yellow: #8a600a; --track: #dbe3ec; --dashed: #a2afbe; --foot: #526174; --info-border: #a0bfdc; --info-bg: #e5eff9; --info-text: #1d456c; --error-border: #d3a6ac; --error-bg: #fbe9ec; --error-text: #822e39; --status: #536376; --border: #d4dce5; --card: #ffffff; --success: #186745; --error: #a02c39; --button: #e4eaf0; --button-hover: #d4dfe9; --row-hover: #edf2f6; --selected: #e1edf8; --glow: #b7d4ec; } }
+    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); }
+    * { box-sizing: border-box; }
+    body { min-width: 0; min-height: 100vh; margin: 0; background: var(--bg); }
+    button { font: inherit; }
+    button:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+    .shell { display: grid; grid-template-columns: minmax(300px, 42%) 1fr; min-height: 100vh; }
+    .queue { display: flex; min-width: 0; flex-direction: column; background: var(--sidebar); border-right: 1px solid var(--divider); }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 20px 20px 13px; }
+    .brand-mark { width: 24px; height: 24px; border-radius: 8px; background: linear-gradient(140deg, var(--blue), var(--green)); }
+    h1 { margin: 0; font-size: 17px; letter-spacing: .1px; }
+    h2 { margin: 0; font-size: 20px; letter-spacing: -.2px; }
+    h3 { margin: 0; font-size: 14px; }
+    p { margin: 0; }
+    .queue-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 0 20px 15px; }
+    .queue-head p, .subtle, .hint { color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+    .button { min-height: 36px; padding: 8px 12px; border: 1px solid transparent; border-radius: 9px; background: var(--button); color: var(--text); font-weight: 650; cursor: pointer; }
+    .button:hover:not(:disabled) { background: var(--button-hover); }
+    .button:disabled { cursor: default; opacity: .5; }
+    .button.primary { background: var(--green); color: var(--on-green); }
+    .button.primary:hover:not(:disabled) { background: var(--green-hover); }
+    .button.quiet { min-height: 30px; padding: 5px 9px; font-size: 12px; }
+    .job-list { flex: 1; overflow: auto; padding: 3px 10px 14px; }
+    .job { width: 100%; margin: 0 0 4px; padding: 11px 10px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+    .job:hover { background: var(--row-hover); }
+    .job.selected { border-color: var(--selected-border); background: var(--selected); }
+    .job-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 650; }
+    .job-meta { display: flex; align-items: center; gap: 7px; margin-top: 6px; color: var(--secondary); font-size: 11.5px; }
+    .dot { width: 7px; height: 7px; flex: none; border-radius: 999px; background: var(--dot); }
+    .dot.running { background: var(--blue); box-shadow: 0 0 0 3px var(--glow); }
+    .dot.completed { background: var(--green); }.dot.failed { background: var(--red); }.dot.paused { background: var(--yellow); }
+    .mini-track, .track { overflow: hidden; border-radius: 999px; background: var(--track); }
+    .mini-track { height: 3px; margin-top: 8px; }.track { height: 8px; margin: 14px 0 7px; }
+    .fill { height: 100%; border-radius: inherit; background: var(--blue); transition: width .2s ease; }.fill.completed { background: var(--green); }.fill.failed { background: var(--red); }.fill.paused { background: var(--yellow); }
+    .queue-empty { margin: 8px 10px; padding: 24px 14px; border: 1px dashed var(--dashed); border-radius: 10px; color: var(--muted); font-size: 12.5px; line-height: 1.5; text-align: center; }
+    .queue-foot { padding: 13px 20px 17px; border-top: 1px solid var(--divider); color: var(--foot); font-size: 11.5px; line-height: 1.45; }
+    .detail { min-width: 0; overflow: auto; padding: 28px clamp(22px, 4vw, 48px); }
+    .detail-inner { width: min(760px, 100%); margin: 0 auto; }
+    .engine { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 25px; padding: 11px 13px; border: 1px solid var(--info-border); border-radius: 10px; background: var(--info-bg); color: var(--info-text); font-size: 12.5px; line-height: 1.45; }
+    .engine.bad { border-color: var(--error-border); background: var(--error-bg); color: var(--error-text); }.engine-icon { flex: none; }
+    .empty-state { padding: clamp(40px, 14vh, 110px) 0; text-align: center; }.empty-state h2 { margin-bottom: 10px; }.empty-state p { max-width: 430px; margin: 0 auto 18px; color: var(--muted); line-height: 1.5; }
+    .file-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }.filename { overflow-wrap: anywhere; }
+    .status-line { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--status); font-size: 12.5px; }.status-word { color: var(--fg); font-weight: 650; }
+    .progress-label { display: flex; justify-content: space-between; gap: 12px; color: var(--secondary); font-size: 12px; }.progress-label span:last-child { white-space: nowrap; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 24px; }.actions .spacer { flex: 1; }
+    .card { margin-bottom: 15px; padding: 17px; border: 1px solid var(--border); border-radius: 13px; background: var(--card); }.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }.muted { color: var(--muted); font-size: 12px; }
+    .notice { padding: 11px 13px; border: 1px solid var(--error-border); border-radius: 9px; background: var(--error-bg); color: var(--error-text); font-size: 12.5px; line-height: 1.45; }
+    .transcript { min-height: 170px; max-height: 48vh; margin: 0; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); font: 14px/1.65 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    .transcript.empty { color: var(--muted); }.export-row { display: flex; flex-wrap: wrap; gap: 8px; }.live { min-height: 1.25em; margin-top: 13px; color: var(--success); font-size: 12.5px; }
+    .live.error { color: var(--error); }
+    @media (max-width: 680px) { .shell { display: block; }.queue { min-height: 240px; max-height: 42vh; border-right: 0; border-bottom: 1px solid var(--divider); }.queue-foot { display: none; }.detail { padding: 22px 18px 34px; }.file-top { display: block; }.file-top > .button { margin-top: 14px; } }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <aside class="queue" aria-label="File transcription queue">
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><h1>GVoice</h1></div>
+      <div class="queue-head"><div><h2>Transcribe files</h2><p>Local file queue</p></div><button class="button primary" id="pickFiles" type="button">Add files</button></div>
+      <div class="job-list" id="jobList" aria-label="Transcription jobs"></div>
+      <p class="queue-foot">Your source files stay where they are. GVoice does not make a duplicate audio file.</p>
+    </aside>
+    <section class="detail" aria-label="Selected transcript">
+      <div class="detail-inner">
+        <div class="engine" id="engineStatus" role="status" aria-live="polite"></div>
+        <div id="detailContent"></div>
+        <p id="liveStatus" class="live" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+  </main>
+  <script src="transcribe.js"></script>
+</body>
+</html>

@@ -7,13 +7,14 @@ import { createCorpusStore, MAX_JSON_BYTES, atomicJson } from './benchmark-corpu
 import { runPersonalLocalBenchmark } from './benchmark-local.js';
 import { findInstalledWhisperCli } from './model-download.js';
 
-export function createBenchmarkWindow({ root }) {
+export function createBenchmarkWindow({ root, isFileBusy = () => false }) {
   let window = null, store = null, busy = false, localRun = null;
   const page = join(root, 'public/benchmark.html');
   const getStore = () => store ||= createCorpusStore(join(app.getPath('userData'), 'benchmark'));
   const trusted = event => !!window && !window.isDestroyed() && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame && event.senderFrame.url === pathToFileURL(page).href;
   const actions = {
     async runLocal() {
+      if (isFileBusy()) throw new Error('Pause file transcription before running a speech benchmark.');
       const home = process.env.GVOICE_HOME || (app.isPackaged ? app.getPath('userData') : root);
       const configured = process.env.WHISPER_BIN || process.env.WHISPER_CLI;
       const windowsBinary = join(home, 'bin', 'whisper-cli.exe');
@@ -60,6 +61,7 @@ export function createBenchmarkWindow({ root }) {
     try { await actions[action](value); return getStore().snapshot(); } finally { busy = false; }
   });
   return {
+    get isRunning() { return !!localRun; },
     open() {
       if (window && !window.isDestroyed()) { window.show(); window.focus(); return; }
       window = new BrowserWindow({ title: 'GVoice - Personal speech benchmark', width: 1120, height: 820, minWidth: 780, minHeight: 560, webPreferences: { preload: join(root, 'preload-benchmark.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });

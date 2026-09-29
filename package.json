@@ -62,6 +62,7 @@
       "package.json",
       "preload-edit.cjs",
       "preload-benchmark.cjs",
+      "preload-transcribe.cjs",
       "build/build-info.json"
     ],
     "extraResources": [

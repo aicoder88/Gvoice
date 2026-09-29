@@ -148,3 +148,15 @@ Cleanup retries and model failover share one timeout budget (default 2.5 seconds
   Missing prerequisites fail the command rather than producing a passing skip.
 - See [desktop regression coverage](scripts/electron/README.md) for actual audio
   source details and the separate physical-device verification checklist.
+
+## Transcribe local files
+
+Open **Transcribe files…** in the tray, or **Settings → Activity → Open file transcription**. Choose up to 20 audio/video files at once (WAV, MP3, M4A, MP4, MOV, FLAC, OGG, WebM, MKV, AIFF or AAC). Each recording can be up to six hours. The first integration transcribes English locally; it does not add translation, speaker labels, cloud upload or YouTube import.
+
+File work uses the currently configured whisper.cpp model/server and requires FFmpeg plus FFprobe on PATH. It adds no speech model or Python runtime. Audio is decoded in sections of at most 20 seconds, favoring nearby quiet gaps. Live dictation runs before the next file section; an already-running section is allowed to finish. Pause may therefore take a few seconds to settle. Pause all active file jobs before changing the speech engine or running a benchmark.
+
+Original media stays in its folder. Only text, source identity and progress are saved under the app data folder's `file-transcriptions` directory, with a limit of 100 saved jobs and 4 MB per job. Closing the file window leaves its queue running. Closing GVoice interrupts active/queued jobs; reopening leaves them paused until you choose Resume. A moved/changed source or a different selected model stops that job with an explanation.
+
+Use **Copy text**, **TXT**, **SRT** or **JSON** on a completed or partial transcript. Save to a new filename; existing files cannot be overwritten. SRT times describe whole sections, not words. JSON includes completion status and progress. Existing Transcribe data and its extra workflows remain separate and untouched.
+
+Verification: `node --test scripts/unit/file-transcription.test.js` and `node scripts/electron/file-transcription.mjs`. The desktop check uses generated English speech, isolated app data, and the installed small English model. It never uses personal recordings.
