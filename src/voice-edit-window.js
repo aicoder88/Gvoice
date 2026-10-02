@@ -59,7 +59,10 @@ export function createVoiceEditWindow({ root, start, stop, request = requestVoic
     try {
       const preview = await request({ selection: source.original, instruction, signal: pending.signal });
       if (revision !== mine || current !== source) return;
-      publish({ replacement: preview.replacement, phase: 'preview', status: 'Review the replacement. Apply changes only the original selection.' });
+      const status = preview.notice
+        ? `Review the replacement. Apply changes only the original selection. (${preview.notice})`
+        : 'Review the replacement. Apply changes only the original selection.';
+      publish({ replacement: preview.replacement, phase: 'preview', status });
     } catch (error) {
       if (revision === mine) publish({ phase: 'error', status: error.message || 'The edit could not be completed.' });
     } finally { if (revision === mine) pending = null; }

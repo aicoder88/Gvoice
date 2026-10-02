@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { requestVoiceEdit, VOICE_EDIT_LIMITS } from "../../src/voice-edit.js";
-import { createCleanupRequest } from "../../src/cleanup.js";
+import { createCleanupRequest, resetCleanupModelCache } from "../../src/cleanup.js";
 
 const input = { selection: "  Original text\n", instruction: "Shorten it" };
 const factory = (kind = "openai") => (system, user) => ({
@@ -49,6 +49,16 @@ test("a retired or busy model falls over to the next one instead of failing the 
     assert.equal(result.model, "backup");
     assert.equal(result.replacement, "Shorter text");
   }
+  // A model the user pinned in settings stays pinned through a busy minute:
+  // only a 404 (the provider no longer has it) moves the edit to another one.
+  const pinnedFactory = (system, user, opts) => ({ ...requestFactory(system, user, opts), pinnedModel: true });
+  tried.length = 0;
+  await assert.rejects(requestVoiceEdit(input, {
+    requestFactory: pinnedFactory,
+    fetchImpl: async () => { tried.push("call"); return { ok: false, status: 429, json: async () => ({}) }; }
+  }), /HTTP 429/);
+  assert.deepEqual(tried, ["call"]);
+
   // The last model's failure is still a failure, and other statuses never retry.
   await assert.rejects(requestVoiceEdit(input, {
     requestFactory, fetchImpl: async () => ({ ok: false, status: 404, json: async () => ({}) })
@@ -107,6 +117,41 @@ test("provider and network errors never expose response bodies or credentials", 
   await assert.rejects(requestVoiceEdit(input, { requestFactory: factory(), fetchImpl: async () => { throw new Error("secret-query-string"); } }), error => error.code === "NETWORK_ERROR" && !error.message.includes("secret"));
 });
 
+test("a pinned model's 404 is shared with dictation cleanup, and its built-in substitute still gets 429 failover", async () => {
+  const fields = ["CLEANUP_PROVIDER", "CLEANUP_MODEL", "GROQ_API_KEY"];
+  const saved = Object.fromEntries(fields.map(key => [key, process.env[key]]));
+  process.env.CLEANUP_PROVIDER = "groq";
+  process.env.CLEANUP_MODEL = "voice-edit-dead-model";
+  process.env.GROQ_API_KEY = "test-key-not-real";
+  resetCleanupModelCache();
+  try {
+    const requested = [];
+    const result = await requestVoiceEdit(input, {
+      requestFactory: createCleanupRequest,
+      fetchImpl: async (_url, options) => {
+        const model = JSON.parse(options.body).model;
+        requested.push(model);
+        if (model === "voice-edit-dead-model") return { ok: false, status: 404, json: async () => ({}) };
+        if (model === "openai/gpt-oss-120b") return { ok: false, status: 429, json: async () => ({}) };
+        return { ok: true, json: async () => success() };
+      }
+    });
+    // The pinned model 404s, its built-in substitute is only busy (429) and
+    // still fails over to the next vetted default — the exact scenario the
+    // old global "usesExplicitModel" flag broke.
+    assert.deepEqual(requested, ["voice-edit-dead-model", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
+    assert.equal(result.model, "openai/gpt-oss-20b");
+    assert.match(result.notice, /chosen tidy-up engine is gone/i);
+
+    // Dictation cleanup, called right after, must not retry the same dead
+    // pinned model voice-edit just discovered — the two paths share one cache.
+    assert.notEqual(createCleanupRequest("system", "user").model, "voice-edit-dead-model");
+  } finally {
+    for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+    resetCleanupModelCache();
+  }
+});
+
 test("request adapter follows current provider and exact configured model", () => {
   const fields = ["CLEANUP_PROVIDER", "CLEANUP_MODEL", "ANTHROPIC_API_KEY", "GOOGLE_AI_KEY", "OPENAI_API_KEY"];
   const saved = Object.fromEntries(fields.map(key => [key, process.env[key]]));
@@ -121,9 +166,11 @@ test("request adapter follows current provider and exact configured model", () =
       const body = JSON.parse(request.body);
       if (provider === "google") assert.equal(body.contents[0].parts[0].text, "user");
       else assert.equal(body.messages.at(-1).content, "user");
-      // An explicitly configured model is exact: never silently swapped.
-      assert.equal(createCleanupRequest("system", "user", { attempt: 1 }).model, "explicit-model");
-      assert.equal(createCleanupRequest("system", "user").attempts, 1);
+      // A configured model is asked for first and is marked as pinned, so a
+      // busy minute never swaps it. It is left behind only when the provider
+      // says it no longer exists (404), which the editing loop checks.
+      assert.equal(createCleanupRequest("system", "user").pinnedModel, true);
+      assert.notEqual(createCleanupRequest("system", "user", { attempt: 1 }).model, "explicit-model");
     }
     // On the shipped default the editing path can reach the same vetted backup
     // that dictation cleanup falls over to.

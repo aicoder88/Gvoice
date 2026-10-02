@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld("settingsBridge", {
   profiles: () => ipcRenderer.invoke("profiles:get"),
   saveProfiles: view => ipcRenderer.invoke("profiles:save", view),
   detectDestination: () => ipcRenderer.invoke("profiles:detect"),
+  openFiles: () => ipcRenderer.invoke("files:open"),
   openBenchmark: () => ipcRenderer.invoke("benchmark:open"),
   save: (view) => ipcRenderer.invoke("settings:save", view),
   clearRecordings: () => ipcRenderer.invoke("settings:clear-recordings"),

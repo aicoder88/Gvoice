@@ -42,6 +42,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, basename } from "node:path";
 import { startServer } from "./server.js";
 import { createVoiceEditWindow } from "./src/voice-edit-window.js";
+import { createFileTranscriptionWindow } from "./src/file-transcription-window.js";
+import { localInference } from "./src/inference-scheduler.js";
 import { createBenchmarkWindow } from "./src/benchmark-window.js";
 import { createDestinationProfiles, PROFILE_LIST } from "./src/destination-profiles.js";
 import { captureDestinationIdentity, captureDictationSource } from "./src/foreground.js";
@@ -51,7 +53,7 @@ import { createControlServer, controlSocketPath, supportsControlSocket } from ".
 import { resolvePreferredMicId } from "./public/mic-health.js";
 import * as vocab from "./src/vocab.js";
 import { createCorrectionWatcher } from "./src/correction-watch.js";
-import { looksLikeRetraction } from "./src/cleanup.js";
+import { looksLikeRetraction, looksOverPunctuated } from "./src/cleanup.js";
 import { captureForegroundApp, captureForegroundWindow, restoreForegroundWindow, getWindowRect, isEditableFieldFocused, isForegroundWindow, capturePasteVerification } from "./src/foreground.js";
 import { assessPasteOutcome, decidePasteOwnership } from "./src/paste-confidence.js";
 import { getClipboardChangeCount } from "./src/clipboard-sequence.js";
@@ -116,6 +118,8 @@ let dictionaryWindow = null;
 let settingsWindow = null;
 let voiceEditor = null;
 let benchmarkWindow = null;
+let fileTranscriptionWindow = null;
+let fileEngineChanging = false;
 let destinationProfiles = null;
 let lastDestination = null;
 const utteranceProfiles = new Map();
@@ -1539,17 +1543,25 @@ async function processTranscript(
   // context) — when one appears, always run cleanup so the retraction is dropped.
   // Gated by the Settings toggle (SELF_CORRECTION); off → don't force-route.
   const hasRetraction = process.env.SELF_CORRECTION !== "false" && looksLikeRetraction(textToType);
+  // The streaming engine ends a chunk at every pause and puts a period there,
+  // so a thinking pause in the middle of a sentence comes back as two clipped
+  // "sentences". That text is short and already ends in a period, so the
+  // heuristics below would skip cleanup and paste the chopped version. When it
+  // looks chopped, always run cleanup: the LLM is the only thing that can tell
+  // a real sentence end from a breath.
+  const hasChoppedSentences = looksOverPunctuated(textToType);
   // Short, clean utterances skip LLM cleanup — they need only a trailing period,
   // not restructuring. The LLM adds value on long or messy dictations; sending
   // short clear phrases to it causes unneeded rewriting.
   const needsCleanup =
-    (textToType.length >= 40 || hasFiller || hasOrdinal || commaCount >= 4 || hasRetraction) &&
+    (textToType.length >= 40 || hasFiller || hasOrdinal || commaCount >= 4 || hasRetraction || hasChoppedSentences) &&
     (textToType.length > 120 ||
      hasFiller ||
      !/[.!?…]$/.test(textToType) ||
      hasOrdinal ||
      commaCount >= 4 ||
-     hasRetraction);
+     hasRetraction ||
+     hasChoppedSentences);
   // Set when the cleanup pass gave up and the raw transcript went through
   // instead — most often the free tier's per-minute cap. Carried out to the
   // success pill so the user SEES which dictations were typed unformatted; the
@@ -1882,7 +1894,10 @@ async function retranscribeOnDemand(/** @type {string | null} */ recordingPath) 
 }
 
 function setupIpc() {
-  benchmarkWindow = createBenchmarkWindow({ root: __dirname });
+  localInference.setBusyCheck(() => dictation.busy);
+  fileTranscriptionWindow = createFileTranscriptionWindow({ root: __dirname, isInteractiveBusy: () => dictation.busy,
+    isEngineChanging: () => benchmarkInFlight || fileEngineChanging || !!benchmarkWindow?.isRunning });
+  benchmarkWindow = createBenchmarkWindow({ root: __dirname, isFileBusy: () => !!fileTranscriptionWindow?.active });
   const profileView = () => ({ ...destinationProfiles.view(), profiles: PROFILE_LIST, lastDestination,
     cleanupEnabled: process.env.CLEANUP_ENABLED !== "false", automaticSupported: process.platform === "darwin" });
   const settingsSender = event => event.sender === settingsWindow?.webContents;
@@ -1903,6 +1918,7 @@ function setupIpc() {
       return profileView();
     } finally { detectingDestination = false; }
   });
+  ipcMain.handle("files:open", event => { if (settingsSender(event)) fileTranscriptionWindow.open(); });
   ipcMain.handle("benchmark:open", event => { if (settingsSender(event)) benchmarkWindow.open(); });
   voiceEditor = createVoiceEditWindow({ root: __dirname,
     start: () => startDictation(MAX_HOLD_MS, "edit", "voice-edit"), stop: () => fireRelease("voice-edit"),
@@ -2452,6 +2468,7 @@ function setupIpc() {
   // Activity tab: words/time-saved/streak + recent dictations from history.json.
   ipcMain.handle("stats:get", () => ({ ...computeStats(getHistory(), Date.now()), latency: latency.summary() }));
   ipcMain.handle("settings:save", async (_event, payload) => {
+    if (fileTranscriptionWindow?.active) return { error: "Pause file transcription before saving speech settings." };
     const patch = patchFromView(payload || {});
     try {
       writeEnvFile(envPath, patch);
@@ -2460,7 +2477,8 @@ function setupIpc() {
       console.error("[main] settings write failed:", err && err.message);
       return { error };
     }
-    await applyEnvPatchLive(patch, "settings-save");
+    fileEngineChanging = true;
+    try { await applyEnvPatchLive(patch, "settings-save"); } finally { fileEngineChanging = false; }
     return settingsView(process.env);
   });
 
@@ -2495,6 +2513,7 @@ function setupIpc() {
   });
 
   ipcMain.handle("engine:benchmark", async (event, payload) => {
+    if (fileTranscriptionWindow?.active) return { ok: false, error: "Pause file transcription before testing another speech model." };
     // Single-flight: the Settings window's disabled-button guard dies with the
     // window. A second concurrent run would stream into the same .part file
     // and rename a corrupt model into place — which then passes the
@@ -2553,6 +2572,7 @@ function setupIpc() {
 
   // Commit the user's choice: which engine to use (and, for local, which model).
   ipcMain.handle("engine:apply", async (_event, payload) => {
+    if (fileTranscriptionWindow?.active) return { error: "Pause file transcription before changing the speech engine." };
     const provider = (payload && payload.provider) || "deepgram";
     // Defense-in-depth: the renderer is trusted local content, but this value is
     // persisted to .env and (for the model) becomes a child-process arg — keep
@@ -2607,7 +2627,8 @@ function setupIpc() {
       console.error("[main] engine apply write failed:", err && err.message);
       return { error };
     }
-    await applyEnvPatchLive(patch, "engine-apply");
+    fileEngineChanging = true;
+    try { await applyEnvPatchLive(patch, "engine-apply"); } finally { fileEngineChanging = false; }
     return settingsView(process.env);
   });
   // Delete every saved recording (the privacy "wipe my voice clips" button).
@@ -3082,6 +3103,7 @@ function rebuildTrayMenu() {
         }
         finally { rebuildTrayMenu(); }
       } })) },
+    { label: "Transcribe files…", click: () => fileTranscriptionWindow?.open() },
     { label: "Personal speech benchmark…", click: () => benchmarkWindow?.open() },
     {
       // Engine, language, cleanup, API keys, and recording privacy.
@@ -3406,6 +3428,7 @@ function shutdownAll() {
   stopHookWatchdog();
   voiceEditor?.close();
   benchmarkWindow?.close();
+  fileTranscriptionWindow?.close();
   if (hotkeyEngine && typeof hotkeyEngine.stop === "function") {
     try { hotkeyEngine.stop(); } catch {}
   }
@@ -3463,6 +3486,7 @@ if (TEST_MODE) globalThis.__gvoiceTest = {
   },
   openSettings: () => openSettingsWindow(),
   openBenchmark: () => benchmarkWindow.open(),
+  openFiles: () => fileTranscriptionWindow.open(),
   profileView: () => destinationProfiles.view(),
   resolveProfile: identity => destinationProfiles.resolve(identity),
   activeProfile: () => utteranceProfiles.get(dictation.generation),
