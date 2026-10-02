@@ -5,16 +5,17 @@
 // most likely to go wrong here are stream-shaped: a half line, a giant line, a
 // client that goes quiet in the middle of a recording. A stubbed transport
 // would test the switch statement and miss all three.
-import { test } from "node:test";
+import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createControlServer,
   controlSocketPath,
   controlDirPath,
+  supportsControlSocket,
   PROTOCOL_VERSION,
   MAX_FRAME_BYTES
 } from "../../src/control-socket.js";
@@ -112,13 +113,38 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 // --- The folder ------------------------------------------------------------
 
 test("the socket lives under the instance's own userData folder", () => {
+  const userData = join(tmpdir(), "GVoice");
   assert.equal(
-    controlSocketPath("/Users/someone/Library/Application Support/GVoice"),
-    "/Users/someone/Library/Application Support/GVoice/control/gvoice.sock"
+    controlSocketPath(userData),
+    join(userData, "control", "gvoice.sock")
   );
-  assert.equal(controlDirPath("/data"), "/data/control");
+  assert.equal(controlDirPath(userData), join(userData, "control"));
 });
 
+test("the Unix companion bridge is available only on Unix platforms", () => {
+  assert.equal(supportsControlSocket("win32"), false);
+  assert.equal(supportsControlSocket("darwin"), true);
+  assert.equal(supportsControlSocket("linux"), true);
+});
+
+test("Windows refuses a Unix companion server before touching the filesystem", {
+  skip: process.platform !== "win32"
+}, async () => {
+  const userData = mkdtempSync(join(tmpdir(), "gvoice-control-"));
+  const server = createControlServer({ socketPath: controlSocketPath(userData) });
+  try {
+    await assert.rejects(server.start(), { code: "ERR_GVOICE_CONTROL_UNSUPPORTED" });
+    assert.equal(existsSync(controlDirPath(userData)), false);
+    assert.equal(server.hasCompanion(), false);
+  } finally {
+    server.stop();
+    rmSync(userData, { recursive: true, force: true });
+  }
+});
+
+describe("Unix companion integration", {
+  skip: !supportsControlSocket() && "Better Options uses a Unix socket; Windows has no companion bridge"
+}, () => {
 test("the control folder is readable only by its owner", async () => {
   const { userData, cleanup } = await startServer({ hooks: spyHooks().hooks });
   try {
@@ -553,4 +579,5 @@ test("stopping the server removes the socket file", async () => {
   server.stop();
   assert.throws(() => statSync(socketPath), /ENOENT/);
   cleanup();
+});
 });

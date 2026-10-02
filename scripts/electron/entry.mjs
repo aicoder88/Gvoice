@@ -13,6 +13,7 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 process.env.GVOICE_HOME = resolve(process.env.GVOICE_TEST_PROFILE);
 process.chdir(process.env.GVOICE_HOME);
 await import(pathToFileURL(resolve(process.env.GVOICE_TEST_MAIN)).href);
-const { isEditableFieldFocused, captureForegroundApp } = await import(new URL('../../src/foreground.js', import.meta.url));
+const { isEditableFieldFocused, captureForegroundApp, captureForegroundWindow } = await import(new URL('../../src/foreground.js', import.meta.url));
 globalThis.__gvoiceHarnessFocus = isEditableFieldFocused;
 globalThis.__gvoiceHarnessTargetPid = captureForegroundApp;
+globalThis.__gvoiceHarnessTargetWindow = captureForegroundWindow;
