@@ -50,6 +50,16 @@ export const MAX_FRAME_BYTES = 4096;
 export const HEARTBEAT_TIMEOUT_MS = 6000;
 
 /**
+ * Better Options uses Unix-domain sockets. Node's Windows IPC uses named
+ * pipes instead, so it cannot serve this protocol at a filesystem path.
+ * Windows dictation uses the keyboard and tray without a companion server.
+ * @param {string} [platform]
+ */
+export function supportsControlSocket(platform = process.platform) {
+  return platform !== "win32";
+}
+
+/**
  * The folder holding the socket. Inside userData, so an isolated dev launch
  * (GVOICE_USER_DATA) gets its own socket and can never be driven by — or steal
  * the companion from — the copy in /Applications.
@@ -367,6 +377,12 @@ export function createControlServer({
      * @returns {Promise<string>} the path being served
      */
     start() {
+      if (!supportsControlSocket()) {
+        return Promise.reject(Object.assign(
+          new Error("The Unix companion socket is not supported on Windows"),
+          { code: "ERR_GVOICE_CONTROL_UNSUPPORTED" }
+        ));
+      }
       return new Promise((resolve, reject) => {
         try {
           const dir = dirname(socketPath);

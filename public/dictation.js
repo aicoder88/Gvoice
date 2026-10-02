@@ -1,4 +1,4 @@
-import { classifyHold, idleMsForMode, chooseCaptureDevice } from "/mic-health.js";
+import { classifyHold, idleMsForMode, chooseCaptureDevice, resolvePreferredMicId } from "/mic-health.js";
 
 const targetSampleRate = 24000;
 const statusEl = document.getElementById("status");
@@ -527,7 +527,10 @@ async function initCapture(isCurrent = () => true) {
 async function availableInputIds() {
   try {
     const devices = await navigator.mediaDevices.enumerateDevices();
-    return devices.filter((d) => d.kind === "audioinput" && d.deviceId).map((d) => d.deviceId);
+    const inputs = devices.filter((d) => d.kind === "audioinput" && d.deviceId)
+      .map(d => ({ id: d.deviceId, label: d.label || "" }));
+    preferredMicId = resolvePreferredMicId(preferredMicId, preferredMicLabel, inputs);
+    return inputs.map(d => d.id);
   } catch {
     return [];
   }
@@ -541,11 +544,12 @@ async function pickDevice() {
     deviceSource = "default";
     return lastGoodDeviceId;
   }
+  const availableIds = await availableInputIds();
   const choice = chooseCaptureDevice({
     preferredId: preferredMicId,
     fallbackId: lastGoodDeviceId,
     currentId: currentDeviceId,
-    availableIds: await availableInputIds(),
+    availableIds,
     captureReady: false
   });
   deviceSource = choice.source;
@@ -1107,12 +1111,13 @@ async function checkPreferredDevice(why) {
     await reportMicState();
     return;
   }
+  const availableIds = await availableInputIds();
   const choice = chooseCaptureDevice({
     preferredId: preferredMicId,
     fallbackId: lastGoodDeviceId,
     currentId: currentDeviceId,
     requestedId: currentRequestedId,
-    availableIds: await availableInputIds(),
+    availableIds,
     captureReady: true
   });
   if (!choice.rebuild) {

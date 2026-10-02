@@ -2,7 +2,29 @@
 // renderer and these tests. Run: node --test scripts/unit/mic-health.test.js
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyHold, idleMsForMode, MIC_IDLE_BY_MODE, chooseCaptureDevice } from "../../public/mic-health.js";
+import { classifyHold, idleMsForMode, MIC_IDLE_BY_MODE, chooseCaptureDevice, resolvePreferredMicId } from "../../public/mic-health.js";
+
+test("a saved microphone reconnects by its unique label when origin IDs change", () => {
+  assert.equal(resolvePreferredMicId("old-port-id", "Anker", [
+    { id: "new-port-id", label: "Anker" }, { id: "built-in", label: "Built-in" }
+  ]), "new-port-id");
+});
+
+test("a present device ID takes precedence over a changed label", () => {
+  assert.equal(resolvePreferredMicId("saved", "Anker", [
+    { id: "saved", label: "Renamed microphone" }, { id: "other", label: "Anker" }
+  ]), "saved");
+});
+
+test("missing, ambiguous and anonymous inputs never replace a saved microphone", () => {
+  for (const devices of [[], [{ id: "new", label: "" }],
+    [{ id: "one", label: "Anker" }, { id: "two", label: "Anker" }],
+    [{ id: "default", label: "Anker" }, { id: "communications", label: "Anker" }]]) {
+    assert.equal(resolvePreferredMicId("saved", "Anker", devices), "saved");
+  }
+  assert.equal(resolvePreferredMicId("", "Anker", [{ id: "new", label: "Anker" }]), "");
+  assert.equal(resolvePreferredMicId("saved", "", [{ id: "new", label: "" }]), "saved");
+});
 
 // Defaults mirroring dictation.js so the tests exercise the real thresholds.
 const BASE = { minBytes: 4800, silencePeak: 0.01, streakLimit: 3 };
