@@ -101,18 +101,63 @@ test("a rate-limited fallback is NOT remembered — the next dictation retries t
   ]);
 });
 
-test("an explicit cleanup model never silently falls back", async () => {
+test("an explicit cleanup model is never swapped for being busy", async () => {
   useGroq();
   process.env.CLEANUP_MODEL = "my-pinned-model";
   const requestedModels = [];
   globalThis.fetch = async (_url, init) => {
     requestedModels.push(JSON.parse(String(init.body)).model);
-    return new Response('{"error":{"message":"model_not_found"}}', { status: 404 });
+    return new Response('{"error":{"message":"rate limit"}}', { status: 429 });
   };
 
   assert.equal(await polishTranscript(SAMPLE), SAMPLE);
   assert.deepEqual(requestedModels, ["my-pinned-model"]);
-  assert.match(String(takeCleanupError()), /tidy-up isn't working/i);
+});
+
+// A pinned model that the provider has retired is a dead pointer, not a
+// choice: honouring it left this app pasting unformatted text for weeks. It
+// falls over to the built-in models, says so once, and skips the dead name on
+// every later dictation.
+test("a retired pinned model falls over to the built-in one and says so", async () => {
+  useGroq();
+  process.env.CLEANUP_MODEL = "my-pinned-model";
+  const requestedModels = [];
+  globalThis.fetch = async (_url, init) => {
+    const model = JSON.parse(String(init.body)).model;
+    requestedModels.push(model);
+    return model === "my-pinned-model"
+      ? new Response('{"error":{"message":"model_not_found"}}', { status: 404 })
+      : new Response(JSON.stringify({ choices: [{ message: { content: CLEANED_A } }] }), { status: 200 });
+  };
+
+  assert.equal(await polishTranscript(SAMPLE), CLEANED_A);
+  assert.deepEqual(requestedModels, ["my-pinned-model", "openai/gpt-oss-120b"]);
+  assert.match(String(takeCleanupError()), /chosen tidy-up engine is gone/i);
+
+  // Second dictation: the dead name is not tried again.
+  requestedModels.length = 0;
+  assert.equal(await polishTranscript(SAMPLE), CLEANED_A);
+  assert.deepEqual(requestedModels, ["openai/gpt-oss-120b"]);
+});
+
+// The bug this closes: pinnedModel/mayFailOver used to be keyed off "was ANY
+// model ever pinned" rather than "is THIS attempt the pinned one", so once a
+// pinned model was confirmed retired, the built-in substitute it fell over to
+// permanently lost ordinary 429 failover for the rest of the app session.
+test("after a pinned model retires, its built-in substitute still gets normal 429 failover", async () => {
+  useGroq();
+  process.env.CLEANUP_MODEL = "my-pinned-model";
+  const requestedModels = [];
+  globalThis.fetch = async (_url, init) => {
+    const model = JSON.parse(String(init.body)).model;
+    requestedModels.push(model);
+    if (model === "my-pinned-model") return new Response('{"error":{"message":"model_not_found"}}', { status: 404 });
+    if (model === "openai/gpt-oss-120b") return new Response('{"error":{"message":"rate limit"}}', { status: 429 });
+    return new Response(JSON.stringify({ choices: [{ message: { content: CLEANED_B } }] }), { status: 200 });
+  };
+
+  assert.equal(await polishTranscript(SAMPLE), CLEANED_B);
+  assert.deepEqual(requestedModels, ["my-pinned-model", "openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
 });
 
 // The pin above is honoured because the name is plausible. This one is not: it
@@ -154,6 +199,28 @@ test("a rate-limited default model uses the backup model's separate quota", asyn
   assert.equal(await polishTranscript(SAMPLE), CLEANED_A);
   assert.deepEqual(requestedModels, ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
   assert.equal(takeCleanupError(), null);
+});
+
+// Before this fix, once every candidate model for a provider was confirmed
+// retired, resolveProvider fell back to the full (already-dead) ordered list
+// instead of staying empty — so every dictation re-issued the same doomed
+// requests forever, instead of "one dead request per app session".
+test("once every model for a provider is retired, later dictations make no network request at all", async () => {
+  useGroq();
+  let calls = 0;
+  globalThis.fetch = async (_url, init) => {
+    calls++;
+    return new Response('{"error":{"message":"model_not_found"}}', { status: 404 });
+  };
+
+  // Both groq defaults (gpt-oss-120b, gpt-oss-20b) 404 and get retired.
+  assert.equal(await polishTranscript(SAMPLE), SAMPLE);
+  assert.equal(calls, 2);
+
+  calls = 0;
+  assert.equal(await polishTranscript(SAMPLE), SAMPLE, "still survives with no working model");
+  assert.equal(calls, 0, "no dead model is retried once every candidate is known gone");
+  assert.match(String(takeCleanupError()), /tidy-up isn't working/i);
 });
 
 test("a 404 (model retired) is reported, and the raw text still comes back", async () => {

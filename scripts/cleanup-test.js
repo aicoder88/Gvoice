@@ -111,6 +111,33 @@ const CASES = [
     expectDesc: "drops 'John', keeps 'Sarah'"
   },
   {
+    // Over-punctuation: the streaming engine drops a period wherever the
+    // speaker pauses for breath, so one sentence arrives chopped in two. Both
+    // inputs below are real dictations from the app's history. The words must
+    // survive; only the stray period goes.
+    name: "chopped-pause-merges",
+    input: "Install AutoHotkey and set up. The Mac copy and paste shortcuts.",
+    expect: (out) => /set up the mac copy/i.test(out) && !/set up\.\s/i.test(out),
+    expectDesc: "one sentence, no period after 'set up'"
+  },
+  {
+    name: "chopped-pause-fragments",
+    input: "Also set up the other keyboard shortcuts I have on my Mac. Like IPT. Paste. My email address fully.",
+    expect: (out) => {
+      const periods = (out.match(/\./g) || []).length;
+      return periods <= 2 && /IPT/i.test(out) && /email address/i.test(out);
+    },
+    expectDesc: "fragments merged back, all words kept"
+  },
+  {
+    // Guard the other direction: a dictation that really is two sentences must
+    // stay two sentences.
+    name: "real-sentence-boundary-survives",
+    input: "The order shipped this morning. Tracking goes out tonight.",
+    expect: (out) => /morning\.\s+Tracking/i.test(out),
+    expectDesc: "still two sentences"
+  },
+  {
     // Negative: "no" here is content, not a retraction — it must survive.
     name: "no-is-content-not-correction",
     input: "I asked if we should ship today and the answer is no.",

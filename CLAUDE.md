@@ -4,6 +4,9 @@ Project guidance for Claude Code working in this repo (`voice` / **GVoice**).
 
 ## What this is
 
+- Owner preference, confirmed 2026-09-27: English dictation only for now. Do not
+  add or restore Croatian support as part of reliability or competitor work.
+
 GVoice is a macOS menu-bar / Windows tray **push-to-talk dictation app** built
 on **Electron**. Hold a hotkey (right Option on macOS), speak, release, and the
 transcribed text is pasted into whatever app is focused. Speech goes to a
@@ -51,3 +54,15 @@ A fix you have not observed working is not done — say "not verified", never
 - **Menu-bar / tray icon presence.** The tray icon has gone missing before.
   After any change touching startup or the tray, launch the app and confirm the
   icon actually appears in the menu bar / tray and its menu opens.
+
+## Shared plan and model rules
+
+Read `global-skills/tier/SKILL.md` before writing or running a model-tagged plan;
+validate it with `node global-skills/tier/check-tags.mjs <plan.md>`.
+This tracked package is copied from the canonical `aicoder88/hub` repository.
+Use `gpt-6.1-sol/medium` for normal Codex work, `gpt-6-luna/low` for mechanics,
+and `gpt-6-astra/high` for explicit demanding-judgment escalation. Every model
+recommendation names effort. Every plan handoff links the saved plan and includes
+its copyable `/tier <absolute-path-to-plan.md>` command; resolve the path on the
+current machine. Preserve native historical tags and all project approval gates.
+These rules need no personal skill installation or machine-specific hub path.

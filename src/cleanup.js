@@ -35,8 +35,10 @@ const PROVIDER_DEFAULTS = {
   // request tries the backup and remembers the winner for the rest of this app
   // session; a rate-limited (429) failover is NOT remembered, so a busy minute
   // never pins the weaker model. The word-preservation guard below still
-  // rejects anything either model rewrites. An explicit CLEANUP_MODEL remains
-  // exact and never silently falls back.
+  // rejects anything either model rewrites. An explicit CLEANUP_MODEL is tried
+  // first and stays pinned through a busy minute; it only falls back when the
+  // provider confirms it is gone (404), and only THAT attempt counts as pinned –
+  // once it has fallen over, the model actually in hand follows the normal rules.
   groq: { kind: "openai", url: "https://api.groq.com/openai/v1/chat/completions", model: "openai/gpt-oss-120b", fallbackModels: ["openai/gpt-oss-20b"], keyEnv: "GROQ_API_KEY", fallbackKey: GROQ_FALLBACK_KEY },
   openai: { kind: "openai", url: "https://api.openai.com/v1/chat/completions", model: "gpt-4.1-mini", keyEnv: "OPENAI_API_KEY" },
   anthropic: { kind: "anthropic", url: "https://api.anthropic.com/v1/messages", model: "claude-haiku-4-5", keyEnv: "ANTHROPIC_API_KEY" },
@@ -51,6 +53,12 @@ const RETIRED_GROQ_MODELS = new Set([
   "llama-3.3-70b-versatile"
 ]);
 const workingDefaultModel = new Map();
+
+// Models this provider answered 404 for during this app session: the model is
+// gone, not busy. Skipped on later calls so a stale pinned name costs one dead
+// request, not one per dictation.
+/** @type {Map<string, Set<string>>} */
+const retiredModels = new Map();
 
 function resolveProvider() {
   const name = (process.env.CLEANUP_PROVIDER || "groq").toLowerCase();
@@ -67,10 +75,38 @@ function resolveProvider() {
     : configured;
   const defaults = [provider.model, ...(provider.fallbackModels || [])];
   const cached = workingDefaultModel.get(name);
-  const models = explicitModel
-    ? [explicitModel]
+  // A pinned model is tried first and is never swapped for being busy. It IS
+  // swapped when the provider says it no longer exists: a retired name is a
+  // dead pointer, and honouring it cost this app weeks of silently unformatted
+  // dictations (a settings file here still pinned llama-3.3-70b-versatile
+  // months after Groq retired it). The user is told when that swap happens.
+  const ordered = explicitModel
+    ? [explicitModel, ...defaults.filter((m) => m !== explicitModel)]
     : [...new Set([...(cached && defaults.includes(cached) ? [cached] : []), ...defaults])];
-  return { name, provider, models, usesExplicitModel: Boolean(explicitModel) };
+  const gone = retiredModels.get(name);
+  const live = gone ? ordered.filter((m) => !gone.has(m)) : ordered;
+  return {
+    name,
+    provider,
+    // No fallback to the full (dead) `ordered` list here: once every
+    // candidate for a provider is confirmed retired, `live` stays empty and
+    // callers stop issuing requests instead of retrying known-dead models
+    // forever.
+    models: live,
+    explicitModel
+  };
+}
+
+/**
+ * Record that `model` no longer exists at `providerName` so later calls on
+ * either the dictation-cleanup path or the voice-edit path skip it, instead
+ * of each re-discovering the same 404 on its own.
+ * @param {string} providerName
+ * @param {string} model
+ */
+export function recordRetiredModel(providerName, model) {
+  if (!retiredModels.has(providerName)) retiredModels.set(providerName, new Set());
+  retiredModels.get(providerName).add(model);
 }
 
 /** Build an explicit editing request using the user's current cleanup configuration.
@@ -83,16 +119,22 @@ function resolveProvider() {
  * left to try.
  */
 export function createCleanupRequest(systemPrompt, userText, { attempt = 0 } = {}) {
-  const { name, provider, models } = resolveProvider();
+  const { name, provider, models, explicitModel } = resolveProvider();
   const apiKey = process.env[provider.keyEnv] || provider.fallbackKey;
   if (!apiKey) throw new Error("No API key configured for text editing.");
+  if (!models.length) throw new Error("No working text-cleanup model available.");
   const model = models[Math.min(Math.max(0, attempt), models.length - 1)];
   return {
     ...buildRequest(provider, apiKey, model, systemPrompt, userText),
     provider: name,
     kind: provider.kind,
     model,
-    attempts: models.length
+    attempts: models.length,
+    // Pinned only when the model THIS attempt would use is the literal
+    // configured name. A busy pinned model stays pinned; once it has fallen
+    // over to a built-in default (retired), that default is not pinned and
+    // follows the normal rate-limit failover rules.
+    pinnedModel: Boolean(explicitModel) && model === explicitModel
   };
 }
 
@@ -122,6 +164,7 @@ function buildSystemPrompt(selfCorrectionOn) {
 - Keep every spoken word in the same order. Never rewrite, paraphrase, translate, improve grammar, or change a command into a suggestion.
 - Keep spoken number words as words. Never turn them into digits, currency signs, or other symbols.
 - Add minimal, natural punctuation and capitalization. Use the final comma in a list of three or more items. Do not put a comma before and when it joins two thoughts. Use a comma before a contrasting conjunction (English but, Croatian ali) when it joins complete thoughts. Do not add semicolons or dashes. Keep one paragraph unless the topic clearly changes.
+- The periods already in the text are unreliable: the speech engine drops one at every breath, even mid-sentence. When the words after a period continue the same sentence, remove the period, join the parts, and lowercase the joined word unless it is a name, an acronym, or I. Never split a sentence and never change a word while joining.
 - Remove only um, uh, uhh, er, erm, and repeated stutters. Keep like, you know, sort of, okay, and so.
 ${selfCorrectionOn ? "- When the speaker clearly replaces earlier words, keep only the correction: 'buy milk, no wait, buy water' becomes 'Buy water.' 'The price is fifty, sorry, sixty dollars' becomes 'The price is sixty dollars.' 'Use red, scratch that, use blue' becomes 'Use blue.' Keep no, actually, and sorry when they are ordinary content.\n" : ""}- Always make a numbered list when the speaker explicitly gives at least three ordered items such as first/second/third or one/two/three. Remove only those spoken markers. Keep every lead-in and wrap-up word, and put the wrap-up after the list in its own paragraph. Otherwise keep prose.
 - Example: 'I need one speed, two accuracy, three polish, and then send it' becomes 'I need:\n\n1. speed\n2. accuracy\n3. polish\n\nAnd then send it.'
@@ -145,6 +188,77 @@ const RETRACTION_CUES = /\b(no wait|wait no|scratch that|strike that|never ?mind
  */
 export function looksLikeRetraction(text) {
   return typeof text === "string" && RETRACTION_CUES.test(text);
+}
+
+// --- Over-punctuation routing gate --------------------------------------------
+// The streaming engine closes a chunk wherever the speaker pauses and puts a
+// period there, even mid-sentence, so a thinking pause comes out as "Install
+// AutoHotkey and set up. The Mac copy shortcuts." Those periods are the
+// engine's, not the speaker's, but only the cleanup pass can judge which is
+// which, and the length/filler heuristics in main.js skip cleanup on exactly
+// this shape of text (short, "clean", already ends in a period). These two
+// word lists are the routing signal: they never delete anything themselves,
+// they only make sure such a transcript reaches the LLM.
+
+// Words a finished sentence does not end on. A period straight after one is a
+// chopped pause.
+const DANGLING_ENDINGS = new Set([
+  "a", "an", "the", "and", "or", "but", "so", "of", "to", "for", "with", "from",
+  "into", "onto", "at", "by", "as", "in", "on", "up", "off", "over", "under",
+  "about", "that", "which", "than", "then", "is", "are", "was", "were", "be",
+  "been", "my", "your", "his", "her", "its", "our", "their", "this", "these",
+  "those", "like", "because", "if", "when", "while", "very", "just", "plus"
+]);
+
+// Words that open a continuation of the sentence before them.
+const CONTINUATION_STARTS = new Set([
+  "and", "or", "nor", "but", "so", "because", "which", "that", "than", "then",
+  "of", "to", "for", "with", "without", "from", "into", "onto", "about", "at",
+  "by", "as", "in", "on", "like", "plus", "also"
+]);
+
+/** The sentences in `text`, trimmed, empties dropped. */
+function splitSentences(/** @type {string} */ text) {
+  return text.split(/(?<=[.!?…])\s+/).map((s) => s.trim()).filter(Boolean);
+}
+
+/** The words of one sentence, terminal punctuation removed. */
+function sentenceWords(/** @type {string} */ sentence) {
+  return sentence.replace(/[.!?…]+$/, "").split(/\s+/).filter(Boolean);
+}
+
+/** Bare lowercase form of a word, punctuation stripped. */
+function bareWord(/** @type {string} */ word) {
+  return word.toLowerCase().replace(/[^a-z']/g, "");
+}
+
+/**
+ * Does `text` look like the engine sprinkled periods at the speaker's pauses?
+ * Used by the cleanup-routing gate in main.js: true sends an otherwise
+ * "short and clean" transcript through the cleanup pass, which re-judges the
+ * sentence boundaries. Deliberately generous: a false positive costs one
+ * cleanup call, a false negative pastes the chopped text.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function looksOverPunctuated(text) {
+  if (typeof text !== "string") return false;
+  const sentences = splitSentences(text);
+  if (sentences.length < 2) return false;
+  for (let i = 0; i < sentences.length; i++) {
+    const words = sentenceWords(sentences[i]);
+    if (!words.length) continue;
+    // An interior sentence that ends on a dangling word was cut mid-thought.
+    if (i < sentences.length - 1 && /\.$/.test(sentences[i]) &&
+        DANGLING_ENDINGS.has(bareWord(words[words.length - 1]))) return true;
+    // A later sentence that opens on a continuation word belongs to the one
+    // before it.
+    if (i > 0 && CONTINUATION_STARTS.has(bareWord(words[0]))) return true;
+    // A bare one-word sentence in the middle of a dictation is a chopped
+    // fragment, not a sentence ("... on my Mac. Like IPT. Paste. My email ...").
+    if (i > 0 && words.length === 1 && /\.$/.test(sentences[i])) return true;
+  }
+  return false;
 }
 
 const SAFE_FILLERS = new Set(["um", "uh", "uhh", "er", "erm"]);
@@ -377,6 +491,11 @@ export const FREE_DAILY_LIMIT_MESSAGE = "Today's free tidy-up allowance is used 
 // code and model name, which are already in the console line above it.
 const ENGINE_DOWN_MESSAGE = "Tidy-up isn't working — text typed exactly as you said it.";
 
+// Shown once when the tidy-up engine named in settings no longer exists at the
+// provider and the built-in one took over. Not an error: the dictation was
+// formatted. It tells the user their setting is stale so it can be corrected.
+export const PINNED_MODEL_GONE_MESSAGE = "Your chosen tidy-up engine is gone - used the built-in one.";
+
 /**
  * Most recent cleanup failure, consumed (cleared) by the caller so one outage
  * is announced once rather than on every utterance.
@@ -400,6 +519,7 @@ export function resetCleanupFailureStreak() {
 /** Test-only: clear the remembered working default model. */
 export function resetCleanupModelCache() {
   workingDefaultModel.clear();
+  retiredModels.clear();
 }
 
 /**
@@ -452,10 +572,13 @@ export async function polishTranscript(rawText, { profile = "plain" } = {}) {
 }
 
 async function polishWithinBudget(rawText, budgetSignal, profile) {
-  const { name: providerName, provider, models, usesExplicitModel } = resolveProvider();
+  const { name: providerName, provider, models, explicitModel } = resolveProvider();
   const apiKey = process.env[provider.keyEnv] || provider.fallbackKey;
   if (!apiKey) return rawText;
   if (!rawText || rawText.length < 2) return rawText;
+  // Every candidate for this provider is confirmed retired (all 404'd
+  // earlier this session): don't spend another dead request re-proving it.
+  if (!models.length) { lastCleanupError = ENGINE_DOWN_MESSAGE; return rawText; }
 
   // Self-correction handling is on unless the user turned it off in Settings.
   // Read live (next dictation reflects the toggle without a restart).
@@ -550,7 +673,7 @@ async function polishWithinBudget(rawText, budgetSignal, profile) {
         );
         const cleaned = parseResponse(provider, data);
         transientFailures = 0;
-        if (!usesExplicitModel && reachedByRetirement) workingDefaultModel.set(providerName, model);
+        if (!explicitModel && reachedByRetirement) workingDefaultModel.set(providerName, model);
         const candidate = (cleaned && cleaned.trim()) || "";
         if (!candidate) return rawText;
         // The cleanup pass may punctuate and lay out, never rewrite. Compare
@@ -570,7 +693,21 @@ async function polishWithinBudget(rawText, budgetSignal, profile) {
         return candidate;
       } catch (error) {
         const hasFallback = index < models.length - 1;
-        if (!usesExplicitModel && hasFallback && isModelFailoverError(error)) {
+        // Pinned only when the model THIS attempt used is the literal
+        // configured name — not "was any model ever pinned". Once a pinned
+        // model has fallen over (retired), later attempts are ordinary
+        // built-in defaults and must keep normal 429 failover.
+        const isPinnedAttempt = Boolean(explicitModel) && model === explicitModel;
+        if (isRetiredModelError(error)) {
+          recordRetiredModel(providerName, model);
+          // Say it once when the model the user pinned is the one that died,
+          // so a swap is never silent.
+          if (isPinnedAttempt) lastCleanupError = PINNED_MODEL_GONE_MESSAGE;
+        }
+        // A pinned model is only ever left behind when it is gone for good.
+        const mayFailOver = isRetiredModelError(error) ||
+          (!isPinnedAttempt && isModelFailoverError(error));
+        if (hasFallback && mayFailOver) {
           console.error(`Cleanup model unavailable or busy (${providerName}/${model}); trying ${models[index + 1]}`);
           if (!isRetiredModelError(error)) reachedByRetirement = false;
           continue;
