@@ -15,8 +15,8 @@ import {
   PID_RECORD_VERSION
 } from "../../src/whisper-pid.js";
 
-const INSTALLED = "/Users/someone/Library/Application Support/GVoice";
-const DEV = "/Users/someone/dev/voice/.dev-userdata";
+const INSTALLED = resolve(tmpdir(), "gvoice-installed");
+const DEV = resolve(tmpdir(), "gvoice-dev", ".dev-userdata");
 
 /** A marker as the installed app would have written it. */
 const installedRecord = (over = {}) => ({

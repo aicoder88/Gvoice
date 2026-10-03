@@ -5,7 +5,7 @@
 // JSON file and NEVER in .env, which holds the API keys.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, chmodSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import {
@@ -104,13 +104,11 @@ test("a real device id that merely looks ordinary is kept", () => {
   assert.equal(after.preferredMicLabel, "Anker");
 });
 
-test("a folder that cannot be written throws, so the user can be told", () => {
-  const dir = join(tempDir(), "locked");
-  mkdirSync(dir);
-  chmodSync(dir, 0o500);
-  try {
-    assert.throws(() => writePreferences(preferencesPath(dir), { micMode: "hold" }));
-  } finally {
-    chmodSync(dir, 0o700);
-  }
+test("an unusable preferences folder throws, so the user can be told", () => {
+  // A regular file cannot hold preferences on any OS. chmod does not make a
+  // Windows directory unwritable and is also ineffective for a Unix root run.
+  const dir = join(tempDir(), "not-a-folder");
+  writeFileSync(dir, "existing file");
+  assert.throws(() => writePreferences(preferencesPath(dir), { micMode: "hold" }));
+  assert.equal(readFileSync(dir, "utf8"), "existing file");
 });

@@ -94,6 +94,23 @@ export function idleMsForMode(mode) {
 }
 
 // --- Which device to bind to -------------------------------------------------
+/**
+ * Browser device IDs are scoped to the relay origin, including its random
+ * port. Reconnect a saved choice after restart only when its exact label
+ * identifies one real input. Duplicate labels and missing devices keep the
+ * old choice, so an ambiguous match cannot silently choose another mic.
+ * @param {string} preferredId
+ * @param {string} preferredLabel
+ * @param {{ id: string, label: string }[]} devices
+ * @returns {string}
+ */
+export function resolvePreferredMicId(preferredId, preferredLabel, devices) {
+  if (!preferredId || !preferredLabel || devices.some(d => d.id === preferredId)) return preferredId;
+  const matches = devices.filter(d => d.id && d.id !== "default" && d.id !== "communications"
+    && d.label === preferredLabel);
+  return matches.length === 1 ? matches[0].id : preferredId;
+}
+
 // The user can name a preferred microphone (a headset, a desk mic). It is not
 // always there: it gets unplugged, or the machine wakes before USB re-enumerates.
 // The rule, in one place so the renderer and the tests agree:

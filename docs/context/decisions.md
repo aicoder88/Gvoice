@@ -209,3 +209,42 @@ Reverse if: a paste ever lands your old clipboard instead of the dictation.
 First try raising the wait (`CLIPBOARD_RESTORE_DELAY_MS`). To reverse fully:
 in `finish`, restore only for `'verified'`, and write the text in
 `refusedDelivery` again.
+
+## 2026-09-15 - Windows skips the Unix-only companion server
+
+Windows startup no longer tries to listen on `control/gvoice.sock`. The Better
+Options companion uses a Unix-domain socket, while Node uses named pipes for
+Windows IPC. This mismatch caused EACCES on every Windows launch. Keyboard
+dictation, tray controls and the shared capture/delivery pipeline still run.
+The server also rejects direct Windows starts before creating any files.
+
+The Unix integration suite is explicitly excluded on Windows. Portable path
+and preference-error tests still run, along with a Windows unsupported-start
+check. `scripts/electron/windows-compatibility.mjs` checks the running Windows
+app using an isolated profile and fake media.
+
+Why: there is no Windows companion client in this product. Adding a named-pipe
+protocol and its access controls would expand this compatibility fix.
+
+Reverse if: a Windows companion client is added. Implement and test a Windows
+transport with per-user access control before enabling companion startup.
+
+## 2026-09-15 - Reconnect microphone preferences after the relay origin changes
+
+The local relay chooses a fresh port at launch. Browser microphone IDs depend
+on the origin, so a saved ID can disappear even while the same microphone is
+plugged in. A running Windows regression reproduced this: Settings kept Fake
+Audio Input 1 selected while capture used Fake Default Audio Input.
+
+When the saved ID is absent, an exact, unique microphone label can reconnect
+the choice to its current ID. Both capture selection and the preferences
+store use the same resolver. The original ID wins whenever it is still present.
+An absent, unlabeled or ambiguously named device keeps the existing fallback
+behavior. Reconnecting writes only preferences.json, never environment keys.
+
+Cost: two identical models with identical labels cannot be distinguished after
+an origin change. The user must select the intended device again in that case.
+
+Reverse if: a unique label resolves to a different physical microphone. Prefer
+a stable app origin or a native persistent device identity before removing
+the label fallback.

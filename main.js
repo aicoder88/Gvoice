@@ -49,7 +49,8 @@ import { createDestinationProfiles, PROFILE_LIST } from "./src/destination-profi
 import { captureDestinationIdentity, captureDictationSource } from "./src/foreground.js";
 import { LatencyTracker } from "./src/latency.js";
 import { DictationSession } from "./src/dictation-session.js";
-import { createControlServer, controlSocketPath } from "./src/control-socket.js";
+import { createControlServer, controlSocketPath, supportsControlSocket } from "./src/control-socket.js";
+import { resolvePreferredMicId } from "./public/mic-health.js";
 import * as vocab from "./src/vocab.js";
 import { createCorrectionWatcher } from "./src/correction-watch.js";
 import { looksLikeRetraction, looksOverPunctuated } from "./src/cleanup.js";
@@ -1353,6 +1354,7 @@ function dictationReady() {
 }
 
 async function startControlSocket() {
+  if (!supportsControlSocket()) return;
   if (controlServer) return;
   const socketPath = controlSocketPath(app.getPath("userData"));
   const server = createControlServer({
@@ -2673,7 +2675,8 @@ function setupIpc() {
 
   // …and reports back what it can see: every input, which one is live, and
   // whether that is the one the user asked for.
-  ipcMain.on("dictation:mic-state", (_event, state) => {
+  ipcMain.on("dictation:mic-state", (event, state) => {
+    if (!dictationWindow || event.sender !== dictationWindow.webContents) return;
     const src = state && typeof state === "object" ? state : {};
     micState = {
       devices: Array.isArray(src.devices)
@@ -2686,6 +2689,16 @@ function setupIpc() {
       open: !!src.open,
       source: typeof src.source === "string" ? src.source : "default"
     };
+    const resolvedId = resolvePreferredMicId(micPrefs.preferredMicId, micPrefs.preferredMicLabel, micState.devices);
+    if (prefsPath && resolvedId !== micPrefs.preferredMicId) {
+      try {
+        micPrefs = writePreferences(prefsPath, { preferredMicId: resolvedId });
+        dictationWindow.webContents.send("mic:prefs", micPrefs);
+        dlog("mic-preference-reconnected", { label: micPrefs.preferredMicLabel });
+      } catch (error) {
+        console.error("[main] microphone preference reconnect failed:", error && error.message);
+      }
+    }
     // Written down so "which microphone was it actually on?" is answerable
     // after the fact, without asking the user to reproduce anything.
     dlog("mic-state", {
@@ -2704,7 +2717,10 @@ function setupIpc() {
   // The Settings window's microphone section. It cannot enumerate devices
   // itself with any confidence – the dictation window is the one holding a live
   // stream – so ask that window and wait a beat for its answer.
-  ipcMain.handle("mic:get", async () => ({ prefs: micPrefs, state: await refreshMicState() }));
+  ipcMain.handle("mic:get", async () => {
+    const state = await refreshMicState();
+    return { prefs: micPrefs, state };
+  });
 
   ipcMain.handle("mic:set", async (_event, payload) => {
     if (!prefsPath) return { error: "GVoice hasn't finished starting up – try again in a moment." };
