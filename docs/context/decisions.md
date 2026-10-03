@@ -3,6 +3,65 @@
 One entry per structural decision, newest first. Each carries the reason it was
 made and the condition that would reverse it.
 
+## 2026-09-28 – Installation only follows an observable idle check and a verified rollback
+
+Replacing `/Applications/GVoice.app` can interrupt a held dictation, and a tray-only
+application has no normal window state that proves a capture is inactive. Before
+replacement, preserve a signature-verified copy under GVoice's AppBackups folder,
+verify the candidate bundle and its Parakeet worker, then use the application quit
+path. If that path does not return, record the uncertainty explicitly before any
+forced stop; preserve the immediately replaced bundle as an additional rollback
+keeper. App-bundle replacement does not touch the separate GVoice data directory,
+which retains dotenv, preferences, and history.
+
+**Reverse if:** an installed replacement or launch fails a concrete bundle,
+worker, microphone-selection, or synthetic delivery check. Move the saved
+preinstall bundle back to `/Applications/GVoice.app`, verify its signature, and
+launch it before further diagnosis. Improve the idle check if a real interrupted
+capture is observed.
+
+## 2026-09-28 – Parakeet reports ready only after one bounded silent inference
+
+The native runtime creates its execution graph during the first inference, not
+while opening the model. Step 1 measured that work in tens of milliseconds and
+also found that JSON object key order made the prepared worker get replaced by
+the first dictation. Canonical worker identity now uses normalized `bin` and
+`model` fields, so default readiness and request paths name the same worker.
+
+After a worker opens the model, GVoice sends one second of silence through the
+private pipe and discards its reply before it announces readiness. Startup,
+that preparation, and every real request run through the same small FIFO. A
+request during preparation waits; a preparation timeout or cancellation kills
+only that worker, and the next request creates and prepares one replacement.
+This keeps preparation from racing dictation or file work and makes a failed
+ready state visible through the existing local-engine error message.
+
+**Reverse if:** a representative installed-app measurement shows the one-second
+silent request causes material idle resource use, a slower first usable result,
+or unreliable recovery. Remove the preparation call while retaining canonical
+field identity and the serialized worker access, then investigate the native
+runtime's allocation path with measured evidence.
+
+## 2026-09-28 – Parakeet shares one local worker between dictation and files
+
+The owner requested switching GVoice to Parakeet. Add the `parakeet-local`
+provider using the existing Parakeet Unified EN 0.6B Q8_0 model. A small native
+worker links the pinned MIT-licensed transcribe.cpp runtime and keeps the model
+loaded. Audio and text travel only over private child-process pipes. The worker
+has no network listener, microphone access, or transcript storage. Reuse the
+existing local inference scheduler, with dictation ahead of queued file chunks.
+The dictation renderer supplies 16 kHz audio for Parakeet; other engines retain
+their 24 kHz contract. Timeouts and cancellation kill only the owned worker.
+
+Explicit microphone selection now refuses another input when the chosen one is
+unavailable; resolve a saved name again when Chromium changes device IDs.
+The owner's machine-specific Anker choice lives in preferences and machine
+memory, not a hardcoded device in the application.
+
+**Reverse if:** representative English dictations with the correct microphone
+lose words or become slower than the retained Whisper engine. Keep the old model
+and signed application backup so switching back does not need a download.
+
 ## 2026-09-27 – File transcription shares GVoice’s local speech engine
 
 The owner authorized consolidating English dictation and file transcription into GVoice. A dedicated sandboxed file window uses the existing whisper.cpp service and installed model. A shared inference queue puts live dictation ahead of pending file sections. FFmpeg decodes bounded sections directly from the selected file; GVoice saves only text/progress and never copies source media. Pause/resume checkpoints survive restart, which leaves interrupted jobs paused.
@@ -209,3 +268,23 @@ Reverse if: a paste ever lands your old clipboard instead of the dictation.
 First try raising the wait (`CLIPBOARD_RESTORE_DELAY_MS`). To reverse fully:
 in `finish`, restore only for `'verified'`, and write the text in
 `refusedDelivery` again.
+
+## 2026-09-28 – Confirm Parakeet's final buffered audio before committing
+
+`public/audio-capture-worklet.js`, `public/dictation.js`
+
+Parakeet requests a partial-buffer flush after its speech allowance and commits
+on the acknowledgement from that capture port and request. PCM and acknowledgement
+share an ordered port. A 250ms fallback bounds a failed acknowledgement; new holds
+and microphone loss invalidate pending acknowledgements. Other engines retain
+their release behavior. Final partial resampling includes its last available
+sampling point.
+
+The 450ms speech allowance stays unchanged until observed speech trials justify
+less. A delivery acknowledgement cannot protect speech that has not happened
+yet, and a previous 250ms timer clipped words. A missing acknowledgement can add
+up to 250ms and still cannot promise samples delayed beyond that limit.
+
+Reverse if: running-app tests show duplicate/lost endings or excessive fallback
+frequency. Restore Parakeet's former timer path while keeping the 450ms allowance,
+and diagnose the capture-port lifecycle before attempting a shorter allowance.

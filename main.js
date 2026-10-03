@@ -59,6 +59,7 @@ import { getClipboardChangeCount } from "./src/clipboard-sequence.js";
 import { readBuildIdentity } from "./src/build-identity.js";
 import { initHistory, getHistory, getHistoryPath, recordTranscript, lastResult, trayLabelFor } from "./src/history.js";
 import { computeStats } from "./src/stats.js";
+import { ensureParakeet, stopParakeet, parakeetAvailability } from "./src/providers/parakeet-local.js";
 import { ensureWhisperServer, stopWhisperServer } from "./src/providers/whisper-local.js";
 import { ENV_FILE, MODELS_DIR, BIN_DIR } from "./src/bootstrap-env.js";
 import { writeEnvFile, settingsView, patchFromView, VALID_PROVIDERS } from "./src/settings.js";
@@ -1879,7 +1880,7 @@ async function retranscribeOnDemand(/** @type {string | null} */ recordingPath) 
     // Nothing will happen, so say why. The button used to sit there doing
     // absolutely nothing on every one of these.
     const provider = sttProvider();
-    const engine = provider === "whisper-local" || provider === "local" ? "on-device" : provider;
+    const engine = ["whisper-local", "local", "parakeet-local"].includes(provider) ? "on-device" : provider;
     const reason = provider !== "deepgram"
       ? "Transcribe again needs the Deepgram engine — GVoice is set to " + engine + "."
       : retryInFlight
@@ -2468,6 +2469,9 @@ function setupIpc() {
   ipcMain.handle("settings:save", async (_event, payload) => {
     if (fileTranscriptionWindow?.active) return { error: "Pause file transcription before saving speech settings." };
     const patch = patchFromView(payload || {});
+    if (patch.STT_PROVIDER === "parakeet-local" && !parakeetAvailability().available) {
+      return { error: parakeetAvailability().reason };
+    }
     try {
       writeEnvFile(envPath, patch);
     } catch (err) {
@@ -2576,6 +2580,7 @@ function setupIpc() {
     // persisted to .env and (for the model) becomes a child-process arg — keep
     // both to known allow-lists so a stray value can't point the engine elsewhere.
     if (!VALID_PROVIDERS.has(provider)) return { error: "Unknown engine." };
+    if (provider === "parakeet-local" && !parakeetAvailability().available) return { error: parakeetAvailability().reason };
     // Going (or staying) cloud: bin the model the speed test just downloaded.
     // Going local keeps it — it's about to be the engine. The "stop tracking it"
     // half waits until after the checks below: an apply that bails out (or one
@@ -3219,6 +3224,8 @@ async function applyEnvPatchLive(patch, source) {
   if (newProvider !== "whisper-local" && newProvider !== "local") {
     try { stopWhisperServer(); } catch {}
   }
+  if (newProvider !== "parakeet-local") stopParakeet();
+  else await ensureParakeet();
   updateTrayTooltip();
   rebuildTrayMenu();
 }
@@ -3243,6 +3250,7 @@ function needsOnboarding() {
       !(process.env.WHISPER_MODEL && existsSync(process.env.WHISPER_MODEL))) {
     return "Point GVoice at a local Whisper model file to dictate offline.";
   }
+  if (provider === "parakeet-local" && !parakeetAvailability().available) return parakeetAvailability().reason;
   return null;
 }
 
@@ -3381,6 +3389,10 @@ app.whenReady().then(async () => {
   // not on the first dictation. One retry covers a transient spawn hiccup;
   // after that the per-dictation path still falls back to whisper-cli.
   const provider = (process.env.STT_PROVIDER || "openai").toLowerCase();
+  if (provider === "parakeet-local") {
+    try { await ensureParakeet(); dlog("parakeet", "warmed at boot"); }
+    catch (err) { dlog("parakeet", "warm failed: " + err.message); }
+  }
   if (provider === "whisper-local" || provider === "local") {
     const bin = process.env.WHISPER_BIN || process.env.WHISPER_CLI || "whisper-cli";
     for (let attempt = 1; attempt <= 2; attempt++) {
@@ -3422,6 +3434,7 @@ function shutdownAll() {
   try { controlServer?.stop(); } catch {}
   controlServer = null;
   try { stopWhisperServer(); } catch {}
+  stopParakeet();
 }
 
 app.on("before-quit", () => {

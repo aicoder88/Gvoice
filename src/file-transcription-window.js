@@ -6,6 +6,7 @@ import { writeFile } from 'node:fs/promises';
 import { createFileTranscriptionQueue } from './file-transcription.js';
 import { AUDIO_EXTENSIONS, findMediaBinary, probeMedia, decodeMediaChunk } from './file-media.js';
 import { findInstalledWhisperCli } from './model-download.js';
+import { transcribeParakeet, parakeetAvailability } from './providers/parakeet-local.js';
 import { transcribeFileChunk } from './providers/whisper-local.js';
 
 export function createFileTranscriptionWindow({ root, isInteractiveBusy, isEngineChanging = () => false }) {
@@ -21,6 +22,12 @@ export function createFileTranscriptionWindow({ root, isInteractiveBusy, isEngin
       || (process.platform === 'win32' && existsSync(windowsBinary) ? windowsBinary : findInstalledWhisperCli());
     const modelPath = resolve(home, process.env.WHISPER_MODEL || 'models/ggml-small.en-q5_1.bin');
     const [ffmpeg, ffprobe] = await Promise.all([findMediaBinary('ffmpeg'), findMediaBinary('ffprobe')]);
+    if (process.env.STT_PROVIDER === 'parakeet-local') {
+      const local = parakeetAvailability();
+      const reason = isEngineChanging() ? 'Wait for the speech engine change to finish.'
+        : local.reason || (!ffmpeg || !ffprobe ? 'File transcription needs FFmpeg and FFprobe.' : '');
+      return { available: !reason, reason, provider: 'parakeet-local', model: basename(local.model), modelPath: local.model, bin: local.bin, ffmpeg, ffprobe };
+    }
     let reason = '';
     if (isEngineChanging()) reason = 'Wait for the speech engine change or speed test to finish.';
     else if (!bin || !existsSync(bin.replace(/-cli(\.exe)?$/i, '-server$1'))) reason = 'Install the local Whisper engine in GVoice before transcribing files.';
@@ -35,6 +42,7 @@ export function createFileTranscriptionWindow({ root, isInteractiveBusy, isEngin
     transcribe: async (pcm, { signal, model }) => {
       const current = await engine();
       if (!current.available || current.modelPath !== model) throw new Error('The local speech engine changed. Restore it before resuming.');
+      if (current.provider === 'parakeet-local') return transcribeParakeet(pcm, { bin: current.bin, model, signal, priority: 'background' });
       return transcribeFileChunk(pcm, { bin: current.bin, model, signal });
     },
   });

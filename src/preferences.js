@@ -77,7 +77,8 @@ export function normalizePreferences(raw, base = DEFAULT_PREFERENCES) {
     preferredMicId: id === null ? base.preferredMicId : id,
     // A cleared device also clears its remembered name, so the settings window
     // can never show "Preferred: Anker" next to a preference that is gone.
-    preferredMicLabel: id === "" ? "" : label === null ? base.preferredMicLabel : label
+    preferredMicLabel: rawId === "default" || rawId === "communications" || (id === "" && !label)
+      ? "" : label === null ? base.preferredMicLabel : label
   };
 }
 

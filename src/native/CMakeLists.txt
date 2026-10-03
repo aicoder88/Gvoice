@@ -1,0 +1,17 @@
+cmake_minimum_required(VERSION 3.22)
+project(gvoice_parakeet LANGUAGES C CXX)
+if(NOT TRANSCRIBE_SOURCE)
+  message(FATAL_ERROR "Set TRANSCRIBE_SOURCE to the pinned transcribe.cpp checkout")
+endif()
+set(TRANSCRIBE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(TRANSCRIBE_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(TRANSCRIBE_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(TRANSCRIBE_INSTALL OFF CACHE BOOL "" FORCE)
+set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
+add_subdirectory("${TRANSCRIBE_SOURCE}" transcribe)
+# Upstream's public include path assumes a top-level build. Supply its actual
+# path explicitly when embedding it, including for transcribe's own sources.
+target_include_directories(transcribe PUBLIC "${TRANSCRIBE_SOURCE}/include")
+add_executable(gvoice-parakeet parakeet-worker.cpp)
+target_compile_features(gvoice-parakeet PRIVATE cxx_std_17)
+target_link_libraries(gvoice-parakeet PRIVATE transcribe)

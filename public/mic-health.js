@@ -1,4 +1,14 @@
 // @ts-check
+// Chromium device IDs can change between app launches. Resolve a saved name
+// against real inputs, excluding aliases that follow the system default.
+export function resolvePreferredInput(devices, id = '', label = '') {
+  const inputs = devices.filter(d => d.kind === 'audioinput' && d.deviceId && !['default', 'communications'].includes(d.deviceId));
+  const named = label ? inputs.find(d => d.label === label || d.label.startsWith(label + ' (')) : null;
+  const exact = inputs.find(d => d.deviceId === id);
+  if (label) return named || (exact && !exact.label ? exact : null);
+  return exact || null;
+}
+
 // Pure decision logic for spotting a dead microphone capture pipeline from the
 // loudest frame of a single recorded hold. Shared by the dictation renderer
 // (imported over HTTP as an ES module) and the unit tests (imported by node) —

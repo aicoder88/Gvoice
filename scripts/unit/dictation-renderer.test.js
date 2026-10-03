@@ -2,13 +2,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+import { resolvePreferredInput } from '../../public/mic-health.js';
 
 const SOURCE = readFileSync(new URL("../../public/dictation.js", import.meta.url), "utf8")
   .replace(
-    'import { classifyHold, idleMsForMode, chooseCaptureDevice } from "/mic-health.js";',
+    'import { classifyHold, idleMsForMode, chooseCaptureDevice, resolvePreferredInput } from "/mic-health.js";',
     "const classifyHold = () => ({ action: 'ok', cause: '', silentStreak: 0 });"
       + " const idleMsForMode = () => Infinity;"
       + " const chooseCaptureDevice = () => ({ deviceId: null, source: 'default', rebuild: true });"
+      + ` const resolvePreferredInput = ${resolvePreferredInput.toString()};`
   );
 
 // The stub above only works while the renderer's import line looks exactly like
@@ -21,6 +23,7 @@ if (SOURCE.includes("mic-health.js\"")) {
 test("a rejected socket handshake closes a mic opened for that press", async () => {
   let onStart;
   let trackStopped = false;
+  let getUserMediaCalls = 0;
   const listeners = new Map();
 
   class RejectingWebSocket {
@@ -97,10 +100,13 @@ test("a rejected socket handshake closes a mic opened for that press", async () 
     navigator: {
       onLine: true,
       mediaDevices: {
-        getUserMedia: async () => ({
-          getAudioTracks: () => [track],
-          getTracks: () => [track]
-        }),
+        getUserMedia: async () => {
+          getUserMediaCalls++;
+          return { getAudioTracks: () => [track], getTracks: () => [track] };
+        },
+        enumerateDevices: async () => [
+          { kind: "audioinput", deviceId: "builtin-1", label: "Built-in Microphone" }
+        ],
         addEventListener() {}
       }
     },
@@ -124,6 +130,17 @@ test("a rejected socket handshake closes a mic opened for that press", async () 
   assert.equal(trackStopped, true, "failed startup must release the acquired microphone track");
   assert.equal(elements.status.textContent, "WS failed");
   assert.match(elements.log.textContent, /Mic released \(socket startup failed\)/);
+
+  // A remembered Anker is a deliberate user choice. If it disappears, the
+  // renderer must tell the user rather than call getUserMedia without an exact
+  // device and silently capture the built-in microphone.
+  vm.runInContext("applyMicPrefs({ preferredMicId: 'old-anker', preferredMicLabel: 'Anker PowerConf C200' })", context);
+  const callsBeforeMissingAnker = getUserMediaCalls;
+  await assert.rejects(
+    vm.runInContext("getMicStream()", context),
+    /selected microphone \(Anker PowerConf C200\) is unavailable/i
+  );
+  assert.equal(getUserMediaCalls, callsBeforeMissingAnker, "a missing selected microphone must not fall back to another input");
 });
 
 // ---------------------------------------------------------------------------

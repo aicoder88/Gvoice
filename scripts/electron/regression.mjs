@@ -48,7 +48,7 @@ try {
     env: { ...process.env, GVOICE_TEST_MODE: '1', GVOICE_TEST_PROFILE: profile,
       GVOICE_TEST_MAIN: join(root, 'main.js'), GVOICE_HOME: profile, DOTENV_CONFIG_PATH: join(profile, 'absent-config'),
       TMPDIR: profile,
-      STT_PROVIDER: 'whisper-local', WHISPER_MODEL: model, CLEANUP_ENABLED: 'false', MIC_DEVICE_ID: '',
+      STT_PROVIDER: process.env.GVOICE_TEST_PROVIDER || 'whisper-local', WHISPER_MODEL: model, CLEANUP_ENABLED: 'false', MIC_DEVICE_ID: '', GVOICE_NO_ENV: '1',
       RECORDING_RETENTION_DAYS: '1' },
     timeout: 60000,
   });

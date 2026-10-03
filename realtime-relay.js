@@ -7,6 +7,7 @@ import { WebSocketServer } from "ws";
 import { sendToClient } from "./src/providers/_shared.js";
 import { attach as attachOpenAI } from "./src/providers/openai.js";
 import { attach as attachDeepgram } from "./src/providers/deepgram.js";
+import { attach as attachParakeetLocal } from "./src/providers/parakeet-local.js";
 import { attach as attachWhisperLocal } from "./src/providers/whisper-local.js";
 
 // Re-exported so the public import path stays
@@ -165,6 +166,11 @@ export function attachRealtimeRelay(server, options = {}) {
         model: modelOverride || deepgramModel,
         language: langOverride || deepgramLanguage
       });
+      return;
+    }
+
+    if (provider === "parakeet-local") {
+      attachParakeetLocal(clientSocket);
       return;
     }
 

@@ -14,7 +14,7 @@ const source = join(profile, 'synthetic.wav');
 execFileSync('/usr/bin/say', ['-v', 'Samantha', '-r', '150', '-o', source, '--data-format=LEI16@16000', 'The green folder contains three useful documents.']);
 const base = Object.fromEntries(['PATH','HOME','USER','LOGNAME','SHELL','LANG'].filter(k => process.env[k]).map(k => [k, process.env[k]]));
 const env = { ...base, GVOICE_NO_ENV: '1', GVOICE_HOME: home, GVOICE_USER_DATA: userData,
-  STT_PROVIDER: 'whisper-local', WHISPER_MODEL: join(root, 'models/ggml-small.en-q5_1.bin'), CLEANUP_ENABLED: 'false' };
+  STT_PROVIDER: process.env.GVOICE_TEST_PROVIDER || 'whisper-local', WHISPER_MODEL: join(root, 'models/ggml-small.en-q5_1.bin'), CLEANUP_ENABLED: 'false' };
 let app;
 const delay = ms => new Promise(r => setTimeout(r, ms));
 async function until(check, label) {

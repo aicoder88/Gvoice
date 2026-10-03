@@ -1,6 +1,6 @@
-import { classifyHold, idleMsForMode, chooseCaptureDevice } from "/mic-health.js";
+import { classifyHold, idleMsForMode, chooseCaptureDevice, resolvePreferredInput } from "/mic-health.js";
 
-const targetSampleRate = 24000;
+const targetSampleRate = new URLSearchParams(window.location.search).get("provider") === "parakeet-local" ? 16000 : 24000;
 const statusEl = document.getElementById("status");
 const logEl = document.getElementById("log");
 
@@ -91,8 +91,42 @@ const FAILURE_MS = Number(window.DICTATION_FAILURE_MS || 20000);
 // it every hold — the mic stays warm again, so that half-second of dead wait
 // before every paste is back off the clock.
 const TAIL_MS = Number(window.DICTATION_TAIL_MS || 450);
+// Speech after key-up is separate from delivery of the buffered audio. Keep
+// the established speech allowance until physical final-syllable trials can
+// justify reducing it; synthetic timing alone cannot prove that safe.
+const PARAKEET_TAIL_MS = Number(window.DICTATION_PARAKEET_TAIL_MS ?? TAIL_MS);
+const FLUSH_TIMEOUT_MS = 250;
 let draining = false;
 let drainTimer = null;
+let flushTimer = null;
+let pendingFlush = null;
+let nextFlushId = 0;
+
+function cancelTailDrain() {
+  clearTimeout(drainTimer);
+  clearTimeout(flushTimer);
+  drainTimer = null;
+  flushTimer = null;
+  pendingFlush = null;
+  draining = false;
+}
+
+function finishAudioDelivery(outcome) {
+  if (!draining) return;
+  cancelTailDrain();
+  sendTiming("audio-delivered", { outcome });
+  finishUtterance();
+}
+
+function flushFinalAudio() {
+  if (!draining) return;
+  const port = processorNode?.port;
+  pendingFlush = { requestId: ++nextFlushId, port };
+  // A stopped worklet or delayed message must not hang a released hold.
+  flushTimer = setTimeout(() => finishAudioDelivery("flush-timeout"), FLUSH_TIMEOUT_MS);
+  try { port?.postMessage({ type: "flush", requestId: pendingFlush.requestId }); }
+  catch { /* The bounded fallback still allows in-flight PCM to arrive. */ }
+}
 // Partial-transcript fallback armed by finishUtterance. Tracked so a new press
 // can cancel the previous utterance's timer — a stale one firing mid-hold
 // would type the NEW utterance's first words early and break its finalize.
@@ -314,6 +348,8 @@ async function ensureSocket() {
       if (activeProfile?.language) params.set("language", activeProfile.language);
       if (activeProfile?.model) params.set("model", activeProfile.model);
       url = `ws://${window.location.host}/realtime?${params.toString()}`;
+    } else if (provider === "parakeet-local") {
+      url = `ws://${window.location.host}/realtime?provider=parakeet-local`;
     } else if (provider === "whisper-local" || provider === "local") {
       url = `ws://${window.location.host}/realtime?provider=whisper-local`;
     } else {
@@ -555,11 +591,17 @@ async function pickDevice() {
   return choice.deviceId;
 }
 
-// Open a mic stream, optionally pinned to a specific device. A pinned device
-// that has since vanished (unplugged) throws OverconstrainedError/NotFoundError
-// — fall back to the system default rather than failing the whole build, and
-// forget the stale preference so we don't keep retrying a gone device.
+// Resolve an explicit microphone on every open, including recovery attempts.
+// An unavailable selected input must fail instead of recording another device.
+// Only automatic input selection may fall back to the system default.
 async function getMicStream(deviceId) {
+  const explicitlySelected = !!(preferredMicId || preferredMicLabel);
+  if (explicitlySelected) {
+    const selected = resolvePreferredInput(await navigator.mediaDevices.enumerateDevices(), preferredMicId, preferredMicLabel);
+    if (!selected) throw new Error(`Your selected microphone (${preferredMicLabel || 'saved input'}) is unavailable. Connect it before dictating.`);
+    deviceId = selected.deviceId;
+    preferredMicId = selected.deviceId;
+  }
   const base = {
     channelCount: 1,
     echoCancellation: false,
@@ -575,6 +617,7 @@ async function getMicStream(deviceId) {
       // which differs from the asked-for id whenever the OS resolves it.
       return { stream, requestedId: deviceId };
     } catch (err) {
+      if (explicitlySelected) throw err;
       const name = err && err.name;
       if (name === "OverconstrainedError" || name === "NotFoundError") {
         log("Preferred mic gone — falling back to system default");
@@ -672,7 +715,14 @@ async function buildCaptureGraph(deviceId = null, isCurrent = () => true) {
   muteNode = audioContext.createGain();
   muteNode.gain.value = 0;
 
-  processorNode.port.onmessage = (event) => {
+  const capturePort = processorNode.port;
+  capturePort.onmessage = (event) => {
+    if (event.data?.type === "flushed") {
+      if (pendingFlush?.port === capturePort && pendingFlush.requestId === event.data.requestId) {
+        finishAudioDelivery("flushed");
+      }
+      return;
+    }
     const { pcm16, peak } = event.data;
     // Maintain the rolling pre-roll window regardless of recording state.
     prerollChunks.push(pcm16);
@@ -821,8 +871,7 @@ function handleMicLost(reason, immediate = false, { sameDevice = false } = {}) {
   isRecording = false;
   // Cancel a pending tail-drain commit: finishUtterance on a torn-down
   // pipeline would double-report (failure pill over this mic warning).
-  clearTimeout(drainTimer);
-  draining = false;
+  cancelTailDrain();
   // Same reason for the partial-transcript fallback: it's gated only by
   // alreadyFinalized (not failureHandled), so leaving it armed would paste a
   // partial after this mic warning — exactly the double-report above.
@@ -896,6 +945,7 @@ async function probeLive(ms) {
 // then the system default, then every other input. The liveness probe weeds out
 // the silent ones — more robust than guessing "virtual" from device names.
 async function candidateDeviceIds() {
+  if (preferredMicId || preferredMicLabel) return [preferredMicId || null];
   const ids = [];
   // The device the user actually asked for is tried before anything else, so a
   // recovery round never quietly settles on a mic they did not choose.
@@ -1076,7 +1126,7 @@ function applyMicPrefs(prefs) {
   if (!prefs || typeof prefs !== "object") return;
   const nextMode = typeof prefs.micMode === "string" ? prefs.micMode : micMode;
   const nextId = typeof prefs.preferredMicId === "string" ? prefs.preferredMicId : preferredMicId;
-  const deviceChanged = nextId !== preferredMicId;
+  const deviceChanged = nextId !== preferredMicId || (prefs.preferredMicLabel || '') !== preferredMicLabel;
   const modeChanged = nextMode !== micMode;
   micMode = nextMode;
   MIC_IDLE_MS = idleMsForMode(micMode);
@@ -1101,7 +1151,7 @@ function applyMicPrefs(prefs) {
 // would throw away what is being said.
 async function checkPreferredDevice(why) {
   if (isRecording || startInFlight || draining || recovering) return;
-  if (!preferredMicId || !captureReady || idleDropped) {
+  if ((!preferredMicId && !preferredMicLabel) || !captureReady || idleDropped) {
     // Nothing to return to, or nothing is open – the next build picks the right
     // device on its own through pickDevice().
     await reportMicState();
@@ -1129,6 +1179,7 @@ async function checkPreferredDevice(why) {
       try {
         await buildCaptureGraph(choice.deviceId);
       } catch (error) {
+        if (preferredMicId || preferredMicLabel) throw error;
         // The working graph is already torn down at this point, so leaving it
         // here strands the app with no microphone at all: captureReady stays
         // false, nothing schedules a recovery, and every press from now on
@@ -1238,11 +1289,13 @@ async function startRecordingOperation(profile, isCurrent) {
   // main first — no pill, no auto-retry (the new press owns the screen, and a
   // rescued transcript pasted now would land mid-dictation), but the clip is on
   // disk and the tray's "Transcribe again" gets the words back.
-  if (failureTimer && !alreadyFinalized && !failureHandled && recordedBytes >= MIN_FAILURE_BYTES) {
+  if ((failureTimer || draining) && !alreadyFinalized && !failureHandled && recordedBytes >= MIN_FAILURE_BYTES) {
     log("Superseded by a new press — saving the unanswered dictation (" + recordedBytes + "B)");
     window.dictationBridge.reportSuperseded({ chunks: drainChunks(), sampleRate: targetSampleRate }, activeProfile?.sessionId);
   }
   clearFailureTimer();
+  // Cancel before any await, so a late acknowledgement cannot commit this press.
+  cancelTailDrain();
   clearTimeout(fallbackTimer);
   fallbackTimer = null;
   // Detach the previous socket before any startup await can receive its frames.
@@ -1255,7 +1308,6 @@ async function startRecordingOperation(profile, isCurrent) {
   if (!isCurrent()) return;
   // A new press during the previous utterance's tail drain supersedes it: cancel
   // the pending commit so this fresh recording's frames aren't committed early.
-  if (draining) { clearTimeout(drainTimer); draining = false; }
   activeProfile = profile || null;
   if (activeProfile) {
     log("Profile: lang=" + (activeProfile.language || "default") + " model=" + (activeProfile.model || "default"));
@@ -1267,7 +1319,7 @@ async function startRecordingOperation(profile, isCurrent) {
   // works with no internet. navigator.onLine is a cheap first signal (a false
   // negative just means we connect and the existing WS error path takes over).
   const provider = (new URLSearchParams(window.location.search).get("provider") || window.STT_PROVIDER || "openai").toLowerCase();
-  const isCloud = provider !== "whisper-local" && provider !== "local";
+  const isCloud = !["whisper-local", "local", "parakeet-local"].includes(provider);
   if (isCloud && navigator.onLine === false) {
     setStatus("Offline");
     log("Offline pre-flight: navigator.onLine === false, provider=" + provider);
@@ -1404,9 +1456,11 @@ function stopRecording() {
   // worklet keeps sending frames while `draining` is true (see onmessage).
   draining = true;
   setStatus("Finalizing…");
-  log("Mic released, draining tail (" + TAIL_MS + "ms) before commit");
+  const parakeet = activeProvider === "parakeet-local";
+  const tailMs = parakeet ? PARAKEET_TAIL_MS : TAIL_MS;
+  log("Mic released, draining tail (" + tailMs + "ms) before commit");
   clearTimeout(drainTimer);
-  drainTimer = setTimeout(finishUtterance, TAIL_MS);
+  drainTimer = setTimeout(parakeet ? flushFinalAudio : finishUtterance, tailMs);
 }
 
 // Commit the captured audio (now including the drained tail) and arm the

@@ -24,6 +24,13 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
     this.softClipNorm = 1 / Math.tanh(this.inputGain);
     this.buffer = new Float32Array(this.batchSize);
     this.bufferIndex = 0;
+    this.port.onmessage = ({ data }) => {
+      if (data?.type !== "flush") return;
+      // MessagePort preserves order: the partial PCM batch arrives before its
+      // acknowledgement, so the renderer can commit without guessing delivery.
+      this.flush(true);
+      this.port.postMessage({ type: "flushed", requestId: data.requestId });
+    };
   }
 
   process(inputs) {
@@ -38,14 +45,14 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
       this.buffer[this.bufferIndex++] = Math.tanh(gain * channel[i]) * norm;
       if (this.bufferIndex >= this.batchSize) {
         this.flush();
-        this.bufferIndex = 0;
       }
     }
 
     return true;
   }
 
-  flush() {
+  flush(final = false) {
+    if (!this.bufferIndex) return;
     let peak = 0;
     for (let i = 0; i < this.bufferIndex; i += 1) {
       const a = Math.abs(this.buffer[i]);
@@ -53,16 +60,19 @@ class AudioCaptureProcessor extends AudioWorkletProcessor {
     }
 
     const slice = this.buffer.subarray(0, this.bufferIndex);
-    const downsampled = downsample(slice, sampleRate, this.outputRate);
+    const downsampled = downsample(slice, sampleRate, this.outputRate, final);
     const pcm16 = floatTo16BitPcm(downsampled);
     this.port.postMessage({ pcm16: pcm16.buffer, peak }, [pcm16.buffer]);
+    this.bufferIndex = 0;
   }
 }
 
-function downsample(input, inputRate, outputRate) {
+function downsample(input, inputRate, outputRate, final = false) {
   if (inputRate === outputRate) return input;
   const ratio = inputRate / outputRate;
-  const length = Math.floor(input.length / ratio);
+  // A final partial batch includes its last available sampling point. Regular
+  // batches keep the existing conversion for engines that do not request flush.
+  const length = final ? Math.ceil(input.length / ratio) : Math.floor(input.length / ratio);
   const output = new Float32Array(length);
   for (let i = 0; i < length; i += 1) {
     output[i] = input[Math.floor(i * ratio)];

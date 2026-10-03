@@ -55,3 +55,6 @@ const dest = path.join(destDir, "koffi.node");
 fs.mkdirSync(destDir, { recursive: true });
 fs.copyFileSync(src, dest);
 console.log(`[copy-native] ${triplet}: ${src} -> ${dest}`);
+
+// Optional offline Parakeet worker is built separately with build:parakeet.
+fs.mkdirSync(path.join(__dirname, "..", "build", "parakeet"), { recursive: true });

@@ -51,3 +51,6 @@ backups/
 .verification/
 # Data folder for scripts/dev-isolated.sh (a dev launch keeps its own).
 .dev-userdata/
+
+# Rebuilt with pnpm build:parakeet
+build/parakeet/

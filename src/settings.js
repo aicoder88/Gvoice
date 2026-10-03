@@ -18,7 +18,7 @@ import { dirname } from "node:path";
 // patchFromView below. Everything else in the .env (other tuning knobs,
 // comments) is left exactly as the user wrote it.
 
-export const VALID_PROVIDERS = new Set(["openai", "deepgram", "whisper-local"]);
+export const VALID_PROVIDERS = new Set(["openai", "deepgram", "whisper-local", "parakeet-local"]);
 // AI-cleanup engines the Settings dropdown can pick (mirrors cleanup.js's
 // PROVIDER_DEFAULTS keys). "groq" is the shipped free-tier default.
 export const CLEANUP_PROVIDERS = new Set(["groq", "openai", "anthropic", "google"]);
