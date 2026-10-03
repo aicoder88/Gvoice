@@ -6,11 +6,12 @@ import { resolvePreferredInput } from '../../public/mic-health.js';
 
 const SOURCE = readFileSync(new URL("../../public/dictation.js", import.meta.url), "utf8")
   .replace(
-    'import { classifyHold, idleMsForMode, chooseCaptureDevice, resolvePreferredInput } from "/mic-health.js";',
+    'import { classifyHold, idleMsForMode, chooseCaptureDevice, resolvePreferredInput, resolvePreferredMicId } from "/mic-health.js";',
     "const classifyHold = () => ({ action: 'ok', cause: '', silentStreak: 0 });"
       + " const idleMsForMode = () => Infinity;"
       + " const chooseCaptureDevice = () => ({ deviceId: null, source: 'default', rebuild: true });"
       + ` const resolvePreferredInput = ${resolvePreferredInput.toString()};`
+      + " const resolvePreferredMicId = id => id;"
   );
 
 // The stub above only works while the renderer's import line looks exactly like
