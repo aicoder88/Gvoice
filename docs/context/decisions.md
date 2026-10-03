@@ -327,3 +327,15 @@ an origin change. The user must select the intended device again in that case.
 Reverse if: a unique label resolves to a different physical microphone. Prefer
 a stable app origin or a native persistent device identity before removing
 the label fallback.
+
+## 2026-10-03 - Use Handy for daily dictation
+
+The owner is switching from GVoice to Handy. Preserve this repository on GitHub
+so the app can be rebuilt later, then uninstall the local GVoice app and remove
+its local checkout and old app backups. Keep GVoice history and settings locally.
+Keep the shared Parakeet model for Handy and the small Whisper model at its
+current path because Hub still uses it.
+
+Reverse if: the owner chooses to resume GVoice. Restore the GitHub repository,
+rebuild the Parakeet worker and app, and verify microphone selection and paste
+in the running installation before relying on it.
