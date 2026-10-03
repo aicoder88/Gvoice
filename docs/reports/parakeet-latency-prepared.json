@@ -1,0 +1,645 @@
+{
+  "conditions": {
+    "synthetic": true,
+    "voice": "Samantha",
+    "rate": 150,
+    "monoHz": 16000,
+    "threads": 4,
+    "freshWorkerCount": 3,
+    "osCachesFlushed": false,
+    "cleanup": "not in direct-worker path",
+    "paste": "not in direct-worker path"
+  },
+  "rows": [
+    {
+      "launch": 1,
+      "trial": 0,
+      "phase": "first_after_ready",
+      "seconds": 3,
+      "readyMs": 15004.846458999999,
+      "requestMs": 78.59641700000066,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "model_open",
+          "ms": 14916.554,
+          "samples": 0
+        },
+        {
+          "stage": "worker_ready",
+          "ms": 14922.159082999999
+        },
+        {
+          "stage": "inference",
+          "ms": 81.849,
+          "samples": 16000
+        },
+        {
+          "stage": "readiness_inference",
+          "ms": 82.04558300000281,
+          "samples": 16000
+        },
+        {
+          "stage": "inference",
+          "ms": 74.556,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 74.74420900000041,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 2,
+      "trial": 0,
+      "phase": "first_after_ready",
+      "seconds": 3,
+      "readyMs": 343.88029200000165,
+      "requestMs": 57.33662499999991,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "model_open",
+          "ms": 293.312,
+          "samples": 0
+        },
+        {
+          "stage": "worker_ready",
+          "ms": 300.1401249999981
+        },
+        {
+          "stage": "inference",
+          "ms": 43.435,
+          "samples": 16000
+        },
+        {
+          "stage": "readiness_inference",
+          "ms": 43.58024999999907,
+          "samples": 16000
+        },
+        {
+          "stage": "inference",
+          "ms": 56.865,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 57.011084000001574,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 0,
+      "phase": "first_after_ready",
+      "seconds": 3,
+      "readyMs": 246.7017089999972,
+      "requestMs": 57.17729200000031,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "model_open",
+          "ms": 200.999,
+          "samples": 0
+        },
+        {
+          "stage": "worker_ready",
+          "ms": 204.66795900000216
+        },
+        {
+          "stage": "inference",
+          "ms": 41.774,
+          "samples": 16000
+        },
+        {
+          "stage": "readiness_inference",
+          "ms": 41.89191700000083,
+          "samples": 16000
+        },
+        {
+          "stage": "inference",
+          "ms": 56.72,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 56.89379199999894,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 1,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.783292000000074,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 56.104,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 56.2587910000002,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 2,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 57.11424999999872,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 56.374,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 56.601041000001715,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 3,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 59.29775000000154,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 58.572,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 58.73466600000029,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 4,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.919582999998966,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 56.552,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 56.661958999997296,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 5,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.460833000001,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 56.099,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 56.22620900000038,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 6,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.22137500000099,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 55.871,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 55.98016700000153,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 7,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.24458299999969,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 55.888,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 55.99670799999876,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 8,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.408957999999984,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 56.05,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 56.16675000000032,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 9,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.290499999999156,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 55.968,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 56.07749999999942,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 10,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 55.559291000001394,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 55.207,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 55.32983299999978,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 11,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.31912499999817,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 55.95,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 56.07745799999975,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 12,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.29387499999939,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 55.968,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 56.07300000000032,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 13,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.150541999999405,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 55.835,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 55.93570899999759,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 14,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.13900000000285,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 55.833,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 55.94237500000236,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 15,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 55.988540999998804,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 55.536,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 55.75333399999727,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 16,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.96475000000282,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 56.603,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 56.74399999999878,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 17,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 58.31079099999988,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 57.842,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 57.97245800000019,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 18,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.98383399999875,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 56.616,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 56.733541999998124,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 19,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.24120799999946,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 55.925,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 56.02691599999889,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 20,
+      "phase": "warm",
+      "seconds": 3,
+      "readyMs": null,
+      "requestMs": 56.14670800000022,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 55.807,
+          "samples": 48000
+        },
+        {
+          "stage": "request",
+          "ms": 55.933625000001484,
+          "samples": 48000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 21,
+      "phase": "warm",
+      "seconds": 10,
+      "readyMs": null,
+      "requestMs": 125.15033300000141,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 124.4,
+          "samples": 160000
+        },
+        {
+          "stage": "request",
+          "ms": 124.64216600000145,
+          "samples": 160000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 22,
+      "phase": "warm",
+      "seconds": 30,
+      "readyMs": null,
+      "requestMs": 373.1737499999981,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 371.074,
+          "samples": 480000
+        },
+        {
+          "stage": "request",
+          "ms": 371.8014159999984,
+          "samples": 480000
+        }
+      ]
+    },
+    {
+      "launch": 3,
+      "trial": 23,
+      "phase": "warm",
+      "seconds": 30,
+      "readyMs": null,
+      "requestMs": 371.38250000000335,
+      "nonempty": true,
+      "referencePass": true,
+      "timings": [
+        {
+          "stage": "inference",
+          "ms": 369.382,
+          "samples": 480000
+        },
+        {
+          "stage": "request",
+          "ms": 370.0302920000031,
+          "samples": 480000
+        }
+      ]
+    }
+  ],
+  "excludedFromPerformanceComparison": "Execution overlapped the initial synthetic capture-renderer run; not controlled single-worker conditions."
+}

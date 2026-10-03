@@ -1,0 +1,28 @@
+{
+  "scope": "verification only; existing implementation and installation preserved",
+  "source": "allowlisted numeric and enum fields from installed debug.log since observed process start",
+  "process_started_utc": "2026-09-28T09:53:19+00:00",
+  "observed_pid": 60946,
+  "sample_count": 1,
+  "conditions": "uncontrolled existing installed app observation; clip content, input capture identity, duration, engine warmth and cleanup success not established",
+  "samples": [
+    {
+      "provider": "parakeet-local",
+      "capture": "cold",
+      "outcome": "pasted",
+      "releaseToPasteMs": 1859.2015830001328,
+      "tailMs": 462.8331250001211,
+      "transcriptionMs": 283.9732499998063,
+      "cleanupMs": 698.5298750000075,
+      "pasteMs": 407.4865000001155,
+      "totalMs": 9520.000374999829
+    }
+  ],
+  "limits": [
+    "capture cold does not establish cold engine",
+    "paste end is dispatch completion; no independent target insertion observation",
+    "nonnull cleanup duration establishes measured cleanup stage, not successful cleanup",
+    "not a controlled no-cleanup or warm acceptance sample",
+    "no user transcript or recording copied"
+  ]
+}

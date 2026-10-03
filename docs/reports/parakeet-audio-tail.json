@@ -1,0 +1,126 @@
+{
+  "conditions": {
+    "synthetic": true,
+    "voice": "Samantha",
+    "rate": 150,
+    "speechEndThreshold": 300,
+    "speechEndMs": 1748.8125,
+    "trialsPerCondition": 1,
+    "physicalMicrophone": false,
+    "paste": false,
+    "cleanup": false,
+    "runningCaptureRenderer": true
+  },
+  "rows": [
+    {
+      "tailMs": 0,
+      "releaseBeforeEndMs": 0,
+      "nonempty": true,
+      "referencePass": true,
+      "finalWordPass": true,
+      "trailingMs": 3.899999998509884,
+      "releaseToResultMs": 91.19999999552965,
+      "errors": 0,
+      "delivery": "flushed"
+    },
+    {
+      "tailMs": 0,
+      "releaseBeforeEndMs": 200,
+      "nonempty": true,
+      "referencePass": false,
+      "finalWordPass": false,
+      "trailingMs": 2.3000000044703484,
+      "releaseToResultMs": 96.70000000298023,
+      "errors": 0,
+      "delivery": "flushed"
+    },
+    {
+      "tailMs": 100,
+      "releaseBeforeEndMs": 0,
+      "nonempty": true,
+      "referencePass": true,
+      "finalWordPass": true,
+      "trailingMs": 105.20000000298023,
+      "releaseToResultMs": 190.10000000149012,
+      "errors": 0,
+      "delivery": "flushed"
+    },
+    {
+      "tailMs": 100,
+      "releaseBeforeEndMs": 200,
+      "nonempty": true,
+      "referencePass": true,
+      "finalWordPass": true,
+      "trailingMs": 102.70000000298023,
+      "releaseToResultMs": 180.80000000447035,
+      "errors": 0,
+      "delivery": "flushed"
+    },
+    {
+      "tailMs": 200,
+      "releaseBeforeEndMs": 0,
+      "nonempty": true,
+      "referencePass": true,
+      "finalWordPass": true,
+      "trailingMs": 203.39999999850988,
+      "releaseToResultMs": 279.3999999985099,
+      "errors": 0,
+      "delivery": "flushed"
+    },
+    {
+      "tailMs": 200,
+      "releaseBeforeEndMs": 200,
+      "nonempty": true,
+      "referencePass": true,
+      "finalWordPass": true,
+      "trailingMs": 202.80000000447035,
+      "releaseToResultMs": 272.1000000014901,
+      "errors": 0,
+      "delivery": "flushed"
+    },
+    {
+      "tailMs": 300,
+      "releaseBeforeEndMs": 0,
+      "nonempty": true,
+      "referencePass": true,
+      "finalWordPass": true,
+      "trailingMs": 303.09999999403954,
+      "releaseToResultMs": 379.09999999403954,
+      "errors": 0,
+      "delivery": "flushed"
+    },
+    {
+      "tailMs": 300,
+      "releaseBeforeEndMs": 200,
+      "nonempty": true,
+      "referencePass": true,
+      "finalWordPass": true,
+      "trailingMs": 303,
+      "releaseToResultMs": 381.1000000014901,
+      "errors": 0,
+      "delivery": "flushed"
+    },
+    {
+      "tailMs": 450,
+      "releaseBeforeEndMs": 0,
+      "nonempty": true,
+      "referencePass": true,
+      "finalWordPass": true,
+      "trailingMs": 452.5,
+      "releaseToResultMs": 517.5,
+      "errors": 0,
+      "delivery": "flushed"
+    },
+    {
+      "tailMs": 450,
+      "releaseBeforeEndMs": 200,
+      "nonempty": true,
+      "referencePass": true,
+      "finalWordPass": true,
+      "trailingMs": 453.30000000447035,
+      "releaseToResultMs": 551.6000000014901,
+      "errors": 0,
+      "delivery": "flushed"
+    }
+  ]
+}
