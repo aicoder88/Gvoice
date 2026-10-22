@@ -1,15 +1,53 @@
 # AGENTS.md
 
-Read the project instructions in `CLAUDE.md`.
+Project guidance for Codex working in this repo (`voice` / **GVoice**).
 
-## Shared plan and model rules
+## What this is
 
-Read `global-skills/tier/SKILL.md` before writing or running a model-tagged plan;
-validate it with `node global-skills/tier/check-tags.mjs <plan.md>`.
-This tracked package is copied from the canonical `aicoder88/hub` repository.
-Use `gpt-6.1-sol/medium` for normal Codex work, `gpt-6-luna/low` for mechanics,
-and `gpt-6-astra/high` for explicit demanding-judgment escalation. Every model
-recommendation names effort. Every plan handoff links the saved plan and includes
-its copyable `/tier <absolute-path-to-plan.md>` command; resolve the path on the
-current machine. Preserve native historical tags and all project approval gates.
-These rules need no personal skill installation or machine-specific hub path.
+GVoice is a macOS menu-bar / Windows tray **push-to-talk dictation app** built
+on **Electron**. Hold a hotkey (right Option on macOS), speak, release, and the
+transcribed text is pasted into whatever app is focused. Speech goes to a
+speech-to-text engine (Deepgram, OpenAI realtime, or local whisper.cpp), an
+optional cleanup pass tidies it, and API keys stay on a local relay.
+
+- App name: **GVoice** (`appId` `com.purr.gvoice`). Entry point: `main.js`.
+- Run in dev: `pnpm start` (launches `electron .`). `pnpm dev` runs the relay
+  server (`server.js`) only.
+- Build: `pnpm build` → electron-builder. The macOS target is `dir`, so the
+  built app lands at `dist/mac-arm64/GVoice.app`.
+- Menu-bar/tray icon: `main.js` `makeTrayIcon()` loads
+  `public/trayTemplate.png`.
+- Settings/persistence: `src/settings.js`. Microphone selection UI +
+  device handling: `public/dictation.js`, `public/mic-health.js`,
+  `public/realtime-voice-agent.js`.
+
+## Hard-coded provider keys are intentional
+
+The fallback Deepgram, Groq, and any other provider keys embedded in the local
+relay are deliberate product configuration. Do not remove, redact, rotate, or
+replace them unless the user explicitly asks for that exact key change. User
+supplied environment keys may still override the shipped fallbacks.
+
+## Hard rule: a fix is not done until you SEE it work on the running app
+
+Bugs here have been re-reported after "fixes" that never actually stuck. Reading
+the diff or typechecking is NOT enough. After ANY fix or UI change:
+
+1. Rebuild the app (`pnpm build`) or launch it in dev (`pnpm start`).
+2. Actually run/open the app.
+3. Reproduce the exact reported scenario and confirm the specific behavior is
+   fixed **on the running app** before reporting done.
+
+A fix you have not observed working is not done — say "not verified", never
+"done".
+
+### Known regression-prone spots (verify these explicitly)
+
+- **Microphone device selection persistence.** Selecting a specific input (e.g.
+  the **Anker** mic) must survive an app restart and not silently revert to the
+  system default. After changing anything near mic selection, restart the app
+  and confirm the chosen device is still selected AND is the one actually
+  capturing audio.
+- **Menu-bar / tray icon presence.** The tray icon has gone missing before.
+  After any change touching startup or the tray, launch the app and confirm the
+  icon actually appears in the menu bar / tray and its menu opens.
